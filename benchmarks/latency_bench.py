@@ -36,8 +36,8 @@ PREFIX10K = qb.DOC
 SCENARIOS = [
     ("quick", "Explain in two sentences the difference between a Python list and a tuple.", 150),
     ("summ2k", qb.lines_filler(46) + "\n\nSummarize what these functions have in common in 3 short bullet points.", 250),
-    ("code", "Write a Python function merge_intervals(intervals) that merges overlapping [start, end] intervals. "
-             "Include a docstring and three doctest examples.", 500),
+    ("code", ("Write a Python function merge_intervals(intervals) that merges overlapping [start, end] intervals. "
+              "Include a docstring and three doctest examples."), 500),
     ("long10k", PREFIX10K + "\n\nWhat is the value of retry_limit? Answer with the number only.", 60),
     ("cached10k", None, 60),
     ("decode200", "Count from 1 to 400, separated by single spaces, and write nothing else.", 200),
@@ -73,9 +73,9 @@ def ask(prompt: str, max_tokens: int, cache: bool, sampling: dict) -> dict:
                 if ttft is None and (delta.get("content") or delta.get("reasoning_content")):
                     ttft = time.perf_counter() - t0
     total = time.perf_counter() - t0
-    return dict(total_s=round(total, 2), ttft_s=round(ttft, 2) if ttft is not None else None,
-                prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
-                cached_tokens=timings.get("cache_n"))
+    return {"total_s": round(total, 2), "ttft_s": round(ttft, 2) if ttft is not None else None,
+            "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
+            "cached_tokens": timings.get("cache_n")}
 
 
 def nonce() -> str:
@@ -106,7 +106,7 @@ def run_model(model: Path, reps: int) -> None:
     size = round(model.stat().st_size / 2**30, 1)
     proc, logf = serve(model)
     if proc is None:
-        log(dict(kind="model_failed", model=model.stem, size_gib=size, detail="server did not come up"))
+        log({"kind": "model_failed", "model": model.stem, "size_gib": size, "detail": "server did not come up"})
         print(f"!! server for {model.stem} did not come up", flush=True)
         return
     sampling = qb.GEMMA_SAMPLING if "gemma" in model.name.lower() else qb.SAMPLING
@@ -122,12 +122,12 @@ def run_model(model: Path, reps: int) -> None:
                     else:
                         r = ask(nonce() + prompt, max_tokens, False, sampling)
                 except Exception as exc:                        # noqa: BLE001
-                    r = dict(error=str(exc)[:120])
+                    r = {"error": str(exc)[:120]}
                 r.update(kind="run", model=model.stem, size_gib=size, scenario=name, rep=rep)
                 log(r)
                 print(f"   {name:10s} r{rep} total {r.get('total_s', '-')}s ttft {r.get('ttft_s', '-')}s "
                       f"in {r.get('prompt_tokens', '-')} out {r.get('completion_tokens', '-')} cached {r.get('cached_tokens', '-')}", flush=True)
-        log(dict(kind="model_done", model=model.stem, size_gib=size))
+        log({"kind": "model_done", "model": model.stem, "size_gib": size})
     finally:
         ms.stop(proc)
         logf.close()
@@ -144,8 +144,8 @@ def report() -> None:
 
     cell = lambda x: "-" if x is None else f"{x:.1f}"
     out = ["# Latency: seconds from prompt to the finished answer", "",
-           f"Generated {datetime.now():%Y-%m-%d %H:%M}. Median of the repetitions per scenario, thinking OFF, streaming, unique prompt nonce "
-           "(cold cache) except cached10k.", "",
+           (f"Generated {datetime.now():%Y-%m-%d %H:%M}. Median of the repetitions per scenario, thinking OFF, streaming, unique prompt nonce "
+            "(cold cache) except cached10k."), "",
            "| model | GiB | " + " | ".join(f"{s} (s)" for s in ORDER) + " | long10k first token (s) |",
            "|---|---|" + "---|" * (len(ORDER) + 1)]
     for m in sorted(models, key=lambda m: med(m, "long10k", "total_s") or 1e9):

@@ -54,19 +54,19 @@ def sample_once():
     try:
         r = subprocess.run(["typeperf", r"\Thermal Zone Information(\_TZ.CPUZ)\Temperature",
                             r"\Processor Information(_Total)\% Processor Performance",
-                            r"\GPU Adapter Memory(*)\Shared Usage", "-sc", "1"], capture_output=True, text=True, timeout=20)
+                            r"\GPU Adapter Memory(*)\Shared Usage", "-sc", "1"], capture_output=True, text=True, timeout=20, check=False)
         rows = [x for x in csv.reader(io.StringIO(r.stdout)) if x]
         vals = [float(x) for x in rows[1] if x.replace(".", "", 1).isdigit()] if len(rows) > 1 else []
         if len(vals) >= 3:
             t, perf, shared = vals[0] - 273.15, vals[1], sum(vals[2:]) / 2**20
-    except Exception:
+    except (OSError, subprocess.SubprocessError, csv.Error):
         pass
     vram = None
     try:
         v = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                           capture_output=True, text=True, timeout=10).stdout.strip()
+                           capture_output=True, text=True, timeout=10, check=False).stdout.strip()
         vram = float(v)
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         pass
     return t, perf, shared, vram
 
@@ -103,7 +103,7 @@ def run(phase, label, model, args, reps=3, tests=("-p", "512", "-n", "128"), not
     tel = Telemetry()
     tel.start()
     t0 = time.time()
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, check=False)
     tel.stop.set()
     tel.join(timeout=25)
     tmax, perf, vram, shared = tel.summary()
@@ -117,16 +117,16 @@ def run(phase, label, model, args, reps=3, tests=("-p", "512", "-n", "128"), not
         if new:
             w.writeheader()
         if not rows:
-            w.writerow(dict(time=datetime.now().strftime("%H:%M:%S"), phase=phase, config=label, model=model.name,
-                            args=" ".join(args), test="FAILED", notes=(p.stderr or p.stdout)[-300:].replace("\n", " ")))
+            w.writerow({"time": datetime.now().strftime("%H:%M:%S"), "phase": phase, "config": label, "model": model.name,
+                        "args": " ".join(args), "test": "FAILED", "notes": (p.stderr or p.stdout)[-300:].replace("\n", " ")})
         for r in rows:
             depth = r.get("n_depth", "0")
             ts = float(r["avg_ts"])
             test = (f"pp{r['n_prompt']}" if int(r["n_prompt"]) else f"tg{r['n_gen']}")
-            w.writerow(dict(time=datetime.now().strftime("%H:%M:%S"), phase=phase, config=label, model=model.name,
-                            args=" ".join(args), test=test, depth=depth, mean_ts=round(ts, 2),
-                            stddev_ts=round(float(r["stddev_ts"]), 2), reps=reps, cpu_temp_max_C=tmax,
-                            cpu_perf_mean_pct=perf, vram_max_MiB=vram, shared_max_MiB=shared, notes=note.strip()))
+            w.writerow({"time": datetime.now().strftime("%H:%M:%S"), "phase": phase, "config": label, "model": model.name,
+                        "args": " ".join(args), "test": test, "depth": depth, "mean_ts": round(ts, 2),
+                        "stddev_ts": round(float(r["stddev_ts"]), 2), "reps": reps, "cpu_temp_max_C": tmax,
+                        "cpu_perf_mean_pct": perf, "vram_max_MiB": vram, "shared_max_MiB": shared, "notes": note.strip()})
             print(f"[{phase}] {label:34s} {test:6s} d={depth:>5s}  {ts:7.2f} +- {float(r['stddev_ts']):5.2f}  "
                   f"Tmax={tmax}°C perf~{perf}% VRAMmax={vram} ({time.time() - t0:.0f}s)", flush=True)
 

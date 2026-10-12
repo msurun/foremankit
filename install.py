@@ -220,7 +220,7 @@ class Installer:
         parent = self.tracked_path(key).parent
         marks = (self.BACKUP_MARK, LEGACY_BACKUP_MARK)
         backups = [p for mark in marks for p in parent.glob(f"{name}{mark}*")]
-        return sorted(backups)[0] if backups else None
+        return min(backups) if backups else None
 
     def _restore_one(self, key: str, existed: bool, snapshot_bytes: bytes | None) -> None:
         """Put one tracked file back to the snapshot state, or delete it if it did not exist before."""
@@ -629,7 +629,7 @@ class Installer:
         if self.dry or not py.exists():
             return False
         probe = "import foremankit,pathlib;print(pathlib.Path(foremankit.__file__).resolve())"
-        done = subprocess.run([str(py), "-c", probe], cwd=Path.home(), text=True, capture_output=True)
+        done = subprocess.run([str(py), "-c", probe], cwd=Path.home(), text=True, capture_output=True, check=False)
         return done.returncode == 0 and Path(done.stdout.strip()).is_relative_to(ROOT)
 
     def install_agents(self) -> None:
@@ -672,7 +672,7 @@ class Installer:
             print(f"  claude mcp add --scope user {MCP_NAME} -- \"{cmd}\"")
             return
         existing = None if self.dry else subprocess.run(
-            [claude, "mcp", "get", MCP_NAME], text=True, capture_output=True)
+            [claude, "mcp", "get", MCP_NAME], text=True, capture_output=True, check=False)
         present = bool(existing and existing.returncode == 0)
         if present and not remove and str(cmd).lower() in existing.stdout.lower():
             self.say(f"MCP '{MCP_NAME}' already registered with {cmd}")
@@ -954,9 +954,6 @@ def run_install(inst: Installer, args: argparse.Namespace) -> None:
 def main() -> int:
     """Entry point: dispatch to check, restore, uninstall or install."""
     args = build_parser().parse_args()
-    if sys.version_info < (3, 10):
-        print("Python 3.10+ required")
-        return 1
     inst = Installer(args.dry_run)
     if args.check:
         return 1 if report_leftovers(inst) else 0

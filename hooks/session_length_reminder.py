@@ -21,18 +21,18 @@ LEVELS = (0.60, 0.75, 0.85)       # fractions of the context window
 GATEWAY_FRESH_S = 10 * 60         # older gateway data belongs to a finished local session
 # User-facing texts per language: English by default, Polish with FOREMANKIT_LANG=pl.
 LEVEL_TEXT = {
-    "en": ("ℹ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
-           "Save the state when the task ends.",
-           "⚠ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
-           "At the next breakpoint save the state (handoff) and start a new session.",
-           "⚠ foremankit: local model context is almost full, {pct:.0%} (~{tokens:,} / {window:,} tokens). "
-           "Save the state now and start a new session, otherwise the server rejects the request (HTTP 400)."),
-    "pl": ("ℹ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
-           "Przy końcu zadania zapisz stan.",
-           "⚠ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
-           "Przy najbliższym punkcie przerwania zapisz stan (handoff) i zacznij nową sesję.",
-           "⚠ foremankit: kontekst lokalnego modelu prawie pełny, {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
-           "Zapisz stan teraz i zacznij nową sesję, inaczej serwer odrzuci żądanie (HTTP 400)."),
+    "en": (("ℹ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
+            "Save the state when the task ends."),
+           ("⚠ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
+            "At the next breakpoint save the state (handoff) and start a new session."),
+           ("⚠ foremankit: local model context is almost full, {pct:.0%} (~{tokens:,} / {window:,} tokens). "
+            "Save the state now and start a new session, otherwise the server rejects the request (HTTP 400).")),
+    "pl": (("ℹ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
+            "Przy końcu zadania zapisz stan."),
+           ("⚠ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
+            "Przy najbliższym punkcie przerwania zapisz stan (handoff) i zacznij nową sesję."),
+           ("⚠ foremankit: kontekst lokalnego modelu prawie pełny, {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
+            "Zapisz stan teraz i zacznij nową sesję, inaczej serwer odrzuci żądanie (HTTP 400).")),
 }
 LONG_TEXT = {
     "en": "foremankit: this conversation is already long (transcript about {mb:.0f} MB) and every turn re-reads it. "
@@ -61,7 +61,7 @@ def main() -> int:
     """A hook must never break the user's prompt: any unexpected error ends silently with exit code 0."""
     try:
         return run()
-    except Exception:
+    except Exception:  # noqa: BLE001 - hook must never break the session
         return 0
 
 

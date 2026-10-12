@@ -22,8 +22,8 @@ OUT = HERE / "server_results.jsonl"
 URL = "http://127.0.0.1:8080"
 
 # Qwen3.6 model card (Hugging Face): precise coding / thinking, and instruct (non-thinking)
-CARD_CODING = dict(temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0)
-CARD_INSTRUCT = dict(temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5)
+CARD_CODING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0}
+CARD_INSTRUCT = {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5}
 NOTHINK = {"chat_template_kwargs": {"enable_thinking": False}}
 
 
@@ -45,8 +45,8 @@ def log(rec):
 def vram():
     try:
         return float(subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                                    capture_output=True, text=True, timeout=10).stdout.strip())
-    except Exception:
+                                    capture_output=True, text=True, timeout=10, check=False).stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -64,9 +64,9 @@ def chat(content, max_tokens=8, extra=None, sampling=CARD_CODING, system=None):
 
 def timing(d):
     t = d.get("timings", {})
-    return dict(prompt_n=t.get("prompt_n"), cache_n=t.get("cache_n"), prompt_ms=round(t.get("prompt_ms", 0)),
-                prompt_tps=round(t.get("prompt_per_second", 0), 1), gen_tps=round(t.get("predicted_per_second", 0), 1),
-                prompt_tokens=d["usage"]["prompt_tokens"])
+    return {"prompt_n": t.get("prompt_n"), "cache_n": t.get("cache_n"), "prompt_ms": round(t.get("prompt_ms", 0)),
+            "prompt_tps": round(t.get("prompt_per_second", 0), 1), "gen_tps": round(t.get("predicted_per_second", 0), 1),
+            "prompt_tokens": d["usage"]["prompt_tokens"]}
 
 
 def test_ttft(tag):
@@ -94,25 +94,25 @@ def test_think(tag):
     for name, extra in (("default (no kwarg)", {}), ("enable_thinking=false", NOTHINK)):
         d, s = chat(q, max_tokens=1500, extra=extra, sampling=CARD_INSTRUCT)
         m = d["choices"][0]["message"]
-        log(dict(test="thinking", cfg=tag, mode=name, wall_s=round(s, 1), completion_tokens=d["usage"]["completion_tokens"],
-                 has_reasoning=bool(m.get("reasoning_content")), content=(m.get("content") or "")[:60]))
+        log({"test": "thinking", "cfg": tag, "mode": name, "wall_s": round(s, 1), "completion_tokens": d["usage"]["completion_tokens"],
+             "has_reasoning": bool(m.get("reasoning_content")), "content": (m.get("content") or "")[:60]})
 
 
 TOOLS = [
-    dict(type="function", function=dict(name="read_file", description="Read a file from disk", parameters=dict(
-        type="object", properties=dict(path=dict(type="string")), required=["path"]))),
-    dict(type="function", function=dict(name="write_file", description="Write text to a file", parameters=dict(
-        type="object", properties=dict(path=dict(type="string"), content=dict(type="string")), required=["path", "content"]))),
-    dict(type="function", function=dict(name="run_shell", description="Run a shell command", parameters=dict(
-        type="object", properties=dict(command=dict(type="string")), required=["command"]))),
-    dict(type="function", function=dict(name="grep", description="Search a regex in files", parameters=dict(
-        type="object", properties=dict(pattern=dict(type="string"), path=dict(type="string")), required=["pattern"]))),
-    dict(type="function", function=dict(name="edit_file", description="Replace exact text in a file", parameters=dict(
-        type="object", properties=dict(path=dict(type="string"), old=dict(type="string"), new=dict(type="string")),
-        required=["path", "old", "new"]))),
-    dict(type="function", function=dict(name="query_pi", description="Read a PI tag history", parameters=dict(
-        type="object", properties=dict(tag=dict(type="string"), hours=dict(type="integer"), interval_min=dict(type="integer")),
-        required=["tag", "hours"]))),
+    {"type": "function", "function": {"name": "read_file", "description": "Read a file from disk", "parameters": {
+        "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Write text to a file", "parameters": {
+        "type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "run_shell", "description": "Run a shell command", "parameters": {
+        "type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+    {"type": "function", "function": {"name": "grep", "description": "Search a regex in files", "parameters": {
+        "type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "edit_file", "description": "Replace exact text in a file", "parameters": {
+        "type": "object", "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
+        "required": ["path", "old", "new"]}}},
+    {"type": "function", "function": {"name": "query_pi", "description": "Read a PI tag history", "parameters": {
+        "type": "object", "properties": {"tag": {"type": "string"}, "hours": {"type": "integer"}, "interval_min": {"type": "integer"}},
+        "required": ["tag", "hours"]}}},
 ]
 
 # (prompt, expected tool or None, check(args)->bool)
@@ -143,7 +143,7 @@ def test_tools(tag, sampling_name, sampling, reps=3):
                         tools=TOOLS, max_tokens=400, **sampling, **NOTHINK)
             try:
                 d, s = post("/v1/chat/completions", body)
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 fails.append((prompt[:30], f"HTTP {e}"))
                 continue
             secs.append(s)
@@ -158,7 +158,7 @@ def test_tools(tag, sampling_name, sampling, reps=3):
                 fn = calls[0]["function"]
                 try:
                     args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
-                except Exception:
+                except ValueError:
                     bad_json += 1
                     fails.append((prompt[:30], "invalid JSON args: " + str(fn["arguments"])[:60]))
                     continue
@@ -166,8 +166,8 @@ def test_tools(tag, sampling_name, sampling, reps=3):
                 if not good:
                     fails.append((prompt[:30], f"{fn['name']} {json.dumps(args)[:90]}"))
             ok += good
-    log(dict(test="tool_calling", cfg=tag, sampling=sampling_name, ok=ok, of=n, invalid_json=bad_json,
-             mean_s=round(sum(secs) / max(len(secs), 1), 1), fails=fails[:6]))
+    log({"test": "tool_calling", "cfg": tag, "sampling": sampling_name, "ok": ok, "of": n, "invalid_json": bad_json,
+         "mean_s": round(sum(secs) / max(len(secs), 1), 1), "fails": fails[:6]})
 
 
 def wait_ready(proc, log_path, limit=600):
@@ -179,7 +179,7 @@ def wait_ready(proc, log_path, limit=600):
             with urllib.request.urlopen(URL + "/health", timeout=3) as r:
                 if r.status == 200:
                     return time.time() - t0
-        except Exception:
+        except OSError:
             time.sleep(3)
     raise SystemExit("server did not become ready")
 
@@ -212,7 +212,7 @@ def main():
     with log_path.open("w") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT)
         try:
-            log(dict(test="server_start", cfg=tag, ready_s=round(wait_ready(proc, log_path)), vram_MiB=vram(), cmd=" ".join(cmd)))
+            log({"test": "server_start", "cfg": tag, "ready_s": round(wait_ready(proc, log_path)), "vram_MiB": vram(), "cmd": " ".join(cmd)})
             for t in a.tests.split(","):
                 if t == "ttft":
                     test_ttft(tag)
@@ -227,7 +227,7 @@ def main():
             proc.terminate()
             try:
                 proc.wait(30)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 proc.kill()
 
 

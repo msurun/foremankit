@@ -32,6 +32,6 @@ def size_notes(routing: dict[str, Any], max_out: int) -> list[str]:
     """Advice shown with the result when the requested answer is big."""
     limit = int(((routing.get("calls") or {}).get("warn_output_tokens")) or 0)
     if limit and max_out > limit:
-        return [f"requested output of {max_out} tokens is big: cheap models cut off or lose track; "
-                f"prefer tasks with an answer under {limit} tokens (one file or one part at a time)"]
+        return [(f"requested output of {max_out} tokens is big: cheap models cut off or lose track; "
+                 f"prefer tasks with an answer under {limit} tokens (one file or one part at a time)")]
     return []

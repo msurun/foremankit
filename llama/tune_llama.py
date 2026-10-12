@@ -41,7 +41,7 @@ HEADROOM_LAYERS = 2      # extra expert layers kept in RAM so a 32k context stil
 
 
 def ps(cmd):
-    return subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, check=False).stdout.strip()
 
 
 def fingerprint():
@@ -50,13 +50,13 @@ def fingerprint():
     gpu, vram = "none", 0
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=15).stdout.strip().splitlines()[0]
+                             capture_output=True, text=True, timeout=15, check=False).stdout.strip().splitlines()[0]
         name, mib = [x.strip() for x in out.split(",")]
         gpu, vram = re.sub(r"\s+", " ", name).lower(), round(float(mib) / 1024)
-    except Exception:
+    except (OSError, IndexError, ValueError, subprocess.TimeoutExpired):
         pass
     ram = round(float(ps("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory")) / 2**30)
-    return f"{cpu} | {gpu} | {vram}gb", dict(cpu=cpu, gpu=gpu, vram_gib=vram, ram_gib=ram, host=ps("hostname"))
+    return f"{cpu} | {gpu} | {vram}gb", {"cpu": cpu, "gpu": gpu, "vram_gib": vram, "ram_gib": ram, "host": ps("hostname")}
 
 
 def cpu_sets():
@@ -84,7 +84,7 @@ def thread_candidates():
     classes = sorted({r[2] for r in rows}, reverse=True)
     if len(classes) > 1:
         top = [r for r in rows if r[2] == classes[0]]
-        mask = lambda items: "0x%X" % sum(1 << r[0] for r in items)
+        mask = lambda items: f"0x{sum(1 << r[0] for r in items):X}"
         one_per_core = {}
         for r in top:
             one_per_core.setdefault(r[1], r)
@@ -108,7 +108,7 @@ def bench(model, ncmoe, threads, mask, reps, p=512, n=128, has_gpu=True, extra=(
     if mask:
         cmd += ["-C", mask, "--cpu-strict", "1"]
     cmd += list(extra)
-    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
     if "build_commit" not in out:
         return None                       # did not load (out of VRAM or file problem)
     res = {}
@@ -141,14 +141,14 @@ def server_loads(model, ncmoe, threads, mask, ctx, extra=(), limit=240):
                 with urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3) as r:
                     if r.status == 200:
                         return True
-            except Exception:
+            except Exception:  # noqa: BLE001 - any failure while the server boots means "not ready yet"
                 time.sleep(3)
         return False
     finally:
         proc.terminate()
         try:
             proc.wait(30)
-        except Exception:
+        except subprocess.TimeoutExpired:
             proc.kill()
         time.sleep(3)
 

@@ -14,7 +14,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.request
 import zlib
 from datetime import datetime
@@ -27,8 +26,8 @@ from server_tests import MODELS, SERVER, URL, post, vram, wait_ready
 OUT = HERE / "quality_results.jsonl"
 MODELS["gemma"] = HERE.parent / "llama" / "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
 NCMOE = {"q4": "40", "q5": "41", "gemma": "31"}   # from llama/profiles.json (tuner)
-SAMPLING = dict(temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0)   # model card "precise coding"
-GEMMA_SAMPLING = dict(temperature=1.0, top_p=0.95, top_k=64, min_p=0.0, presence_penalty=0.0)   # Google defaults (Unsloth docs)
+SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0}   # model card "precise coding"
+GEMMA_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0, "presence_penalty": 0.0}   # Google defaults (Unsloth docs)
 MAXTOK = {"short": 3000, "long": 6000}
 
 
@@ -64,7 +63,7 @@ def make_table():
         best = max(len(r) for r in runs)
         if sum(len(r) == best for r in runs) == 1 and best >= 4:
             r = next(r for r in runs if len(r) == best)
-            exp = dict(length=best, start_day=r[0][0], mean=round(sum(v for _, v in r) / best, 2))
+            exp = {"length": best, "start_day": r[0][0], "mean": round(sum(v for _, v in r) / best, 2)}
             csv = "day,value\n" + "\n".join(f"{d},{v}" for d, v in enumerate(vals, 1))
             return csv, exp
     raise RuntimeError("no table")
@@ -74,7 +73,7 @@ def last_json(text):
     for m in reversed(re.findall(r"\{[^{}]*\}", text or "", re.DOTALL)):
         try:
             return json.loads(m)
-        except Exception:
+        except ValueError:
             continue
     return None
 
@@ -92,7 +91,7 @@ def run_tests(text, tests):
         f = Path(d) / "t.py"
         f.write_text(code + "\n\n" + tests + "\nprint('OK')\n", encoding="utf-8")
         try:
-            r = subprocess.run([sys.executable, "-I", str(f)], capture_output=True, text=True, timeout=15, cwd=d)
+            r = subprocess.run([sys.executable, "-I", str(f)], capture_output=True, text=True, timeout=15, cwd=d, check=False)
         except subprocess.TimeoutExpired:
             return False, "timeout"
         return (r.returncode == 0 and "OK" in r.stdout), (r.stderr.strip().splitlines() or [""])[-1][:120]
@@ -182,32 +181,32 @@ def chk_table(t):
 
 
 TASKS = [
-    ("short", "S1 pipes (math)", "Pipe A fills a tank in 6 hours, pipe B in 4 hours, and drain C empties a full tank in 12 hours. "
-     "All three are open at once. How many hours until the empty tank is full? Give only the number of hours.", chk_num(3)),
-    ("short", "S2 ordering (logic)", "Alice is taller than Bob. Carol is shorter than Bob. Dave is taller than Alice. "
-     "Who is the second tallest of the four? Answer with just the name.", chk_word("Alice")),
-    ("short", "S3 balanced brackets (code)", "Write a Python function is_balanced(s) that returns True if the brackets ()[]{} in "
-     "the string s are correctly balanced and nested (other characters are ignored). Reply with one ```python code block only.",
+    ("short", "S1 pipes (math)", ("Pipe A fills a tank in 6 hours, pipe B in 4 hours, and drain C empties a full tank in 12 hours. "
+     "All three are open at once. How many hours until the empty tank is full? Give only the number of hours."), chk_num(3)),
+    ("short", "S2 ordering (logic)", ("Alice is taller than Bob. Carol is shorter than Bob. Dave is taller than Alice. "
+     "Who is the second tallest of the four? Answer with just the name."), chk_word("Alice")),
+    ("short", "S3 balanced brackets (code)", ("Write a Python function is_balanced(s) that returns True if the brackets ()[]{} in "
+     "the string s are correctly balanced and nested (other characters are ignored). Reply with one ```python code block only."),
      lambda t: run_tests(t, TESTS_BALANCED)),
-    ("short", "S4 ISO dates (code)", "Write a Python function extract_iso_dates(text) that returns the list, in order, of all valid "
+    ("short", "S4 ISO dates (code)", ("Write a Python function extract_iso_dates(text) that returns the list, in order, of all valid "
      "calendar dates written as YYYY-MM-DD in text (leap years respected; month 01-12; a date must not be part of a longer digit "
-     "sequence). Reply with one ```python code block only.", lambda t: run_tests(t, TESTS_DATES)),
-    ("short", "S5 moving average (code)", "Write a Python function moving_average(xs, k) returning the list of averages (floats) of every "
-     "window of k consecutive elements; return [] if k > len(xs); raise ValueError if k <= 0. Reply with one ```python code block only.",
+     "sequence). Reply with one ```python code block only."), lambda t: run_tests(t, TESTS_DATES)),
+    ("short", "S5 moving average (code)", ("Write a Python function moving_average(xs, k) returning the list of averages (floats) of every "
+     "window of k consecutive elements; return [] if k > len(xs); raise ValueError if k <= 0. Reply with one ```python code block only."),
      lambda t: run_tests(t, TESTS_MA)),
-    ("short", "S6 log to JSON (extraction)", "Extract from this log line a JSON object with keys ts (string), level (lowercase string), "
+    ("short", "S6 log to JSON (extraction)", ("Extract from this log line a JSON object with keys ts (string), level (lowercase string), "
      "user (string), latency_ms (integer), ok (boolean, true only if status is OK). Output only the JSON.\n"
-     "2026-10-09T08:15:22Z [WARN] user=j.doe action=login took 1.842s status=FAILED retries=2", chk_json_log),
+     "2026-10-09T08:15:22Z [WARN] user=j.doe action=login took 1.842s status=FAILED retries=2"), chk_json_log),
     ("long", "L1 needle in 10k-token code (retrieval)", "Below is a large code file. Find the CURRENT (non-deprecated) values of the CONFIG keys "
      "retry_limit, cache_ttl_seconds and shard_count, and their sum. Answer with only JSON like "
      '{"retry_limit":0,"cache_ttl_seconds":0,"shard_count":0,"sum":0}.\n\n' + DOC, chk_doc),
-    ("long", "L2 TTL cache (implementation)", "Implement in Python a class TTLCache(capacity, ttl, clock=time.monotonic) with: "
+    ("long", "L2 TTL cache (implementation)", ("Implement in Python a class TTLCache(capacity, ttl, clock=time.monotonic) with: "
      "put(key, value) (inserts or updates; sets expiry to clock()+ttl; marks the key most recently used; when the number of "
      "non-expired items would exceed capacity, first purge expired items and only then evict the least recently used one), "
      "get(key, default=None) (returns the value if present and not expired, else default; a hit marks the key most recently used "
      "but does NOT extend its expiry; an expired key is removed), delete(key) -> bool (True if a live key was removed), "
      "__len__ (number of non-expired items). An item is expired when clock() > its expiry. Include import time. "
-     "Reply with one ```python code block only.", lambda t: run_tests(t, TESTS_TTL)),
+     "Reply with one ```python code block only."), lambda t: run_tests(t, TESTS_TTL)),
     ("long", "L3 longest run in a table (multi-step reasoning)", "Daily readings follow (day,value). Find the longest run of consecutive "
      "days in which value > 50 (the longest run is unique). Report its length, its first day and the mean of its values rounded to "
      'two decimals. Do the calculation yourself, no code. Answer with only JSON like {"length":0,"start_day":0,"mean":0.00}.\n\n' + CSV,
@@ -231,20 +230,19 @@ def start_server(key):
 def one(model, mode, cat, name, prompt, check):
     body = dict(model="q", messages=[{"role": "user", "content": prompt}], max_tokens=MAXTOK[cat], cache_prompt=False,
                 chat_template_kwargs={"enable_thinking": mode == "think"}, **(GEMMA_SAMPLING if model == "gemma" else SAMPLING))
-    t0 = time.time()
     try:
         d, wall = post("/v1/chat/completions", body, timeout=1500)
-    except Exception as e:
-        return dict(model=model, mode=mode, cat=cat, task=name, error=str(e)[:100], correct=False)
+    except Exception as e:  # noqa: BLE001 - any server or network failure is recorded as a failed task
+        return {"model": model, "mode": mode, "cat": cat, "task": name, "error": str(e)[:100], "correct": False}
     m = d["choices"][0]["message"]
     content = m.get("content") or ""
     ok, why = check(content)
     t = d.get("timings", {})
-    return dict(model=model, mode=mode, cat=cat, task=name, correct=bool(ok), why=why, wall_s=round(wall, 1),
-                prompt_tokens=d["usage"]["prompt_tokens"], completion_tokens=d["usage"]["completion_tokens"],
-                reasoning_chars=len(m.get("reasoning_content") or ""), truncated=d["choices"][0]["finish_reason"] == "length",
-                prompt_ms=round(t.get("prompt_ms", 0)), gen_tps=round(t.get("predicted_per_second", 0), 1),
-                answer=content[:80].replace("\n", " "))
+    return {"model": model, "mode": mode, "cat": cat, "task": name, "correct": bool(ok), "why": why, "wall_s": round(wall, 1),
+            "prompt_tokens": d["usage"]["prompt_tokens"], "completion_tokens": d["usage"]["completion_tokens"],
+            "reasoning_chars": len(m.get("reasoning_content") or ""), "truncated": d["choices"][0]["finish_reason"] == "length",
+            "prompt_ms": round(t.get("prompt_ms", 0)), "gen_tps": round(t.get("predicted_per_second", 0), 1),
+            "answer": content[:80].replace("\n", " ")}
 
 
 def main():
@@ -279,7 +277,7 @@ def main():
             proc.terminate()
             try:
                 proc.wait(30)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 proc.kill()
 
 

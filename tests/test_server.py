@@ -25,14 +25,13 @@ def test_stdio_server_exposes_two_tools(tmp_path):
     params = StdioServerParameters(command=str(exe), args=[], env=env, cwd=str(tmp_path))
 
     async def run():
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                names = sorted(t.name for t in tools.tools)
-                res = await session.call_tool("delegate", {"task": "hi", "kind": "quick", "sensitivity": "private"})
-                status = await session.call_tool("router_status", {})
-                return names, res, status
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            names = sorted(t.name for t in tools.tools)
+            res = await session.call_tool("delegate", {"task": "hi", "kind": "quick", "sensitivity": "private"})
+            status = await session.call_tool("router_status", {})
+            return names, res, status
 
     names, res, status = anyio.run(run)
     assert names == ["delegate", "router_status"]

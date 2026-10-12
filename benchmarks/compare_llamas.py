@@ -63,12 +63,12 @@ def main() -> None:
                 content = msg.get("content") or ""
                 ok, why = check(content)
                 t = data.get("timings", {})
-                row = dict(machine=m, task=name, cat=cat, think=think, rep=rep + 1, correct=bool(ok), why=why,
-                           wall_s=round(wall, 2), prompt_tokens=data["usage"]["prompt_tokens"],
-                           completion_tokens=data["usage"]["completion_tokens"], prompt_ms=round(t.get("prompt_ms", 0)),
-                           gen_tps=round(t.get("predicted_per_second", 0), 1), prompt_tps=round(t.get("prompt_per_second", 0), 1),
-                           truncated=data["choices"][0]["finish_reason"] == "length", answer=" ".join(content[:70].split()),
-                           time=datetime.now().strftime("%H:%M:%S"))
+                row = {"machine": m, "task": name, "cat": cat, "think": think, "rep": rep + 1, "correct": bool(ok), "why": why,
+                       "wall_s": round(wall, 2), "prompt_tokens": data["usage"]["prompt_tokens"],
+                       "completion_tokens": data["usage"]["completion_tokens"], "prompt_ms": round(t.get("prompt_ms", 0)),
+                       "gen_tps": round(t.get("predicted_per_second", 0), 1), "prompt_tps": round(t.get("prompt_per_second", 0), 1),
+                       "truncated": data["choices"][0]["finish_reason"] == "length", "answer": " ".join(content[:70].split()),
+                       "time": datetime.now().strftime("%H:%M:%S")}
                 with OUT.open("a", encoding="utf-8") as fh:
                     print(json.dumps(row, ensure_ascii=False), file=fh)
                 print(f"{name[:30]:30s} {'think' if think else 'nothink':7s} r{rep + 1} {m:7s} {'OK ' if ok else 'BAD'} "

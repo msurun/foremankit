@@ -21,7 +21,8 @@ def run_hook(
         input=json.dumps(event),
         capture_output=True,
         text=True,
-        env={**os.environ, **env}
+        env={**os.environ, **env},
+        check=False,
     )
     return result.stdout, result.returncode
 
@@ -124,7 +125,8 @@ def test_invalid_threshold(tmp_path: Path) -> None:
         input=json.dumps(event),
         capture_output=True,
         text=True,
-        env={**os.environ, **env}
+        env={**os.environ, **env},
+        check=False,
     )
     assert result.stdout == ""
     assert result.returncode == 0

@@ -154,7 +154,7 @@ def cmd_check(router: Router, args: argparse.Namespace) -> int:
 def _code_to_review(args: argparse.Namespace) -> tuple[str, str]:
     """(code, label): the `git diff` of the given paths, or the whole files."""
     if args.diff:
-        diff = subprocess.run(["git", "diff", "--", *args.files], capture_output=True, text=True, encoding="utf-8")
+        diff = subprocess.run(["git", "diff", "--", *args.files], capture_output=True, text=True, encoding="utf-8", check=False)
         return diff.stdout, "git diff"
     code = "\n\n".join(f"# FILE: {name}\n{Path(name).read_text(encoding='utf-8')}" for name in args.files)
     return code, ", ".join(args.files)

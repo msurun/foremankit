@@ -43,7 +43,7 @@ def run_provider(entry: str, reps_short: int, reps_long: int) -> None:
     for cat, name, prompt, check in tasks:
         for rep in range(1, (reps_long if cat == "long" else reps_short) + 1):
             time.sleep(max(0.0, last + gap - time.time()))
-            row = dict(kind="run", provider=entry, task=name, rep=rep)
+            row = {"kind": "run", "provider": entry, "task": name, "rep": rep}
             for attempt in (1, 2):
                 try:
                     r = router.delegate(prompt, kind="bulk_code", sensitivity="normal", max_output_tokens=3000)

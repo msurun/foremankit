@@ -87,9 +87,9 @@ def _provider_line(provider: dict[str, Any]) -> str:
 def _node_lines(node: dict[str, Any]) -> list[str]:
     reach = "reachable" if node.get("reachable") else "not reachable"
     who = "this machine" if node["self"] else "other machine"
-    lines = [f"  {node['name']:<12} {who}, enabled={node['enabled']} ({node['source']}) {reach}"
-             f" endpoint={node.get('endpoint') or '-'} model={node.get('chosen_model') or '-'}"
-             f" accepts<={node['accept']}"]
+    lines = [(f"  {node['name']:<12} {who}, enabled={node['enabled']} ({node['source']}) {reach}"
+              f" endpoint={node.get('endpoint') or '-'} model={node.get('chosen_model') or '-'}"
+              f" accepts<={node['accept']}")]
     if node.get("models"):
         lines.append(f"    models: {', '.join(node['models'][:MAX_MODELS_SHOWN])}")
     lines += [f"    ! {err}" for err in node.get("errors") or []]

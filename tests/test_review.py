@@ -56,7 +56,7 @@ def test_no_findings_and_garbage_give_an_empty_list():
 
 
 def test_only_grounded_findings_of_the_configured_severities_are_sent_back():
-    findings = review.parse_findings("\n".join([GROUNDED_BLOCKER, INVENTED_BLOCKER, MINOR_NOTE]), CODE)
+    findings = review.parse_findings(f"{GROUNDED_BLOCKER}\n{INVENTED_BLOCKER}\n{MINOR_NOTE}", CODE)
     assert [f.where for f in review.to_fix(findings, ["blocker"])] == ["add"]
     assert len(review.to_fix(findings, ["blocker", "minor"])) == 2
 

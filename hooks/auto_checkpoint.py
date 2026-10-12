@@ -19,7 +19,7 @@ def main() -> int:
     """A hook must never break the user's prompt: any unexpected error ends silently with exit code 0."""
     try:
         return run()
-    except Exception:
+    except Exception:  # noqa: BLE001 - hook must never break the session
         return 0
 
 

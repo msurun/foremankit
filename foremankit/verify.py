@@ -138,7 +138,7 @@ def run_command(tokens: list[str], project: Path, timeout_s: float) -> tuple[boo
     command = [resolve_executable(tokens[0], project), *tokens[1:]]
     try:
         done = subprocess.run(command, cwd=project, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout_s, env=os.environ.copy())
+                              errors="replace", timeout=timeout_s, env=os.environ.copy(), check=False)
     except subprocess.TimeoutExpired:
         return False, f"the check did not finish within {timeout_s:.0f} s"
     except OSError as exc:

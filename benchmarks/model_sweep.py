@@ -52,7 +52,7 @@ def port_busy() -> bool:
 
 
 def stop(proc: subprocess.Popen) -> None:
-    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
     for _ in range(30):
         if not port_busy():
             return
@@ -74,14 +74,14 @@ def run_model(model: Path, dense: bool, a: argparse.Namespace) -> None:
         cmd = [sys.executable, str(LLAMA / "tune_llama.py"), "--model", str(model)] + (["--dense"] if dense else [])
         print(f"== tuning {stem} ...", flush=True)
         t0 = time.time()
-        r = subprocess.run(cmd, cwd=LLAMA)
+        r = subprocess.run(cmd, cwd=LLAMA, check=False)
         prof = profile_of(model)
         if r.returncode != 0 or prof is None:
-            log(dict(kind="model_failed", model=stem, size_gib=size, stage="tune", detail=f"exit {r.returncode}"))
+            log({"kind": "model_failed", "model": stem, "size_gib": size, "stage": "tune", "detail": f"exit {r.returncode}"})
             print(f"!! tuning failed for {stem}", flush=True)
             return
         print(f"   tuned in {time.time() - t0:.0f} s: {prof}", flush=True)
-    log(dict(kind="profile", model=stem, size_gib=size, dense=dense, profile=prof))
+    log({"kind": "profile", "model": stem, "size_gib": size, "dense": dense, "profile": prof})
 
     serve_log = (HERE / f"sweep_server_{stem}.log").open("w")
     proc = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(LAUNCHER),
@@ -101,7 +101,7 @@ def run_model(model: Path, dense: bool, a: argparse.Namespace) -> None:
                 break
             time.sleep(3)
         if not ready:
-            log(dict(kind="model_failed", model=stem, size_gib=size, stage="serve", detail=f"see {serve_log.name}"))
+            log({"kind": "model_failed", "model": stem, "size_gib": size, "stage": "serve", "detail": f"see {serve_log.name}"})
             print(f"!! server for {stem} did not come up", flush=True)
             return
         print(f"== {stem}: server ready in {time.time() - t0:.0f} s, VRAM {qb.vram()} MiB", flush=True)
@@ -118,7 +118,7 @@ def run_model(model: Path, dense: bool, a: argparse.Namespace) -> None:
             log(r)
             print(f"   agent r{rep}: {'SUCCESS' if r['success'] else 'FAIL'} {r['wall_s']} s, turns {r['turns']}, "
                   f"visible {r['visible_ok']} hidden {r['hidden_ok']}", flush=True)
-        log(dict(kind="model_done", model=stem, size_gib=size))
+        log({"kind": "model_done", "model": stem, "size_gib": size})
     finally:
         stop(proc)
         serve_log.close()
@@ -136,15 +136,15 @@ def report() -> None:
         lo = [r for r in t if r["cat"] == "long"]
         gen = [r["gen_tps"] for r in t if r.get("completion_tokens", 0) > 30 and r.get("gen_tps")]
         rate = lambda x: sum(r["correct"] for r in x) / len(x) if x else 0.0
-        stats.append(dict(
-            model=m, size=next((r["size_gib"] for r in t), 0), ncmoe=prof.get("ncmoe"), kv=prof.get("kv_cache") or "f16",
-            tuner_tg=prof.get("tg_tok_s"), tuner_pp=prof.get("pp_tok_s"),
-            short=rate(sh), short_n=f"{sum(r['correct'] for r in sh)}/{len(sh)}", long=rate(lo),
-            long_n=f"{sum(r['correct'] for r in lo)}/{len(lo)}", agent=f"{sum(r['success'] for r in ag)}/{len(ag)}",
-            agent_rate=rate([dict(correct=r["success"]) for r in ag]) if ag else 0.0,
-            tshort=sum(r["wall_s"] for r in sh) / len(sh) if sh else 0, tlong=sum(r["wall_s"] for r in lo) / len(lo) if lo else 0,
-            tps=sum(gen) / len(gen) if gen else 0,
-            tagent=sum(r["wall_s"] for r in ag) / len(ag) if ag else 0))
+        stats.append({
+            "model": m, "size": next((r["size_gib"] for r in t), 0), "ncmoe": prof.get("ncmoe"), "kv": prof.get("kv_cache") or "f16",
+            "tuner_tg": prof.get("tg_tok_s"), "tuner_pp": prof.get("pp_tok_s"),
+            "short": rate(sh), "short_n": f"{sum(r['correct'] for r in sh)}/{len(sh)}", "long": rate(lo),
+            "long_n": f"{sum(r['correct'] for r in lo)}/{len(lo)}", "agent": f"{sum(r['success'] for r in ag)}/{len(ag)}",
+            "agent_rate": rate([{"correct": r["success"]} for r in ag]) if ag else 0.0,
+            "tshort": sum(r["wall_s"] for r in sh) / len(sh) if sh else 0, "tlong": sum(r["wall_s"] for r in lo) / len(lo) if lo else 0,
+            "tps": sum(gen) / len(gen) if gen else 0,
+            "tagent": sum(r["wall_s"] for r in ag) / len(ag) if ag else 0})
     for s in stats:
         s["quality"] = (s["short"] + s["long"] + s["agent_rate"]) / 3
     ranked = sorted(stats, key=lambda s: (-round(s["quality"], 2), -s["tps"]))

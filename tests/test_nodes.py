@@ -434,7 +434,7 @@ def test_the_call_log_names_the_node(lab, make_router, mock, tmp_path):
     lab("firefly")
     serve(mock, LEGION)
     ask(make_router(resolver=private_lan))
-    call = [row for row in read_log(tmp_path) if row.get("event") == "call"][0]
+    call = next(iter([row for row in read_log(tmp_path) if row.get("event") == "call"]))
     assert call["provider"] == "llm" and call["node"] == "legion"
 
 

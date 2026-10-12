@@ -29,8 +29,8 @@ from server_tests import SERVER, URL, post, vram, wait_ready
 OUT = HERE / "agent_results.jsonl"
 st.MODELS["gemma"] = HERE.parent / "llama" / "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
 NCMOE_DEFAULT = {"q4": "40", "q5": "41", "gemma": "31"}   # from llama/profiles.json (tuner)
-SAMPLING = dict(temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0)
-GEMMA_SAMPLING = dict(temperature=1.0, top_p=0.95, top_k=64, min_p=0.0, presence_penalty=0.0)   # Google defaults (Unsloth docs)
+SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0}
+GEMMA_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0, "presence_penalty": 0.0}   # Google defaults (Unsloth docs)
 MAX_TURNS, MAX_WALL = 20, 900
 
 BUGGY = '''"""Small helpers for cleaning plant sensor series."""
@@ -225,21 +225,22 @@ TASK = ("The workspace contains plantdata.py (helpers for cleaning plant sensor 
         "read_file, write_file, run_tests. When all tests pass, reply with a short summary of what you changed.")
 
 TOOLS = [
-    dict(type="function", function=dict(name="list_files", description="List files in the workspace", parameters=dict(type="object", properties={}))),
-    dict(type="function", function=dict(name="read_file", description="Read a workspace file", parameters=dict(
-        type="object", properties=dict(path=dict(type="string")), required=["path"]))),
-    dict(type="function", function=dict(name="write_file", description="Create or overwrite a workspace file with the full new content",
-                                        parameters=dict(type="object", properties=dict(path=dict(type="string"), content=dict(type="string")),
-                                                        required=["path", "content"]))),
-    dict(type="function", function=dict(name="run_tests", description="Run the unit tests (python -m unittest) and return the output",
-                                        parameters=dict(type="object", properties={}))),
+    {"type": "function", "function": {"name": "list_files", "description": "List files in the workspace",
+                                      "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a workspace file", "parameters": {
+        "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Create or overwrite a workspace file with the full new content",
+                                      "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                                                     "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "run_tests", "description": "Run the unit tests (python -m unittest) and return the output",
+                                      "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
 def run_unittest(ws, target=None):
     cmd = [sys.executable, "-m", "unittest", "-q"] + ([target] if target else [])
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=ws)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=ws, check=False)
     except subprocess.TimeoutExpired:
         return False, "TIMEOUT"
     return r.returncode == 0, (r.stdout + r.stderr)[-3000:]
@@ -278,7 +279,7 @@ def tool(ws, name, args):
             p.write_text(args["content"], encoding="utf-8")
             return f"wrote {len(args['content'])} chars to {p.name}"
         return f"error: unknown tool {name}"
-    except Exception as e:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as e:
         return f"error: {e}"
 
 
@@ -288,8 +289,8 @@ def agent(mode, seed, label, sampling):
     (ws / "test_plantdata.py").write_text(TESTS, encoding="utf-8")
     msgs = [{"role": "system", "content": "You are a careful coding agent. Use the tools to inspect, edit and test code."},
             {"role": "user", "content": TASK}]
-    stats = dict(turns=0, tool_calls=0, prompt_tokens=0, completion_tokens=0, prompt_s=0.0, gen_s=0.0, invalid_calls=0,
-                 first_green_s=None, stopped="final")
+    stats = {"turns": 0, "tool_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "prompt_s": 0.0, "gen_s": 0.0,
+             "invalid_calls": 0, "first_green_s": None, "stopped": "final"}
     t0 = time.time()
     while True:
         if stats["turns"] >= MAX_TURNS:
@@ -302,7 +303,7 @@ def agent(mode, seed, label, sampling):
                     chat_template_kwargs={"enable_thinking": mode == "think"})
         try:
             d, _ = post("/v1/chat/completions", body, timeout=1200)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - network, HTTP and JSON failures all end this run and are recorded
             stats["stopped"] = f"error {str(e)[:60]}"
             break
         stats["turns"] += 1
@@ -321,7 +322,7 @@ def agent(mode, seed, label, sampling):
             try:
                 args = json.loads(c["function"]["arguments"]) if isinstance(c["function"]["arguments"], str) else c["function"]["arguments"]
                 out = tool(ws, c["function"]["name"], args)
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 stats["invalid_calls"] += 1
                 out = f"error: invalid arguments ({e})"
             if c["function"]["name"] == "run_tests" and stats["first_green_s"] is None and out.strip().endswith("OK"):
@@ -403,7 +404,7 @@ def main():
             proc.terminate()
             try:
                 proc.wait(30)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 proc.kill()
 
 
