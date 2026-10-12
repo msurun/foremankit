@@ -64,6 +64,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Sandbox:
     claude_home = tmp_path / "claude"
     state_dir = tmp_path / "state"
     vscode_dir = tmp_path / "vscode"
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setattr(INSTALL, "CLAUDE_HOME", claude_home)
     monkeypatch.setattr(INSTALL, "TEMP_DIR", tmp_path / "temp")
     monkeypatch.setattr(INSTALL, "STATE_DIR", state_dir)
