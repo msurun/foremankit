@@ -6,7 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from foremankit.delegation import CATEGORIES, category_of, describe, is_switched_off, set_switch
+from foremankit.delegation import (
+    CATEGORIES,
+    category_of,
+    describe,
+    is_switched_off,
+    set_switch,
+)
 from foremankit.state import StateStore
 
 

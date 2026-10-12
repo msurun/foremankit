@@ -23,8 +23,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import server_tests as st  # noqa: E402
-from server_tests import SERVER, URL, post, vram, wait_ready  # noqa: E402
+import server_tests as st
+from server_tests import SERVER, URL, post, vram, wait_ready
 
 OUT = HERE / "agent_results.jsonl"
 st.MODELS["gemma"] = HERE.parent / "llama" / "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"

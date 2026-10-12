@@ -4,7 +4,6 @@ from __future__ import annotations
 import sys
 
 import pytest
-
 from conftest import chat_json
 
 GROQ = "https://api.groq.com"

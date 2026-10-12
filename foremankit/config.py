@@ -52,7 +52,6 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 class ConfigError(RuntimeError):
     """Raised when the configuration is invalid or uses deprecated settings."""
-    pass
 
 
 # The providers llm_local / llm_remote (ollama_local / ollama_remote before) were replaced by ONE pool `llm` whose nodes

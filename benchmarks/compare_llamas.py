@@ -19,8 +19,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from foremankit.config import load_env  # noqa: E402
-from quality_bench import MAXTOK, SAMPLING, TASKS  # noqa: E402
+from quality_bench import MAXTOK, SAMPLING, TASKS
+
+from foremankit.config import load_env
 
 load_env()
 OUT = HERE / "compare_llamas.jsonl"

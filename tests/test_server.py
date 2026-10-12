@@ -9,8 +9,8 @@ import anyio
 import pytest
 
 mcp = pytest.importorskip("mcp")
-from mcp import ClientSession, StdioServerParameters  # noqa: E402
-from mcp.client.stdio import stdio_client  # noqa: E402
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
 def test_stdio_server_exposes_two_tools(tmp_path):

@@ -15,7 +15,6 @@ from starlette.requests import Request
 from foremankit import gateway
 from foremankit import gateway_trim as trim
 
-
 # --- fixtures ---------------------------------------------------------------
 
 @pytest.fixture

@@ -8,12 +8,12 @@ A cooldown guard waits before a run while the CPU thermal zone is above COOL_BEL
 """
 import csv
 import io
+import os
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
-import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent

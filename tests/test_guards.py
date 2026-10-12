@@ -4,12 +4,11 @@ from __future__ import annotations
 import sys
 
 import pytest
+from conftest import chat_json
 
-from foremankit import verify
-from foremankit import reasoning
+from foremankit import reasoning, verify
 from foremankit.formatting import format_result
 from foremankit.router import RouterError, TaskTooLarge
-from conftest import chat_json
 
 GEMINI = "https://generativelanguage.googleapis.com"
 DEEPSEEK = "https://api.deepseek.com"

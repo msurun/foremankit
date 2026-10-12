@@ -9,12 +9,12 @@ import socket
 import time
 
 import pytest
+from conftest import chat_json, read_log, tags
 
 from foremankit import nodes, quota
 from foremankit.config import REPO_DIR
 from foremankit.netguard import PrivacyError
 from foremankit.router import RouterError
-from conftest import chat_json, read_log, tags
 
 SELF_SERVER = "http://127.0.0.1:8080"          # llama-server on THIS machine (providers.yaml llm.endpoints)
 LEGION = "http://neuron:8080"                   # httpx lower-cases host names: what the mock transport sees

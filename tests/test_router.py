@@ -4,12 +4,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import LAN, LOCAL, TUNNEL, chat_json, read_log, tags
 
-from foremankit.netguard import PrivacyError
 from foremankit import reasoning
 from foremankit.formatting import format_result
+from foremankit.netguard import PrivacyError
 from foremankit.router import RouterError
-from conftest import LAN, LOCAL, TUNNEL, chat_json, read_log, tags
 
 GEMINI = "https://generativelanguage.googleapis.com"
 DEEPSEEK = "https://api.deepseek.com"
@@ -183,7 +183,6 @@ def test_second_free_gemini_key_is_used_before_paid_gemini(monkeypatch, make_rou
     assert res["provider"] == "gemini_free" and res["cost_usd"] == 0
     assert router.status()["budget"]["day_usd"] == 0
     # free quota is tracked separately from the paid key
-    from foremankit import quota
     q = router.store.load()["quota"]
     assert "gemini_free" in q and "gemini" not in q
 
@@ -545,7 +544,7 @@ def test_only_eligible_resource_busy_means_wait_not_fail(monkeypatch, make_route
     _slow_local_llm(mock, entered, release)
     router = make_router()
     results = {}
-    run = lambda key: results.update({key: router.delegate(key, kind="quick", sensitivity="private")})  # noqa: E731
+    run = lambda key: results.update({key: router.delegate(key, kind="quick", sensitivity="private")})
     a = threading.Thread(target=run, args=("a",))
     a.start()
     assert entered.wait(5)

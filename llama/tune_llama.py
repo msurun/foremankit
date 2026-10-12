@@ -17,12 +17,12 @@ What it does (about 15 minutes, keep the laptop on AC power and do not use it me
 Measured on the HP ZBook Firefly 14 G11 (see benchmarks/RESULTS.md): this procedure ends at ncmoe 40, P-core mask, t=12.
 Machines without an NVIDIA GPU get no ncmoe (the launcher then relies on llama-server --fit) and only the thread search.
 """
-import os
 import argparse
 import csv
 import ctypes
 import io
 import json
+import os
 import re
 import subprocess
 import sys

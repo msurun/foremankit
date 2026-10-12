@@ -5,10 +5,10 @@ request), postcheck (verify + review), probing, selection, reports.
 """
 from __future__ import annotations
 
-import httpx
-
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from .caller import Caller
 from .candidates import CandidateBuilder
@@ -22,7 +22,7 @@ from .providers import NodeProbe, Provider, normalize_toggle
 from .records import ReviewJob, RouterEnv, RouterError, TaskRequest, TaskTooLarge
 from .reports import Reporter
 from .selection import ConcurrencySlots, NodeSelector
-from .state import StateStore, CallLog
+from .state import CallLog, StateStore
 
 __all__ = ["Router", "RouterEnv", "RouterError", "TaskTooLarge"]
 

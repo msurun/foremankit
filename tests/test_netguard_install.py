@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from foremankit import netguard
 from foremankit.netguard import PrivacyError, assert_private_ok, check_host
 
 

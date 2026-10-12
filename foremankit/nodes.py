@@ -5,8 +5,8 @@ all the others as extra sources of the pool `llm`. Nothing here is specific to o
 """
 from __future__ import annotations
 
-import os
 import ipaddress
+import os
 import platform
 import secrets
 import socket

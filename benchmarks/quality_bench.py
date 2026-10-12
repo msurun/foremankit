@@ -22,7 +22,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from server_tests import MODELS, SERVER, URL, post, vram, wait_ready  # noqa: E402
+from server_tests import MODELS, SERVER, URL, post, vram, wait_ready
 
 OUT = HERE / "quality_results.jsonl"
 MODELS["gemma"] = HERE.parent / "llama" / "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
@@ -71,7 +71,7 @@ def make_table():
 
 
 def last_json(text):
-    for m in reversed(re.findall(r"\{[^{}]*\}", text or "", re.S)):
+    for m in reversed(re.findall(r"\{[^{}]*\}", text or "", re.DOTALL)):
         try:
             return json.loads(m)
         except Exception:
@@ -80,7 +80,7 @@ def last_json(text):
 
 
 def code_of(text):
-    blocks = re.findall(r"```(?:python|py)?\s*\n(.*?)```", text or "", re.S)
+    blocks = re.findall(r"```(?:python|py)?\s*\n(.*?)```", text or "", re.DOTALL)
     return max(blocks, key=len) if blocks else None
 
 

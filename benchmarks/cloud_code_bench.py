@@ -17,8 +17,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import quality_bench as qb  # noqa: E402
-from foremankit.router import Router, RouterEnv, RouterError  # noqa: E402
+import quality_bench as qb
+
+from foremankit.router import Router, RouterEnv, RouterError
 
 OUT = HERE / "cloud_code_results.jsonl"
 SWEEP = HERE / "sweep_results.jsonl"

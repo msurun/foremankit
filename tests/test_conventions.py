@@ -4,10 +4,10 @@ from __future__ import annotations
 import textwrap
 
 import pytest
+from conftest import chat_json
 
 from foremankit import codecheck, conventions
 from foremankit.cli import main
-from conftest import chat_json
 
 GROQ = "https://api.groq.com"
 CLEAN_FILE = textwrap.dedent('''

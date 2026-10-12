@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 ALLOWED_NETS = [ipaddress.ip_network(network_str) for network_str in (

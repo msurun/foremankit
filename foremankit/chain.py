@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 from . import netguard, prompting, reasoning
-from .records import (MAX_OUTPUT_CAP, MIN_OUTPUT_TOKENS, SENSITIVITIES, CallContext, Candidate, RouterError,
-                      TaskRequest)
+from .records import (
+    MAX_OUTPUT_CAP,
+    MIN_OUTPUT_TOKENS,
+    SENSITIVITIES,
+    CallContext,
+    Candidate,
+    RouterError,
+    TaskRequest,
+)
 from .selection import estimate_seconds, unsuited_reason
 
 if TYPE_CHECKING:

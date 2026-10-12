@@ -4,6 +4,8 @@
 
 Przenośny zestaw do Claude Code, który oddaje tańszym lub lokalnym modelom pracę, której nie warto robić na limicie Claude Pro: boilerplate, testy, skrypty pandas/SQL, streszczenia dużych logów.
 
+> foremankit to niezależny, nieoficjalny dodatek do rozszerzenia Claude Code (VS Code). Nie jest powiązany z firmą Anthropic, przez nią zatwierdzony ani sponsorowany.
+
 **Analogia:** Claude to kierownik zmiany. Sam podejmuje decyzje i sprawdza wyniki, a robotę „na łopatę” zleca podwykonawcom. `foremankit` jest dyspozytorem: wie, który podwykonawca jest dziś wolny, ile kosztuje i komu wolno pokazać dane firmowe (tylko „swoim”, czyli Ollamie na własnym sprzęcie).
 
 | Rola | Kto | Co robi |

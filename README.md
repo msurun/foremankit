@@ -4,6 +4,8 @@ English · [Polski](README.pl.md)
 
 A portable kit for Claude Code that hands off to cheaper or local models the work that is not worth spending your Claude Pro limit on: boilerplate, tests, pandas/SQL scripts, summaries of large logs.
 
+> foremankit is an independent, unofficial add-on for the Claude Code extension (VS Code). It is not affiliated with, endorsed by or sponsored by Anthropic.
+
 **Analogy:** Claude is the shift foreman. It makes the decisions and checks the results, and it assigns the spadework to subcontractors. `foremankit` is the dispatcher: it knows which subcontractor is free today, how much they cost, and who is allowed to see company data (only "our own", meaning Ollama on your own hardware).
 
 | Role | Who | What they do |

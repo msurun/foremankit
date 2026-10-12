@@ -7,14 +7,13 @@ new installer. Every test runs inside a tmp_path sandbox: the real ``~/.claude``
 
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import json
 import shutil
-import subprocess
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, MutableMapping
+from typing import Any
 
 import pytest
 

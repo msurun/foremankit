@@ -27,9 +27,9 @@ HERE = Path(__file__).resolve().parent
 LLAMA = HERE.parent / "llama"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(LLAMA))
-import agent_task as at  # noqa: E402
-import quality_bench as qb  # noqa: E402
-import tune_llama as tl  # noqa: E402
+import agent_task as at
+import quality_bench as qb
+import tune_llama as tl
 
 OUT = HERE / "sweep_results.jsonl"
 REPORT = HERE / "SWEEP_RESULTS.md"
@@ -135,7 +135,7 @@ def report() -> None:
         sh = [r for r in t if r["cat"] == "short"]
         lo = [r for r in t if r["cat"] == "long"]
         gen = [r["gen_tps"] for r in t if r.get("completion_tokens", 0) > 30 and r.get("gen_tps")]
-        rate = lambda x: sum(r["correct"] for r in x) / len(x) if x else 0.0          # noqa: E731
+        rate = lambda x: sum(r["correct"] for r in x) / len(x) if x else 0.0
         stats.append(dict(
             model=m, size=next((r["size_gib"] for r in t), 0), ncmoe=prof.get("ncmoe"), kv=prof.get("kv_cache") or "f16",
             tuner_tg=prof.get("tg_tok_s"), tuner_pp=prof.get("pp_tok_s"),
@@ -190,7 +190,7 @@ def main() -> None:
     a = ap.parse_args()
     if a.report_only:
         return report()
-    split = lambda s: [x.strip().lower() for x in s.split(",") if x.strip()]          # noqa: E731
+    split = lambda s: [x.strip().lower() for x in s.split(",") if x.strip()]
     only, skip, dense = split(a.only), split(a.skip), split(a.dense)
     # absolute paths: the launcher changes into llama\LLAMA.CPP before it starts the exe, so a relative --dir would break
     files = [f.resolve() for f in Path(a.dir).resolve().glob("*.gguf") if "mmproj" not in f.name.lower()]

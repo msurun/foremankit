@@ -12,8 +12,17 @@ import httpx
 from . import budget, netguard, quota
 from .config import is_dry_run
 from .nodes import Node, lab_key, load_nodes, self_name
-from .providers import (ChatRequest, Endpoint, NodeProbe, Provider, ProviderError, chat_completion,
-                        list_models, pick_model, probe_endpoint)
+from .providers import (
+    ChatRequest,
+    Endpoint,
+    NodeProbe,
+    Provider,
+    ProviderError,
+    chat_completion,
+    list_models,
+    pick_model,
+    probe_endpoint,
+)
 from .records import RouterError
 
 if TYPE_CHECKING:

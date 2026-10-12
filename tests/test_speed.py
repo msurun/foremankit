@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
+from conftest import chat_json
 
 from foremankit import speed
-from conftest import chat_json
 
 NOW = 1_000_000.0
 DEFAULTS = speed.DEFAULT_SETTINGS

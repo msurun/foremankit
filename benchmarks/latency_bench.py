@@ -26,8 +26,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import model_sweep as ms  # noqa: E402
-import quality_bench as qb  # noqa: E402
+import model_sweep as ms
+import quality_bench as qb
 
 OUT = HERE / "latency_results.jsonl"
 REPORT = HERE / "LATENCY_RESULTS.md"
@@ -142,7 +142,7 @@ def report() -> None:
         v = [r[key] for r in runs if r["model"] == m and r["scenario"] == sc and r.get(key) is not None]
         return statistics.median(v) if v else None
 
-    cell = lambda x: "-" if x is None else f"{x:.1f}"      # noqa: E731
+    cell = lambda x: "-" if x is None else f"{x:.1f}"
     out = ["# Latency: seconds from prompt to the finished answer", "",
            f"Generated {datetime.now():%Y-%m-%d %H:%M}. Median of the repetitions per scenario, thinking OFF, streaming, unique prompt nonce "
            "(cold cache) except cached10k.", "",

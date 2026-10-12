@@ -11,7 +11,6 @@ The hook never blocks the agent: every code path returns exit code 0.
 import json
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
