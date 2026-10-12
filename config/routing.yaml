@@ -1,0 +1,164 @@
+# Routing: kind -> ordered provider chain. Model names live only in providers.yaml.
+# Entry syntax: "provider" (uses its default_model) or "provider:alias".
+
+chains:
+  # gemini_free and openrouter are disabled (providers.yaml): measured 2026-10-08 gemini_free failed 50 % of calls and
+  # the free clouds together handled ~8k tokens (worth < 1 cent); Groq/Cerebras/Mistral stay as the backup when DeepSeek is blocked.
+  # Order: free providers -> DeepSeek (preferred paid, skipped while unreachable) -> paid Gemini (last resort).
+  # bulk_code: the local LLM sits after the free clouds and before the paid ones (measured 2026-10-10: Q4_K_XL / IQ1_M passed
+  # 14/14 bulk-code tasks like Groq and DeepSeek, 5-13 s vs ~2 s; benchmarks/CLOUD_VS_LOCAL.md). llm.kinds limits it to small inputs.
+  # 2026-10-11 (owner): DeepSeek flash first for bulk_code. It costs a fraction of a cent per file and passes verify
+  # in fewer rounds than the free clouds, which saves Claude tokens spent on supervising retries; free clouds are the fallback.
+  bulk_code:    ["deepseek:flash", mistral, groq, llm, "gemini:flash"]
+  data_script:  ["deepseek:flash", "gemini:flash"]
+  hard_code:    ["deepseek:pro", "gemini:pro"]
+  long_context: ["deepseek:flash", "gemini:flash"]
+  # `llm` is the pool of local-LLM nodes (config/nodes.yaml, this machine included). When the chain reaches it, the router
+  # expands it into the nodes that are on, answer, and accept the task's data level, the one expected to FINISH first
+  # coming first (measured tok/s per node, busy ones later). Off or unreachable nodes are skipped (parallel probe).
+  quick:        [groq, cerebras, llm, "gemini:flash"]
+  summarize:    [groq, cerebras, llm, "gemini:flash"]
+  # review: a second model reads code that is already written (delegate review=true, `foremankit review`). Only own hardware
+  # (the pool `llm`) or a PAID model: free clouds review superficially and may train on the code. The author's own
+  # source is skipped. A slow node is used last (llm.kinds.review + max_seconds), so the fast Legion or a paid flash answers first.
+  review:       [llm, "deepseek:flash", "gemini:flash"]
+  private:      [llm]                     # only own hardware is ever accepted here (and only nodes with accept: private)
+
+# escalate=true replaces the kind's chain with this one (ignored for sensitivity=private)
+escalation: ["deepseek:pro", "gemini:pro"]
+
+# Fixed system prompt per kind: always the first message, so DeepSeek's prefix cache hits.
+system_prompts:
+  _default: |
+    You are a precise senior engineer. Answer with the deliverable only, no preamble.
+    If you write code, return complete runnable code blocks with file paths as headings.
+  bulk_code: |
+    You are a senior Python engineer producing boilerplate, tests, docs or refactors.
+    Return complete files as fenced code blocks, each preceded by its relative path as a heading.
+    Follow the existing style. No explanations unless asked.
+  data_script: |
+    You are a senior data engineer (pandas, SQL, numpy). Write correct, vectorised, readable code.
+    State assumptions about columns/dtypes in a short comment. Return code blocks only plus at most 3 bullet notes.
+  hard_code: |
+    You are a principal engineer solving a hard programming problem. Think carefully, consider edge cases,
+    then give the final solution as complete code blocks and a short list of risks.
+  long_context: |
+    You analyse large inputs (logs, many files). Be concrete: cite file names / line fragments.
+    Output a structured summary with headings and bullet points.
+  quick: |
+    Answer briefly and precisely.
+  summarize: |
+    Summarise the input faithfully and concisely as bullet points. Do not invent facts.
+  private: |
+    You are a careful assistant working on confidential data. Answer precisely.
+  review: |
+    You are a strict but fair senior code reviewer. You receive what was asked, the code that was written for it and,
+    when available, the result of its automatic checks. Report REAL problems only: wrong behaviour, missing edge cases,
+    new behaviour without a test, security issues, changes outside the task, breaches of the code conventions below.
+    Output exactly one line per problem, in this format:
+    SEVERITY | where | problem | evidence | fix
+    SEVERITY is BLOCKER, MAJOR or MINOR. BLOCKER means the code is wrong or unsafe and you can name the input that breaks it.
+    where = function name or line. evidence = a SHORT quote of the offending code, copied exactly, in backticks.
+    fix = what to change, in one sentence. Do not rewrite the code, do not praise, no text outside these lines.
+    If there is nothing to report, output exactly: NO FINDINGS
+
+# Which task kinds may run on the (slow) local LLM nodes (providers.yaml `llm`; speed per node in nodes.yaml), and up to how
+# many input tokens. A kind that is not listed, or an input above its limit, skips the node at once and goes to the next
+# allowed source (DeepSeek / Gemini), so one long job never blocks its single slot. A node can override this with its own
+# `kinds` (a fast GPU node may take larger inputs). Exception: sensitivity=private has no other allowed source, so it
+# runs on a node whatever the size.
+# Check these against real runs: `foremankit stats`, calls.jsonl latency per node.
+llm:
+  queue_penalty_s: 30          # a node whose server is busy right now counts this much longer when nodes are ranked
+  kinds:
+    quick:       {max_input_tokens: 6000}
+    summarize:   {max_input_tokens: 8000}
+    review:      {max_input_tokens: 14000}  # a file or a diff; slower nodes take it last
+    bulk_code:   {max_input_tokens: 12000}  # one file plus its tests and interfaces (raised from 5000 on 2026-10-10; ctx is 32768)
+    data_script: {max_input_tokens: 12000}  # pandas / SQL scripts with their context (raised from 5000 on 2026-10-10)
+    # hard_code, long_context: not listed -> never local (they are the slow ones)
+
+reasoning:
+  # Effort level sent to providers that support it (providers.yaml -> `thinking`). Gemini 3.x cannot turn
+  # reasoning off, "minimal" is the floor. Levels: minimal < low < medium < high.
+  kinds:
+    bulk_code:    minimal    # mechanical: boilerplate, tests, docs, refactors
+    quick:        minimal
+    summarize:    minimal
+    long_context: low        # find patterns in big inputs, mostly summarising
+    data_script:  medium     # joins / windows / dtypes: easy to get subtly wrong
+    hard_code:    high
+    review:       medium
+  internal_floor: low        # process data (sensitivity=internal): never below this. Was medium; that switched DeepSeek
+                             # reasoning on for plain tasks and burned 6k tokens with no answer (measured 2026-10-08)
+  escalate_level: high       # escalate=true means the cheap pass failed: think hard
+  # A big answer plus deep reasoning ends empty or cut off (2026-10-10: ~24k reasoning tokens, no answer). Above this many
+  # requested output tokens the level is lowered to large_output_level.
+  large_output_tokens: 6000
+  large_output_level: medium
+
+budget:
+  daily_usd: 2.0       # hard stop for paid providers (raised from 1.0 on 2026-10-10 at the owner's request)
+  monthly_usd: 5.0      # hard stop for paid providers (= the USD 5 loaded on Gemini 2026-10-07)
+  per_call_usd: 0.10    # a paid call whose WORST-CASE cost is above this is refused unless allow_cost=true is passed
+                        # (2026-10-10: two calls of ~0.30 USD each returned unusable cut-off output)
+  # tokens/char ratio used for the pre-call worst-case cost estimate
+  chars_per_token: 3.5
+
+# Guards on context_files
+context_guard:
+  max_total_chars: 400000
+  data_extensions: [.csv, .tsv, .jsonl, .parquet, .xlsx, .xls, .feather, .pkl]
+  # Non-private calls: data files above this many lines are refused (send schema + sample rows instead)
+  max_data_lines_non_private: 60
+
+calls:
+  max_retries: 1        # per provider, only on timeout/5xx/connection error; 429 -> cooldown + next provider
+  preview_chars: 600
+  warn_output_tokens: 8000   # a requested answer bigger than this gets a "split the task" note in the result
+  abort_waste_usd: 0.02      # a paid call that wasted more than this (empty or cut-off answer) stops the chain: no second paid try
+  log_prompts: false    # never log prompt/response bodies unless explicitly enabled
+  cooldown_429_s: [30, 120, 600, 1800]   # backoff steps for consecutive 429s (Retry-After wins if larger)
+  cooldown_5xx_s: 30
+
+# Reference API prices for `foremankit stats` savings estimate (USD / 1M tokens)
+reference:
+  name: claude-sonnet
+  price: {input: 3.0, output: 15.0}   # VERIFY current Sonnet API pricing
+
+# verify="<command>" + verify_target="<file>" on a delegate call: the answer is written to that file, the command runs, and
+# failures go back to the same model (max_rounds times). The file is only left changed when the command passes.
+# The command comes from an agent, so it must START with one of these prefixes; it runs without a shell, in the project folder.
+verify:
+  max_rounds: 2
+  timeout_s: 300
+  conventions: true   # 2026-10-11: after the command passes, a .py target must also pass `foremankit check` (config/conventions.md); the author fixes it, not Claude
+  allowed_commands:
+    - python -m pytest
+    - .venv/Scripts/python -m pytest
+    - .venv/bin/python -m pytest
+    - pytest
+    - python -m ruff check
+    - ruff check
+    - foremankit check
+    - .venv/Scripts/foremankit check
+    - .venv/bin/foremankit check
+
+# One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the
+# system prompt of these kinds (a project can override it with <project>/.foremankit/conventions.md). `foremankit check <files>`
+# verifies the measurable part mechanically; put it in `verify` to make a delegated file pass it before it is accepted.
+conventions:
+  file: conventions.md
+  kinds: [bulk_code, data_script, hard_code, review]
+  limits:
+    max_function_lines: 20
+    max_parameters: 4
+    max_nesting: 3
+    allowed_short_names: [i, j, k, _, u, x, y]   # u/x/y: standard control-theory symbols (input, state, output); the owner works in process control
+
+# Preliminary code review by a second model (delegate review=true, or `foremankit review <files>`). Findings the reviewer
+# cannot back with a quote that really appears in the code are reported as unverified and never acted on.
+review:
+  max_output_tokens: 1500
+  fix_severities: [blocker]    # findings of these severities (and grounded) go back to the author
+  fix_rounds: 1                # 0 = report only

@@ -1,0 +1,23 @@
+# local model weights and llama.cpp binaries (tens of GB; never commit); the launcher scripts may be tracked
+llama/*
+!llama/*.ps1
+!llama/*.cmd
+!llama/*.py
+!llama/profiles.json
+*.gguf
+*.zip
+.env
+.env.*
+!.env.example
+.agent-out/
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+state.json
+calls.jsonl
+*.tmp
+
+# benchmark logs (raw data stays in results.csv / server_results.jsonl)
+benchmarks/*.log
+benchmarks/agent_solutions/

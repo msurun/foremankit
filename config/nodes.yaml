@@ -1,0 +1,57 @@
+# The lab's machines that run (or can run) a local LLM server: llama.cpp `llama-server` or Ollama.
+# The SAME file works on every machine: each one finds itself by hostname (or env FOREMANKIT_SELF) and treats all the
+# others as extra nodes of the pool `llm`. The router sends each task to the node that should FINISH it first
+# (measured speed, minus nodes that are busy, off, unreachable, or not allowed for the task's data level).
+# Add a machine = add one block. Up to ~5 machines on one network is the supported size.
+#
+# Per node:
+#   hostname    name of the machine (platform.node()); how this file finds "me"
+#   serves      false = this machine only USES the pool (no GPU / no server); default true
+#   lan         names or IPs tried in order. A fixed IP for a changing DHCP lease can be set without editing this file:
+#               env FOREMANKIT_NODE_<NAME>_LAN="192.168.1.50,192.168.1.51"  (NAME in capitals)
+#   port        llama-server port (default 8080). A full URL (https://...) in lan is used as written.
+#   accept      highest data level this node may receive: normal < internal < private. Default `private`: lab machines are
+#               exactly where confidential data may go, because it never leaves our own hardware. Lower it for a machine
+#               you do not fully trust (accept: normal = public data only; accept: internal = no private data).
+#   speed       what the node delivers when it serves a request, measured with llama/tune_llama.py (llama/profiles.json):
+#               prompt_tps / gen_tps = tokens per second, expected_output_cap = typical answer length (tokens) for the
+#               estimate, max_seconds = longest task it should take while another source is available. A CPU-only node
+#               simply has low numbers: the router then gives it only small tasks, or none when nothing else is idle.
+#   learn       true (default) = the router keeps a moving average of the speed the node really delivered and blends it
+#               into `speed` (foremankit/speed.py): right for machines that are not ours, whose speed floats with their load
+#               and network. false = `speed` is final; use it for a node that was measured carefully (our own laptops).
+#   kinds       optional: input limits per kind for THIS node (default: routing.yaml llm.kinds)
+#   max_concurrent  parallel requests the server takes (llama-server -np); default 1
+#   priority    lower number = more important machine (a work laptop outranks a personal one). Used to break ties and for
+#               the loan rule below. All machines equal = no restrictions.
+#
+# Authentication: every node's server runs with --api-key; the shared key is env FOREMANKIT_PEER_KEY (same value on all
+# machines, kept only in .env, never in git). Create it with `foremankit nodes key`.
+
+settings:
+  key_env: FOREMANKIT_PEER_KEY
+  tunnel_enabled: false        # reserved, keep false
+  # A machine borrowing from a MORE important one (higher priority) is limited: only while the owner's server is idle
+  # (llama-server /slots) and only for tasks estimated shorter than max_seconds, so the owner never waits behind a loan.
+  loan_to_higher_priority: {when_idle: true, max_seconds: 45}
+  # How the speed of nodes with learn: true is learned from real calls (all optional, these are the defaults):
+  #   alpha = weight of the newest measurement; min_samples = measurements after which the learned value fully replaces the
+  #   written one; max_age_h = a node not used for this long falls back to its written speed; enabled = false stops learning.
+  speed_learning: {enabled: true, alpha: 0.3, min_samples: 3, max_age_h: 72}
+
+defaults:                      # applied to every node unless its block says otherwise
+  accept: private
+
+nodes:
+  firefly:
+    hostname: SGLTP1738        # HP ZBook Firefly 14 G11 (work)
+    priority: 1
+    lan: [SGLTP1738]
+    learn: false               # measured (llama/profiles.json): keep the written speed
+    speed: {prompt_tps: 190, gen_tps: 19, expected_output_cap: 1500, max_seconds: 300}  # was 150; a 4000-token answer takes ~210 s
+  legion:
+    hostname: Neuron           # Lenovo Legion, Ryzen 7 5800H + RTX 3070 8 GB (personal)
+    priority: 2
+    lan: [Neuron]              # the plain name resolves on the home LAN; add a fixed IP here if it ever does not
+    learn: false               # measured (llama/profiles.json): keep the written speed
+    speed: {prompt_tps: 240, gen_tps: 33, expected_output_cap: 1500, max_seconds: 150}

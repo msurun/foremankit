@@ -1,0 +1,13 @@
+# `foremankit profile <name>` writes these flags into the state file (highest precedence).
+# Keys: llm:self (this machine's server), llm:others (all other nodes), llm:all, or llm:<node name from nodes.yaml).
+# Values: auto | on | off
+profiles:
+  work:
+    "llm:self": "on"
+    "llm:others": auto
+  home:
+    "llm:self": auto
+    "llm:others": auto
+  offline:
+    "llm:self": "on"
+    "llm:others": "off"

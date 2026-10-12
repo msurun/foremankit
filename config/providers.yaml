@@ -1,0 +1,201 @@
+# Providers for foremankit.
+# Every value marked VERIFY was NOT confirmed against the provider's docs.
+# Run `foremankit models` (lists /models of every active provider) and fix IDs here.
+#
+# Fields:
+#   type            openai (generic /chat/completions client) | llm (local server: llama.cpp / Ollama / ...; legacy spelling: ollama)
+#   base_url        OpenAI-compatible base URL (".../v1"-style, without /chat/completions)
+#   key_env         env var holding the API key; provider is active only when it is set
+#   enabled         true | false (cloud providers); auto | on | off (llm)
+#   free            true = free tier (no USD budget), false = paid (counted against budget)
+#   trains_on_data  true = provider may train on prompts -> never used for sensitivity=private
+#   limits          conservative request/token limits (rpm, rpd, tpd); null = not enforced
+#   models          alias -> {id, price}; price in USD per 1M tokens (input_miss, input_hit, output)
+#   default_model   alias used when a routing entry has no ":alias"
+
+providers:
+  deepseek:
+    type: openai
+    base_url: https://api.deepseek.com
+    key_env: DEEPSEEK_API_KEY
+    # auto = probe GET /models (cached `ttl_s`, re-probed when the network changes) and use DeepSeek whenever it
+    # answers; preferred over paid Gemini. On the work network api.deepseek.com is blocked by the corporate
+    # web filter (DNS -> block page): do NOT work around it; it is skipped silently while unreachable.
+    enabled: auto
+    probe: {path: /models, ttl_s: 600, timeout_s: 4}
+    free: false
+    # Checked 2026-10-08 (cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html): inputs are collected and may be
+    # used "to train and improve our technology, such as our machine learning models"; data is processed and stored in
+    # the People's Republic of China; retention is open-ended. An opt-out of training is a stated right, but no API
+    # switch was found. So: never for "internal" or "private" (FOREMANKIT_ALLOW_INTERNAL cannot override this flag).
+    trains_on_data: true
+    timeout: 180
+    limits: {rpm: 30, rpd: null, tpd: null}   # VERIFY (DeepSeek has no fixed public rate limit)
+    # Thinking is ON by default (effort high) and its tokens are billed as output. Owner's decision 2026-10-11:
+    # paid models never think (it only wasted tokens), so EVERY level, escalate included, sends thinking disabled.
+    # Measured 2026-10-08: effort high on a small data task used all of 3548 tokens on reasoning, no answer.
+    thinking:
+      extra_by_level:
+        minimal: {thinking: {type: disabled}}
+        low: {thinking: {type: disabled}}
+        medium: {thinking: {type: disabled}}
+        high: {thinking: {type: disabled}}
+      headroom: {minimal: 0, low: 0, medium: 0, high: 0}
+    default_model: flash
+    models:
+      flash:
+        id: deepseek-flash             # = DeepSeek-V4.1-Flash; legacy 'deepseek-v4-flash' is still accepted (same price)
+        # Peak prices (01-04 and 06-10 UTC, Mon-Fri); off-peak is half of this, so the real cost is <= what we count.
+        price: {input_miss: 0.30, input_hit: 0.006, output: 1.20}
+      pro:
+        id: deepseek-v4-pro            # = DeepSeek-V4-Pro-0813
+        price: {input_miss: 1.32, input_hit: 0.044, output: 3.96}   # peak; off-peak is half
+
+  gemini:
+    type: openai
+    # OpenAI-compatible endpoint (confirmed in ai.google.dev/gemini-api/docs/openai, 2026-10-07)
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    key_env: GEMINI_API_KEY
+    enabled: true
+    # Billing enabled 2026-10-07 (USD 5 top-up): the key is on the paid tier, free allocations no longer
+    # apply, so every call is counted against the USD budget in routing.yaml.
+    free: false
+    trains_on_data: false      # paid tier: "content not used to improve our products" (ai.google.dev/pricing); VERIFY ToS
+    allow_internal: true       # may receive sensitivity="internal" (process data, not secrets). Never "private".
+    # Gemini 3.x counts hidden reasoning against max_tokens (verified 2026-10-07) and cannot turn it off.
+    # `param` is sent as reasoning_effort; headroom = extra max_tokens per level so reasoning cannot eat the answer.
+    thinking: &gemini_thinking
+      param: reasoning_effort
+      # gemini-3.8-flash answers HTTP 400 to "minimal" (verified 2026-10-08); "low" is accepted and used 0 hidden
+      # reasoning tokens on a one-word reply, so minimal -> low.
+      # Owner's decision 2026-10-11: no extra thinking on paid models, so every level is sent as the floor "low".
+      level_map: {minimal: low, low: low, medium: low, high: low}
+      headroom: {minimal: 1024, low: 1024, medium: 1024, high: 1024}   # VERIFY by measuring real usage
+    timeout: 180
+    limits: {rpm: 30, rpd: null, tpd: null}    # VERIFY paid-tier limits for your account
+    default_model: flash
+    models:
+      flash:
+        id: gemini-3.8-flash           # confirmed on /models 2026-10-07
+        # Prices from ai.google.dev/gemini-api/docs/pricing on 2026-10-07; they DOUBLE on 2027-01-01
+        # (input 1.50 / cached 0.15 / output 7.50) -> update then.
+        price: {input_miss: 0.75, input_hit: 0.075, output: 3.75}
+      pro:
+        id: gemini-3.1-pro-preview     # confirmed on /models 2026-10-07
+        # Prices for prompts <= 200k tokens (4.00 / 0.40 / 18.00 above that; context_guard keeps us below).
+        price: {input_miss: 2.00, input_hit: 0.20, output: 12.00}
+
+  gemini_free:
+    # Second Google account on the FREE tier (separate key => separate quota). Used with the other freebies,
+    # before paid providers. Same endpoint and model IDs as `gemini`.
+    type: openai
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    key_env: FREE_GEMINI_API_KEY
+    enabled: false            # 2026-10-08: 50 % failures (400/timeouts/503) and trains on data; set true to bring it back
+    free: true
+    trains_on_data: true       # free tier: Google may use prompts to improve products -> never for private data
+    thinking: *gemini_thinking   # same as `gemini`
+    timeout: 120
+    limits: {rpm: 8, rpd: 200, tpd: 1000000}   # VERIFY (free-tier limits are per model and change often)
+    default_model: flash
+    models:
+      flash:
+        id: gemini-3.8-flash           # VERIFY it is available on the free tier (`foremankit models gemini_free`)
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
+  groq:
+    type: openai
+    base_url: https://api.groq.com/openai/v1
+    key_env: GROQ_API_KEY
+    enabled: true
+    free: true
+    trains_on_data: false      # VERIFY
+    timeout: 60
+    limits: {rpm: 25, rpd: 900, tpd: 90000}    # VERIFY (per-model, tokens/day is the tight one)
+    default_model: main
+    models:
+      main:
+        id: openai/gpt-oss-120b        # present on /models 2026-10-07 (llama-3.3-70b-versatile was gone); VERIFY limits
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    enabled: false            # 2026-10-08: rotating :free catalogue, 50 requests/day, trains on data; in no chain anyway
+    free: true
+    trains_on_data: true       # VERIFY: many ":free" upstreams log/train on prompts
+    timeout: 120
+    limits: {rpm: 18, rpd: 45, tpd: null}      # ~20 rpm / 50 rpd (1000 rpd after 10 USD top-up); VERIFY
+    default_model: free
+    models:
+      free:
+        id: poolside/laguna-s-2.1:free  # present on /models 2026-10-07; VERIFY quality (":free" catalogue rotates; alt: cohere/north-mini-code:free)
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
+  mistral:
+    type: openai
+    base_url: https://api.mistral.ai/v1
+    key_env: MISTRAL_API_KEY
+    enabled: true
+    free: true                 # "Experiment" plan
+    trains_on_data: true       # Experiment plan may use data for training; VERIFY
+    timeout: 120
+    limits: {rpm: 2, rpd: null, tpd: 900000}   # VERIFY (Experiment: ~1 rps, monthly token cap)
+    default_model: code
+    models:
+      code:
+        id: codestral-latest           # VERIFY
+        price: {input_miss: 0, input_hit: 0, output: 0}
+      small:
+        id: mistral-small-latest       # VERIFY
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
+  cerebras:
+    type: openai
+    base_url: https://api.cerebras.ai/v1
+    key_env: CEREBRAS_API_KEY
+    enabled: true              # key added 2026-10-08; free-plan limits below are VERIFY
+    free: true
+    trains_on_data: false      # VERIFY
+    timeout: 60
+    limits: {rpm: 25, rpd: 900, tpd: 900000}   # VERIFY
+    default_model: main
+    models:
+      main:
+        id: gpt-oss-120b               # VERIFY
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
+  llm:
+    type: llm
+    # The POOL of local-LLM servers: llama.cpp `llama-server` or Ollama, on this machine and on the other machines of the
+    # lab. Which machines exist, their speed and which data levels each may receive is config/nodes.yaml. This section holds
+    # only what is common to all nodes and the servers on THIS machine.
+    # Any server answering GET /api/tags (Ollama) or GET /v1/models (llama.cpp, LM Studio, vLLM) works.
+    enabled: auto              # auto | on | off for the whole pool; env LLM_ENABLED, LLM_SELF_ENABLED, LLM_OTHERS_ENABLED,
+                               # FOREMANKIT_NODE_<NAME>_ENABLED, or `foremankit llm [self|others|all|<node>] on|off|auto`
+    endpoints:                 # the servers on THIS machine, tried in order; the first one that answers wins
+      - {name: llamacpp, url_env: LLAMACPP_URL, default_url: "http://127.0.0.1:8080"}
+      - {name: ollama, url_env: OLLAMA_LOCAL_URL, default_url: "http://localhost:11434"}
+    # A llama-server serves a single model, whatever alias it was started with: it is picked automatically, so no list is needed.
+    # Only for an Ollama endpoint: put model names here to prefer them (otherwise any chat model from `ollama list` is used).
+    preferred_models: []
+    exclude_models: [embed, -base]   # never auto-picked as fallback
+    timeout: 600
+    probe_timeout: 1.0
+    max_concurrent: 1          # default per node (nodes.yaml max_concurrent): one request at a time (llama-server -np 1)
+    # Qwen3.6 "thinking" is ON by default and eats the whole token budget (measured 2026-10-08: 142 s and an empty
+    # answer vs 23 s with it off). Switch it off per request for every level except "high".
+    thinking:
+      extra_by_level:
+        minimal: {chat_template_kwargs: {enable_thinking: false}}
+        low: {chat_template_kwargs: {enable_thinking: false}}
+        medium: {chat_template_kwargs: {enable_thinking: false}}
+    # Speed assumed for a node that has no `speed` in nodes.yaml (and for this machine when it is not listed there).
+    # Measured 2026-10-08 (llama-bench, Qwen3.6-35B-A3B Q5, RTX A500 + CPU): ~136 tok/s prompt, ~14-16 tok/s generation.
+    # Per-machine overrides for THIS machine: LOCAL_LLM_GEN_TPS / LOCAL_LLM_PROMPT_TPS in .env.
+    speed: {prompt_tps: 130, gen_tps: 14, expected_output_cap: 1500, max_seconds: 150}
+    allow_private: true
+    allow_public_endpoint: false   # never set true unless you know exactly why
+    free: true
+    trains_on_data: false

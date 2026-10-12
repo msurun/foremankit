@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foremankit"
+version = "0.1.0"
+description = "Delegate Claude Code work to cheaper and local models: an MCP server with a cost-aware router, privacy levels and an optional local orchestrator"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Marcin Surunowicz" }]
+requires-python = ">=3.10"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Developers",
+    "Development Status :: 3 - Alpha",
+]
+dependencies = [
+    "mcp>=1.10,<3",
+    "httpx>=0.27",
+    "pyyaml>=6",
+    "python-dotenv>=1.0",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/msurun/foremankit"
+Issues = "https://github.com/msurun/foremankit/issues"
+
+[project.scripts]
+foremankit = "foremankit.cli:main"
+foremankit-mcp = "foremankit.server:main"
+foremankit-gateway = "foremankit.gateway:main"
+
+[tool.setuptools]
+packages = ["foremankit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

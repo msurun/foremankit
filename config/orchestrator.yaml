@@ -1,0 +1,40 @@
+# Local orchestrator: the Claude Code plugin talks to the gateway (foremankit-gateway, port 8081), which sends requests
+# for `local_models` to the local llama-server and everything else unchanged to the Anthropic cloud.
+local_models: [claude-sonnet-5]        # model ids routed locally (the plugin picker entry "Local Qwen (foremankit)")
+local_url: http://127.0.0.1:8080
+local_target: qwen3.6-35b-a3b          # model name sent to llama-server
+cloud_url: https://api.anthropic.com
+port: 8081
+context_tokens: 65536               # window of the local llama-server (-Ctx in llama/start-orchestrator.cmd); feeds the session-length hook
+prompt_file: orchestrator.md           # next to this file; re-read on every request, no restart needed
+language: English                     # the language the orchestrator talks to you in (fills {language} in the prompt)
+                                       # Polish prompt: prompt_file: orchestrator.pl.md and language: Polish
+
+# Only the plugin's main loop is touched: it is recognised by a tool that spawns subagents. Subagent requests
+# (no such tool) and all cloud requests pass through unchanged.
+main_loop_tools: [Agent, Task]
+
+trim:
+  enabled: true
+  system: replace                      # replace = prompt_file + the kept sections | append = original + prompt_file | keep = untouched
+  keep_sections: [Environment]         # "# Heading" sections copied from the original system prompt (cwd, platform, date)
+  tools_keep:                          # names or prefix* patterns; everything else is removed from the request
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+    - Bash
+    - PowerShell
+    - Agent
+    - WebFetch
+    - "mcp__foremankit__*"
+    - "mcp__claude-vscode__*"
+  tool_description_max_chars: 600      # long tool descriptions are cut (Bash alone is thousands of tokens); 0 = no cut
+  drop_message_blocks:                 # regexes: user-message text blocks matching one are dropped (skills, MCP, agent lists)
+    - 'The following skills are available'
+    - '# MCP Server Instructions'
+    - 'Available agent types'
+    - 'deferred tools'
+  old_tool_result_max_chars: 1500      # tool results older than the last `keep_recent_messages` messages are cut to this; 0 = off
+  keep_recent_messages: 8
