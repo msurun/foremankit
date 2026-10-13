@@ -6,10 +6,13 @@ even if the model forgets the CLAUDE.md rule. It never blocks the call. Two inde
 
 1. Transcript size (all models): `transcript_path` bigger than FOREMANKIT_SESSION_REMINDER_MB (8 MB), then at most every
    90 minutes and after 4 MB of growth.
-2. Context fill (local orchestrator only): the gateway writes the size of the last prompt it sent to the local model
-   and that model's window to `gateway_context.json` (state dir). While that file is fresh the hook warns once per
-   level at 60 %, 75 % and 85 % of the window. The size of a transcript file is no usable token count (JSONL
-   overhead, tool results the gateway cuts), so cloud sessions get no token levels.
+2. Context fill (sessions that run on the local model only): the gateway writes the size of the last prompt it sent to
+   the local model and that model's window to `gateway_context.json` (state dir). The file is shared by every session, so
+   the hook first checks that THIS session talks to the local model (its last answer was not produced by a `claude-*`
+   model, see `uses_local_model`); a cloud session never gets the local model's fill level. While the file is fresh the hook
+   warns once per level at 60 % and 75 %; from 90 % it orders the model to stop its work and write a handoff, on every
+   prompt until the session is replaced. The size of a transcript file is no usable token count (JSONL overhead, tool
+   results the gateway cuts), so cloud sessions get no token levels.
 """
 import json
 import os
@@ -17,7 +20,8 @@ import sys
 import time
 from pathlib import Path
 
-LEVELS = (0.60, 0.75, 0.85)       # fractions of the context window
+LEVELS = (0.60, 0.75, 0.90)       # fractions of the context window; the last one means: stop and hand over
+TAIL_BYTES = 256 * 1024           # how much of the transcript's end is searched for the model of the last answer
 GATEWAY_FRESH_S = 10 * 60         # older gateway data belongs to a finished local session
 # User-facing texts per language: English by default, Polish with FOREMANKIT_LANG=pl.
 LEVEL_TEXT = {
@@ -25,14 +29,14 @@ LEVEL_TEXT = {
             "Save the state when the task ends."),
            ("⚠ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
             "At the next breakpoint save the state (handoff) and start a new session."),
-           ("⚠ foremankit: local model context is almost full, {pct:.0%} (~{tokens:,} / {window:,} tokens). "
-            "Save the state now and start a new session, otherwise the server rejects the request (HTTP 400).")),
+           ("⛔ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
+            "The model was told to stop and write the handoff; start a new session after it.")),
     "pl": (("ℹ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
             "Przy końcu zadania zapisz stan."),
            ("⚠ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
             "Przy najbliższym punkcie przerwania zapisz stan (handoff) i zacznij nową sesję."),
-           ("⚠ foremankit: kontekst lokalnego modelu prawie pełny, {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
-            "Zapisz stan teraz i zacznij nową sesję, inaczej serwer odrzuci żądanie (HTTP 400).")),
+           ("⛔ foremankit: kontekst lokalnego modelu zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). "
+            "Model dostał polecenie zatrzymania pracy i zapisania handoffu; potem zacznij nową sesję.")),
 }
 LONG_TEXT = {
     "en": "foremankit: this conversation is already long (transcript about {mb:.0f} MB) and every turn re-reads it. "
@@ -40,6 +44,14 @@ LONG_TEXT = {
     "pl": "foremankit: ta rozmowa jest już długa (transkrypcja ok. {mb:.0f} MB), a każda tura czyta ją od nowa. "
           "Przy najbliższym naturalnym punkcie przerwania rozważ nową sesję (stan zapisz w pamięci lub repozytorium).",
 }
+
+
+STOP_INSTRUCTION = (
+    "STOP. The local model's context is {pct:.0%} full (~{tokens:,} of {window:,} tokens); the next requests will be "
+    "rejected. Do not start any new step, tool call or delegation, and do not finish the current task. Do exactly this now: "
+    "(1) write a handoff file HANDOFF.md in the project root (or save it to memory) with what is done, which files changed, "
+    "what is still pending, decisions taken and the exact next step; (2) answer in at most three lines: the path of the "
+    "handoff and the sentence that the user should continue in a NEW session. Nothing else.")
 
 
 def ui_language() -> str:
@@ -72,6 +84,30 @@ def load_json(path: Path) -> dict:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def uses_local_model(transcript_path: str) -> bool:
+    """True when the last answer in this session's transcript came from a local model.
+
+    A transcript line carries `message.model`: `claude-...` for the cloud, the llama-server alias (`qwen3.6-...`,
+    `spark-...`) for the local model. Only the tail of the file is read; `<synthetic>` entries are ignored. A session
+    without an answer yet is not counted as local, so a brand-new session is never told about another session's fill."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - TAIL_BYTES))
+            tail = handle.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+    for line in reversed(tail.splitlines()):
+        try:
+            message = json.loads(line).get("message")
+        except ValueError:
+            continue
+        model = message.get("model") if isinstance(message, dict) else None
+        if isinstance(model, str) and model != "<synthetic>":
+            return not model.startswith("claude-")
+    return False
 
 
 def context_level(state_dir: Path, now: float) -> tuple[int, int, int, float]:
@@ -127,7 +163,11 @@ def run() -> int:
     session_state = state.get(session_id)
     session_state = session_state if isinstance(session_state, dict) else {}
 
-    level, tokens, window, fraction = context_level(state_dir, now)
+    level, tokens, window, fraction = context_level(state_dir, now) if uses_local_model(transcript_path) else (0, 0, 0, 0.0)
+    if level == len(LEVELS):
+        emit(LEVEL_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window),
+             STOP_INSTRUCTION.format(pct=fraction, tokens=tokens, window=window))
+        return 0
     if level > int(session_state.get("level", 0)):
         state[session_id] = {**session_state, "level": level}
         remember(state, state_file)

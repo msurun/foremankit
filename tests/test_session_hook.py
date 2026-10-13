@@ -33,6 +33,16 @@ def create_transcript(tmp_path: Path, size_mb: float) -> Path:
     return transcript
 
 
+def create_model_transcript(tmp_path: Path, model: str, name: str = "transcript.txt") -> Path:
+    """A transcript whose last answer was produced by `model` (claude-... = cloud, anything else = local llama alias)."""
+    transcript = tmp_path / name
+    lines = [{"type": "user", "message": {"role": "user", "content": "hi"}},
+             {"type": "assistant", "message": {"role": "assistant", "model": model, "content": "ok"}},
+             {"type": "assistant", "message": {"role": "assistant", "model": "<synthetic>", "content": "x"}}]
+    transcript.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+    return transcript
+
+
 def test_below_threshold(tmp_path: Path) -> None:
     transcript = create_transcript(tmp_path, 0.5)
     event = {"session_id": "1", "transcript_path": str(transcript)}
@@ -151,7 +161,7 @@ def write_gateway_usage(tmp_path: Path, tokens: int, window: int = 65536, age_s:
 
 
 def test_local_context_levels_escalate_once_each(tmp_path: Path) -> None:
-    transcript = create_transcript(tmp_path, 0.01)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     event = {"session_id": "1", "transcript_path": str(transcript)}
     write_gateway_usage(tmp_path, 20_000)                       # 31 %: below the first level
     assert run_hook(event, tmp_path, now=1_000_000)[0] == ""
@@ -159,35 +169,79 @@ def test_local_context_levels_escalate_once_each(tmp_path: Path) -> None:
     stdout, _ = run_hook(event, tmp_path, now=1_000_000)
     assert "systemMessage" in stdout and "64%" in stdout
     assert run_hook(event, tmp_path, now=1_000_000)[0] == ""    # same level: silent
-    write_gateway_usage(tmp_path, 58_000)                       # 88 %: level 3
-    assert "almost full" in json.loads(run_hook(event, tmp_path, now=1_000_000)[0])["systemMessage"]
+    write_gateway_usage(tmp_path, 60_000)                       # 92 %: level 3 (stop and hand over)
+    assert "told to stop" in json.loads(run_hook(event, tmp_path, now=1_000_000)[0])["systemMessage"]
 
 
 def test_messages_are_polish_when_foremankit_lang_is_pl(tmp_path: Path) -> None:
-    transcript = create_transcript(tmp_path, 0.01)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     event = {"session_id": "1", "transcript_path": str(transcript)}
-    write_gateway_usage(tmp_path, 58_000)                       # 88 %: level 3
+    write_gateway_usage(tmp_path, 60_000)                       # 92 %: level 3
     stdout, _ = run_hook(event, tmp_path, now=1_000_000, language="pl")
-    assert "prawie pełny" in json.loads(stdout)["systemMessage"]
+    assert "zatrzymania pracy" in json.loads(stdout)["systemMessage"]
 
 
 def test_unknown_language_falls_back_to_english(tmp_path: Path) -> None:
-    transcript = create_transcript(tmp_path, 0.01)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     event = {"session_id": "1", "transcript_path": str(transcript)}
-    write_gateway_usage(tmp_path, 58_000)
+    write_gateway_usage(tmp_path, 60_000)
     stdout, _ = run_hook(event, tmp_path, now=1_000_000, language="xx")
-    assert "almost full" in json.loads(stdout)["systemMessage"]
+    assert "told to stop" in json.loads(stdout)["systemMessage"]
 
 
 def test_stale_gateway_data_is_ignored(tmp_path: Path) -> None:
-    transcript = create_transcript(tmp_path, 0.01)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     event = {"session_id": "1", "transcript_path": str(transcript)}
     write_gateway_usage(tmp_path, 60_000, age_s=3600)
     assert run_hook(event, tmp_path, now=1_000_000)[0] == ""
 
 
 def test_context_level_is_per_session(tmp_path: Path) -> None:
-    transcript = create_transcript(tmp_path, 0.01)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     write_gateway_usage(tmp_path, 60_000)
     assert "systemMessage" in run_hook({"session_id": "1", "transcript_path": str(transcript)}, tmp_path, now=1_000_000)[0]
     assert "systemMessage" in run_hook({"session_id": "2", "transcript_path": str(transcript)}, tmp_path, now=1_000_000)[0]
+
+
+def write_usage(tmp_path: Path, tokens: int, window: int = 65536) -> None:
+    import time
+    (tmp_path / "gateway_context.json").write_text(
+        json.dumps({"tokens": tokens, "window": window, "time": time.time()}), encoding="utf-8")
+
+
+def test_a_cloud_session_never_gets_the_local_models_fill_level(tmp_path: Path) -> None:
+    write_usage(tmp_path, 60000)
+    transcript = create_model_transcript(tmp_path, "claude-sonnet-5-5")
+    stdout, _ = run_hook({"session_id": "cloud", "transcript_path": str(transcript)}, tmp_path)
+    assert stdout == ""
+
+
+def test_a_session_without_an_answer_yet_is_not_treated_as_local(tmp_path: Path) -> None:
+    write_usage(tmp_path, 60000)
+    transcript = tmp_path / "new.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n", encoding="utf-8")
+    stdout, _ = run_hook({"session_id": "new", "transcript_path": str(transcript)}, tmp_path)
+    assert stdout == ""
+
+
+def test_at_ninety_percent_the_local_model_is_told_to_stop_and_hand_over(tmp_path: Path) -> None:
+    write_usage(tmp_path, 59065)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
+    stdout, _ = run_hook({"session_id": "local", "transcript_path": str(transcript)}, tmp_path)
+    context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith("STOP") and "HANDOFF.md" in context and "NEW session" in context
+    assert "Do not start any new step" in context
+
+
+def test_the_stop_order_is_repeated_on_every_prompt_while_the_context_stays_full(tmp_path: Path) -> None:
+    write_usage(tmp_path, 62000)
+    transcript = create_model_transcript(tmp_path, "spark-x2.5-4b-q8_0")
+    event = {"session_id": "local", "transcript_path": str(transcript)}
+    assert "STOP" in run_hook(event, tmp_path)[0] and "STOP" in run_hook(event, tmp_path)[0]
+
+
+def test_below_ninety_percent_there_is_no_stop_order(tmp_path: Path) -> None:
+    write_usage(tmp_path, 50000)
+    transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
+    stdout, _ = run_hook({"session_id": "local", "transcript_path": str(transcript)}, tmp_path)
+    assert "STOP" not in stdout

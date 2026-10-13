@@ -275,6 +275,10 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>accepts data up to <select id="w_accept"><option>normal</option><option selected>internal</option><option>private</option></select></label>
 <label>priority (lower = first) <input id="w_priority" type="number" value="10" min="1" max="99"></label></div>
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
+<div class="info" style="margin-top:8px">Pair another PC of yours (it gets the lab key without copying files; Windows asks once to allow Python on private networks - allow it):</div>
+<div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
+<div id="pairBox" class="info"></div>
+<div id="pairFound"></div>
 <h3>Delegation</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on Claude)</label>
 <div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
@@ -284,11 +288,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="delegToday" class="info"></div>
 <div id="delegClaude" class="info"></div>
 <div id="delegRecent"></div>
-<h3>Pair computers</h3>
-<div class="info">Pair another PC of yours so it gets the lab key without copying files. Windows asks once to allow Python on private networks: allow it.</div>
-<div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
-<div id="pairBox" class="info"></div>
-<div id="pairFound"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
@@ -349,7 +348,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    const code = document.createElement('div'); code.className = 'code'; code.textContent = s.code; box.appendChild(code);
    note.textContent = 'Enter this code on the other computer (Find computers, then Pair). Open for ' + Math.max(0, Math.round(s.expires - Date.now() / 1000)) + ' s.';
   } else if (s.state === 'paired') {
-   note.textContent = 'Paired with ' + (s.peer ? s.peer.name + ' (' + s.peer.ip + ')' : '') + ' - added to the workers below.';
+   note.textContent = 'Paired with ' + (s.peer ? s.peer.name + ' (' + s.peer.ip + ')' : '') + ' - added to the workers list.';
   } else {
    note.className = 'err'; note.textContent = s.state === 'expired' ? 'Session expired. Show the code again.' : (s.detail || 'Pairing failed.') ;
   }
