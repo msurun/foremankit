@@ -56,6 +56,9 @@ MANUAL_RANGES = {"ctx": (int, 2048, 262144), "ncmoe": (int, 0, 99), "threads": (
                  "think_budget": (int, 0, 32768), "temp": (float, 0.0, 2.0)}
 MANUAL_CHOICES = {"kv_cache": ("f16", "q8_0", "q4_0"), "reasoning": ("off", "on")}
 SERVER_LOG = "llama-server.log"   # in the temp folder: output of the server started from the panel
+# What the same tokens would cost on Claude (USD per million tokens, input/output; Anthropic list prices of 2026-10-06,
+# Haiku up to 100K prompt tokens). Cache discounts are ignored, so the figure is an upper bound.
+CLAUDE_PRICES = {"haiku-5.5": (0.10, 0.50), "sonnet-5.5": (2.00, 10.00)}
 RECENT_CALLS = 8              # delegated calls shown in the panel
 HISTORY_DAYS = 7              # daily cost bars
 ROLES = {"orchestrator": "off", "worker": "on", "both": "auto"}   # role -> router toggle `llm:self` (delegated tasks)
@@ -191,10 +194,17 @@ def delegations(now: float | None = None) -> dict[str, Any]:
     today = datetime.date.fromtimestamp(now)
     calls = [call for call in call_log().read() if call.get("event") == "call" and not call.get("dry_run")]
     per_day: dict[str, float] = collections.defaultdict(float)
+    claude_today = {name: 0.0 for name in CLAUDE_PRICES}
+    claude_week = {name: 0.0 for name in CLAUDE_PRICES}
+    week_start = today - datetime.timedelta(days=HISTORY_DAYS - 1)
     today_by_target: dict[str, dict[str, float]] = collections.defaultdict(lambda: {"calls": 0, "cost": 0.0})
     for call in calls:
         day = datetime.date.fromtimestamp(call["ts"])
         per_day[day.isoformat()] += call.get("cost_usd") or 0.0
+        for name, (price_in, price_out) in CLAUDE_PRICES.items():
+            worth = ((call.get("tokens_in") or 0) * price_in + (call.get("tokens_out") or 0) * price_out) / 1_000_000
+            claude_week[name] += worth if day >= week_start else 0.0
+            claude_today[name] += worth if day == today else 0.0
         if day == today:
             row = today_by_target[call_target(call)]
             row["calls"] += 1
@@ -205,6 +215,8 @@ def delegations(now: float | None = None) -> dict[str, Any]:
                "seconds": call.get("latency_s"), "escalated": bool(call.get("escalate"))} for call in calls[-RECENT_CALLS:]]
     return {"today": {"calls": sum(row["calls"] for row in today_by_target.values()), "cost": per_day.get(today.isoformat(), 0.0),
                       "by_target": dict(today_by_target)},
+            "claude_equivalent": {"today": {k: round(v, 6) for k, v in claude_today.items()},
+                                  "week": {k: round(v, 6) for k, v in claude_week.items()}},
             "days": [{"day": day, "cost": round(per_day.get(day, 0.0), 6)} for day in days],
             "week_cost": round(sum(per_day.get(day, 0.0) for day in days), 6), "recent": list(reversed(recent))}
 

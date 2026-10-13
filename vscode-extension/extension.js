@@ -244,6 +244,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="delegSummary" class="info">no delegated calls yet</div>
 <div id="delegDays" class="days"></div>
 <div id="delegToday" class="info"></div>
+<div id="delegClaude" class="info"></div>
 <div id="delegRecent"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
@@ -284,6 +285,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('delegSummary').textContent = 'today: ' + d.today.calls + ' delegated calls, ' + money(d.today.cost) + ' | last 7 days: ' + money(d.week_cost);
   const max = Math.max(...d.days.map((x) => x.cost), 0.000001); const bars = $('delegDays'); bars.innerHTML = '';
   for (const x of d.days) { const b = document.createElement('div'); b.style.height = Math.max(2, Math.round(34 * x.cost / max)) + 'px'; b.title = x.day + ': ' + money(x.cost); bars.appendChild(b); }
+  const q = d.claude_equivalent;
+  $('delegClaude').textContent = 'same tokens on Claude (upper bound, no cache discount): Haiku 5.5 ' + money(q.today['haiku-5.5']) + ' today / ' + money(q.week['haiku-5.5']) + ' week; Sonnet 5.5 ' + money(q.today['sonnet-5.5']) + ' today / ' + money(q.week['sonnet-5.5']) + ' week';
   const targets = Object.entries(d.today.by_target).sort((a, b) => b[1].cost - a[1].cost);
   $('delegToday').textContent = targets.length ? 'today by target: ' + targets.map(([n, v]) => n + ' ' + v.calls + 'x ' + money(v.cost)).join('; ') : '';
   const box = $('delegRecent'); box.innerHTML = '';

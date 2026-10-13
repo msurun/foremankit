@@ -322,3 +322,15 @@ def test_direct_mode_creates_no_vscode_files_that_were_not_there(tmp_path: Path,
     vscode = sandboxed_installer(tmp_path, monkeypatch)
     panel.set_direct_mode(True)
     assert list(vscode.iterdir()) == []
+
+
+def test_delegated_tokens_are_priced_as_if_they_ran_on_claude(tmp_path: Path, monkeypatch):
+    import datetime as dt
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    now = dt.datetime(2026, 10, 13, 15, 0).timestamp()
+    call = {"ts": now - 60, "event": "call", "kind": "quick", "provider": "groq", "model": "m", "success": True,
+            "cost_usd": 0.0, "tokens_in": 1_000_000, "tokens_out": 100_000, "dry_run": False}
+    (tmp_path / "calls.jsonl").write_text(json.dumps(call) + "\n", encoding="utf-8")
+    worth = panel.delegations(now)["claude_equivalent"]
+    assert abs(worth["today"]["haiku-5.5"] - 0.15) < 1e-9 and abs(worth["today"]["sonnet-5.5"] - 3.0) < 1e-9
+    assert worth["week"] == worth["today"]
