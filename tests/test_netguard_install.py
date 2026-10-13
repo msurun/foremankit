@@ -106,3 +106,24 @@ def test_session_length_hook_registers_alone_keeps_others_and_removes_cleanly(tm
     assert sum(inst.SESSION_HOOK_MARK in h["command"] for e in entries for h in e["hooks"]) == 1
     installer.install_hooks(py, remove=True, only="session")
     assert json.loads(settings.read_bytes())["hooks"]["UserPromptSubmit"] == [other]
+
+
+def test_delegation_nudge_hook_registers_on_two_events_and_removes_cleanly(tmp_path):
+    import json
+    inst = _installer()
+    inst.CLAUDE_HOME = tmp_path
+    settings = tmp_path / "settings.json"
+    other = {"hooks": [{"type": "command", "command": "keep-me"}]}
+    settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [other]}}), encoding="utf-8")
+    py = tmp_path / ".venv" / "Scripts" / "python.exe"
+    installer = inst.Installer(dry=False)
+    installer.install_hooks(py, only="nudge")
+    installer.install_hooks(py, only="nudge")                    # idempotent
+    hooks = json.loads(settings.read_bytes())["hooks"]
+    prompt = [e for e in hooks["UserPromptSubmit"] if any(inst.NUDGE_HOOK_MARK in h["command"] for h in e["hooks"])]
+    post = [e for e in hooks["PostToolUse"] if any(inst.NUDGE_HOOK_MARK in h["command"] for h in e["hooks"])]
+    assert hooks["UserPromptSubmit"][0] == other and len(prompt) == 1
+    assert len(post) == 1 and post[0]["matcher"] == "Write|Edit|Bash"
+    installer.install_hooks(py, remove=True, only="nudge")
+    after = json.loads(settings.read_bytes())["hooks"]
+    assert after["UserPromptSubmit"] == [other] and "PostToolUse" not in after

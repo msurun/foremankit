@@ -39,6 +39,8 @@ KEYS = ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KE
 HOOK_TOOL = "mcp__foremankit__delegate"
 HOOK_MARK = "notify_delegate.py"
 SESSION_HOOK_MARK = "session_length_reminder.py"   # UserPromptSubmit: one reminder when the transcript gets very long
+NUDGE_HOOK_MARK = "delegation_nudge.py"             # UserPromptSubmit + PostToolUse(Write|Edit|Bash): delegation counter, silent when delegation is off
+NUDGE_TOOLS = "Write|Edit|Bash"                     # the tools whose output the counter measures
 CHECKPOINT_HOOK_MARK = "auto_checkpoint.py"         # PostToolUse on delegate: auto-checkpoint after agent tasks
 GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
 PICKER_NAME = "Local LLM (foremankit)"
@@ -395,7 +397,7 @@ class Installer:
         if data is None:
             return []
         text = json.dumps(data)
-        marks = (HOOK_MARK, SESSION_HOOK_MARK, CHECKPOINT_HOOK_MARK)
+        marks = (HOOK_MARK, SESSION_HOOK_MARK, CHECKPOINT_HOOK_MARK, NUDGE_HOOK_MARK)
         found = [mark for mark in marks if mark in text]
         return [f"hook {', '.join(found)} still registered in {path}"] if found else []
 
@@ -704,7 +706,8 @@ class Installer:
 
     def install_hooks(self, py: Path, remove: bool = False, only: str | None = None) -> None:
         """Merge the hooks into ~/.claude/settings.json: the notify hook (Pre/PostToolUse on the delegate tool) and the
-        session-length reminder (UserPromptSubmit). `only` = "notify" | "session" limits it to one of them."""
+        session-length reminder (UserPromptSubmit), the auto-checkpoint and the delegation counter (UserPromptSubmit +
+        PostToolUse on Write|Edit|Bash). `only` = "notify" | "session" | "checkpoint" | "nudge" limits it to one of them."""
         target = CLAUDE_HOME / "settings.json"
         try:
             data = json.loads(target.read_text(encoding="utf-8-sig")) if target.exists() else {}
@@ -744,6 +747,18 @@ class Installer:
                 hooks["PostToolUse"] = kept
             else:
                 hooks.pop("PostToolUse", None)
+        if only in (None, "nudge"):
+            nudge = f'"{py.as_posix()}" "{(ROOT / "hooks" / "delegation_nudge.py").as_posix()}"'
+            for event, matcher in (("UserPromptSubmit", None), ("PostToolUse", NUDGE_TOOLS)):
+                kept = [e for e in hooks.get(event, [])
+                        if not any(NUDGE_HOOK_MARK in h.get("command", "") for h in e.get("hooks", []))]
+                if not remove:
+                    entry = {"hooks": [{"type": "command", "command": nudge}]}
+                    kept.append({"matcher": matcher, **entry} if matcher else entry)
+                if kept:
+                    hooks[event] = kept
+                else:
+                    hooks.pop(event, None)
         if not hooks:
             data.pop("hooks")
         text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
