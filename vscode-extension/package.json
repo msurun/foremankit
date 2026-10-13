@@ -9,7 +9,7 @@
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "foremankit", "title": "ForemanKit", "icon": "media/icon.svg" }
+        { "id": "foremankit", "title": "ForemanKit", "icon": "media/foreman-helmet.svg" }
       ]
     },
     "views": {

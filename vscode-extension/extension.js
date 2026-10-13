@@ -10,16 +10,19 @@ const ROOT = path.resolve(fs.realpathSync(__dirname), '..');
 const PYTHON = process.platform === 'win32'
   ? path.join(ROOT, '.venv', 'Scripts', 'python.exe') : path.join(ROOT, '.venv', 'bin', 'python');
 const POLL_MS = 4000;
-const NEEDS_NO_MODEL = ['install', 'uninstall'];
+const RELOAD = 'Reload Window';
 const CONFIRM = {
-  tune: 'Tuning stops the running llama-server and takes about 15 minutes (keep the laptop on AC power).',
-  sweep: 'The context sweep stops the running llama-server and takes about 10 minutes.',
-  uninstall: 'Uninstall removes the ForemanKit agents, hooks and VS Code entries.',
+  tune: 'Tuning stops the running llama-server, then tunes the offload and finds the largest fast context. '
+    + 'It takes about 25 minutes: keep the laptop on AC power.',
 };
 const CONFIRM_QUICK = {
-  'stop-router': 'Stopping the router cuts Claude Code off from Anthropic (it talks to the router) until you start it again. '
-    + 'To switch off only the local models use "Local models" instead.',
+  'router-direct': 'Direct mode stops the router and removes it from the VS Code settings, so Claude Code talks straight to '
+    + 'Anthropic and the local models stop working. You must RELOAD THE VS CODE WINDOW afterwards (Claude Code reads the '
+    + 'setting only when a window starts). Until you reload, Claude Code has no connection at all.',
+  'router-normal': 'Router mode starts the router and puts it back into the VS Code settings. You must RELOAD THE VS CODE '
+    + 'WINDOW afterwards.',
 };
+const NEEDS_RELOAD = ['router-direct', 'router-normal'];
 const FILES = {
   profiles: path.join(ROOT, 'llama', 'profiles.json'),
   orchestrator: path.join(ROOT, 'config', 'orchestrator.yaml'),
@@ -61,27 +64,37 @@ class Panel {
   async handle(message) {
     if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); return; }
     if (message.type === 'open' && FILES[message.file]) { await vscode.window.showTextDocument(vscode.Uri.file(FILES[message.file])); return; }
-    if (message.type === 'quick') {
-      if (CONFIRM_QUICK[message.action]) {
-        const ok = await vscode.window.showWarningMessage(CONFIRM_QUICK[message.action], { modal: true }, 'Stop anyway');
-        if (ok !== 'Stop anyway') return;
-      }
-      const answer = await backend([message.action]);
-      vscode.window.setStatusBarMessage('ForemanKit: ' + (answer.message || answer.error), 4000);
-      setTimeout(() => this.pushStatus(), 1500);
-      return;
-    }
+    if (message.type === 'thinking') { await this.quickAnswer(['thinking', '--levels', message.levels]); return; }
+    if (message.type === 'quick') await this.runQuick(message.action);
     if (message.type === 'terminal') await this.runLong(message);
   }
 
-  async runLong({ action, model, dense }) {
-    if (!model && !NEEDS_NO_MODEL.includes(action)) return;
-    if (CONFIRM[action]) {
-      const ok = await vscode.window.showWarningMessage(CONFIRM[action], { modal: true }, 'Continue');
-      if (ok !== 'Continue') return;
-    }
-    const args = ['command', action, '--model', model || ''].concat(dense ? ['--dense'] : []);
+  async confirm(text, button) {
+    return (await vscode.window.showWarningMessage(text, { modal: true }, button)) === button;
+  }
+
+  async quickAnswer(args) {
     const answer = await backend(args);
+    setTimeout(() => this.pushStatus(), 1500);
+    return answer;
+  }
+
+  async runQuick(action) {
+    if (CONFIRM_QUICK[action] && !(await this.confirm(CONFIRM_QUICK[action], 'Continue'))) return;
+    const answer = await this.quickAnswer([action]);
+    const text = 'ForemanKit: ' + (answer.message || answer.error);
+    if (NEEDS_RELOAD.includes(action) && !answer.error) {
+      const pick = await vscode.window.showInformationMessage(text, RELOAD);
+      if (pick === RELOAD) vscode.commands.executeCommand('workbench.action.reloadWindow');
+    } else {
+      vscode.window.setStatusBarMessage(text, 4000);
+    }
+  }
+
+  async runLong({ action, model }) {
+    if (!model) return;
+    if (CONFIRM[action] && !(await this.confirm(CONFIRM[action], 'Continue'))) return;
+    const answer = await backend(['command', action, '--model', model]);
     if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
     const term = terminal();
     term.show(true);
@@ -101,46 +114,55 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
  body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);padding:8px}
  h3{margin:14px 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.7}
- .row{display:flex;align-items:center;gap:6px;margin:4px 0} .dot{width:9px;height:9px;border-radius:50%;background:#888}
+ .row{display:flex;align-items:center;gap:6px;margin:4px 0;flex-wrap:wrap} .dot{width:9px;height:9px;border-radius:50%;background:#888}
  .dot.up{background:#3fb950} .dot.down{background:#f85149}
  button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:5px 10px;cursor:pointer;border-radius:2px}
  button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
  button:hover{filter:brightness(1.1)} select{width:100%;background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:4px}
  .bar{height:6px;background:rgba(128,128,128,.3);border-radius:3px} .fill{height:6px;border-radius:3px;background:var(--vscode-progressBar-background)}
  .info,.err{font-size:12px;opacity:.8;margin:4px 0} .err{color:var(--vscode-errorForeground);opacity:1}
- a{color:var(--vscode-textLink-foreground);cursor:pointer}
+ .levels label{margin-right:8px;font-size:12px} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
 <h3>Status</h3>
 <div class="row"><span class="dot" id="routerDot"></span><span id="routerText">router</span></div>
 <div class="row"><span class="dot" id="serverDot"></span><span id="serverText">llama-server</span></div>
 <div id="ctxWrap" style="display:none"><div class="bar"><div class="fill" id="ctxFill"></div></div><div class="info" id="ctxText"></div></div>
 <div id="error" class="err"></div>
-<div id="routerWarn" class="err" style="display:none">Router stopped: Claude Code in VS Code cannot reach any model, also not Anthropic. Start it.</div>
-<h3>Router (gateway)</h3>
-<div class="row"><button data-quick="start-router">Start</button><button class="secondary" data-quick="stop-router">Stop...</button></div>
-<label class="info"><input type="checkbox" id="localOn"> Local models enabled (off = cloud only, the router keeps running)</label>
+<div id="routerWarn" class="err" style="display:none">Router stopped: Claude Code in VS Code cannot reach any model, also not Anthropic. Start it, or use direct mode and reload the window.</div>
+<div id="directInfo" class="info" style="display:none">Direct mode: Claude Code talks straight to Anthropic; local models are unavailable.</div>
+<h3>Router</h3>
+<div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
+<label class="info"><input type="checkbox" id="localOn"> Local models enabled (off = cloud only, router keeps running)</label>
+<div class="info">Stop and start change the VS Code settings: reload the window afterwards.</div>
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
-<h3>Tuning</h3>
-<div class="row"><button class="secondary" id="tune">Tune model</button><button class="secondary" id="sweep">Max context</button></div>
-<label class="info"><input type="checkbox" id="dense"> dense model (no experts)</label>
-<h3>Install</h3>
-<div class="row"><button class="secondary" id="install">Install</button><button class="secondary" id="uninstall">Uninstall</button></div>
+<div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
+<h3>Thinking by effort level</h3>
+<div class="levels" id="levels"></div>
+<div class="info">Ticked levels make the local model think; the others answer directly.</div>
 <h3>Files</h3>
 <div class="info"><a data-open="profiles">profiles.json</a> &middot; <a data-open="orchestrator">orchestrator.yaml</a> &middot; <a data-open="routerlog">router.log</a></div>
 <div class="row"><button class="secondary" id="refresh">Refresh</button></div>
 <script nonce="__NONCE__">
- const vscode = acquireVsCodeApi(); let models = [];
+ const vscode = acquireVsCodeApi(); let models = []; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
  const $ = (id) => document.getElementById(id);
  const send = (m) => vscode.postMessage(m);
  const current = () => models.find((m) => m.file === $('models').value);
  function dot(id, up) { $(id).className = 'dot ' + (up ? 'up' : 'down'); }
+ function showLevels(thinking) {
+  if ($('levels').children.length === 0) {
+   for (const level of LEVELS) { const l = document.createElement('label'); const c = document.createElement('input');
+    c.type = 'checkbox'; c.id = 'lvl_' + level; c.onchange = sendLevels; l.appendChild(c); l.appendChild(document.createTextNode(' ' + level)); $('levels').appendChild(l); } }
+  for (const level of LEVELS) if (document.activeElement !== $('lvl_' + level)) $('lvl_' + level).checked = !!thinking[level];
+ }
+ function sendLevels() { send({ type: 'thinking', levels: LEVELS.map((l) => l + '=' + $('lvl_' + l).checked).join(',') }); }
  function showStatus(s) {
   $('error').textContent = s.error || '';
   if (s.error) return;
-  $('routerWarn').style.display = s.router.up ? 'none' : 'block';
-  $('localOn').checked = s.local_enabled;
+  $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
+  $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
+  $('localOn').checked = s.local_enabled; showLevels(s.thinking);
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   dot('serverDot', s.server.up);
   $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')' : 'llama-server stopped';
@@ -156,16 +178,14 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  }
  function showInfo() {
   const m = current(); if (!m) return;
-  $('dense').checked = !m.moe;
   $('modelInfo').textContent = m.size_gb + ' GB, ' + (m.tuned ? m.tg_tok_s + ' tok/s, ctx ' + m.ctx
    + (m.reasoning === 'off' ? ', thinking off' : '') : 'not tuned yet (use Tune model)');
  }
  $('models').onchange = showInfo;
  $('startServer').onclick = () => send({ type: 'terminal', action: 'start-server', model: $('models').value });
- $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value, dense: $('dense').checked });
- $('sweep').onclick = () => send({ type: 'terminal', action: 'sweep', model: $('models').value });
- $('install').onclick = () => send({ type: 'terminal', action: 'install' });
- $('uninstall').onclick = () => send({ type: 'terminal', action: 'uninstall' });
+ $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value });
+ $('routerStart').onclick = () => send({ type: 'quick', action: 'router-normal' });
+ $('routerDirect').onclick = () => send({ type: 'quick', action: 'router-direct' });
  $('localOn').onchange = () => send({ type: 'quick', action: $('localOn').checked ? 'local-on' : 'local-off' });
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
