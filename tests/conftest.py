@@ -25,9 +25,10 @@ LOCAL = "http://localhost:11434"
 
 
 @pytest.fixture(autouse=True)
-def no_real_task_scheduler(monkeypatch):
-    """install.py must never register or remove the real Windows Task Scheduler entry from a test."""
+def no_real_task_scheduler(monkeypatch, tmp_path):
+    """install.py must never touch the real Task Scheduler entry or the real VS Code extensions folder from a test."""
     monkeypatch.setenv("FOREMANKIT_NO_SCHEDULER", "1")
+    monkeypatch.setenv("FOREMANKIT_VSCODE_EXTENSIONS", str(tmp_path / "vscode-extensions"))
 
 
 @pytest.fixture(autouse=True)

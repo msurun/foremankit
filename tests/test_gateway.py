@@ -397,3 +397,13 @@ def test_shape_local_sets_enable_thinking_per_request(tmp_path, monkeypatch):
     request = {"model": "claude-sonnet-5", "output_config": {"effort": "low"}, "messages": [{"role": "user", "content": "x"}]}
     shaped, note = gateway.shape_local(request, gateway.settings())
     assert shaped["chat_template_kwargs"] == {"enable_thinking": False} and "thinking=off" in note
+
+
+def test_switched_off_local_model_gets_503_but_the_gateway_keeps_serving(tmp_path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    assert gateway.local_enabled()
+    (gateway.state_dir() / gateway.LOCAL_OFF_FLAG).parent.mkdir(parents=True, exist_ok=True)
+    (gateway.state_dir() / gateway.LOCAL_OFF_FLAG).write_text("off", encoding="utf-8")
+    assert not gateway.local_enabled()
+    response = gateway.switched_off()
+    assert response.status_code == 503 and b"switched off" in response.body

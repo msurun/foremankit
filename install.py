@@ -44,8 +44,10 @@ GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_
 PICKER_NAME = "Local LLM (foremankit)"
 TASK_ROUTER, TASK_SERVER = "ForemanKit: router 8081", "ForemanKit: llama-server 8080"   # VS Code tasks of earlier installs
 LOGON_TASK = "ForemanKit router"          # Windows Task Scheduler entry that starts the gateway at logon (replaces the VS Code task)
+EXTENSIONS_DIR_ENV = "FOREMANKIT_VSCODE_EXTENSIONS"   # tests point it at a tmp folder: the real extensions folder stays untouched
 SCHEDULER_OFF_ENV = "FOREMANKIT_NO_SCHEDULER"   # tests set it: Task Scheduler calls become an in-memory flag
 _fake_scheduler = {"registered": False}
+REVIVE_MINUTES = 5                        # a stopped gateway cuts Claude Code off from Anthropic: bring it back quickly
 LOGON_DELAY = "PT30S"                     # give OneDrive and the network time to come up
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 # STATE_DIR holds the "before" picture of every file the installer touches, so --uninstall can put the
@@ -798,11 +800,15 @@ class Installer:
             print("! no autostart here: start the gateway with `foremankit-gateway` or let VS Code run the task")
             return
         script = ROOT / "llama" / "Start-Router.ps1"
-        command = (f"$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass "
-                   f"-WindowStyle Hidden -File \"{script}\"'; "
-                   f"$t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $t.Delay = '{LOGON_DELAY}'; "
-                   f"Register-ScheduledTask -TaskName '{LOGON_TASK}' -Action $a -Trigger $t -Force "
-                   f"-Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) | Out-Null")
+        # conhost --headless: no console window flashes every few minutes; the repeating trigger restarts a dead gateway
+        command = (f"$a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless powershell.exe -NoProfile "
+                   f"-ExecutionPolicy Bypass -File \"{script}\"'; "
+                   f"$logon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $logon.Delay = '{LOGON_DELAY}'; "
+                   f"$again = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes {REVIVE_MINUTES}) "
+                   f"-RepetitionDuration (New-TimeSpan -Days 3650); "
+                   f"$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew "
+                   f"-ExecutionTimeLimit (New-TimeSpan -Minutes 5); "
+                   f"Register-ScheduledTask -TaskName '{LOGON_TASK}' -Action $a -Trigger @($logon, $again) -Settings $s -Force | Out-Null")
         self.say(f"register Task Scheduler entry '{LOGON_TASK}' (gateway at logon)")
         if os.environ.get(SCHEDULER_OFF_ENV):
             _fake_scheduler["registered"] = not self.dry
@@ -820,6 +826,33 @@ class Installer:
             subprocess.run(["powershell", "-NoProfile", "-Command",
                             f"Unregister-ScheduledTask -TaskName '{LOGON_TASK}' -Confirm:$false -ErrorAction SilentlyContinue"],
                            check=False)
+
+    @staticmethod
+    def extension_dir() -> Path:
+        """Where VS Code looks for the ForemanKit panel: <publisher>.<name>-<version> under ~/.vscode/extensions."""
+        manifest = json.loads((ROOT / "vscode-extension" / "package.json").read_text(encoding="utf-8"))
+        folder = Path(os.environ.get(EXTENSIONS_DIR_ENV) or Path.home() / ".vscode" / "extensions")
+        return folder / f"{manifest['publisher']}.{manifest['name']}-{manifest['version']}"
+
+    def link_extension(self) -> None:
+        """Make the panel visible in VS Code: a directory link to vscode-extension/ (updates with the repository)."""
+        target, link = ROOT / "vscode-extension", self.extension_dir()
+        self.say(f"link VS Code extension {link} -> {target}")
+        if self.dry or link.exists():
+            return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, check=False)
+        else:
+            link.symlink_to(target, target_is_directory=True)
+
+    def unlink_extension(self) -> None:
+        """Remove only the link, never the repository folder it points to."""
+        link = self.extension_dir()
+        self.say(f"remove VS Code extension link {link}")
+        if self.dry or not (link.is_symlink() or link.exists()):
+            return
+        link.unlink() if link.is_symlink() else os.rmdir(link)
 
     @staticmethod
     def logon_task_registered() -> bool:
@@ -867,10 +900,12 @@ class Installer:
             self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, wanted, remove, stale))
         if remove:
             self.unregister_logon_task()
+            self.unlink_extension()
         else:
             self.register_logon_task()
+            self.link_extension()
             print("  The gateway must run, or the plugin reaches no model at all (also not the cloud). "
-                  "The llama-server is not started automatically: run llama/start-llama.cmd when you want a local model. "
+                  "The llama-server is not started automatically: use the ForemanKit panel in the VS Code sidebar (reload the window once) or llama/start-llama.cmd. "
                   "Undo: python install.py --uninstall")
 
     def remove_agents(self) -> None:

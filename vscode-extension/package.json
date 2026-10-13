@@ -1,0 +1,24 @@
+{
+  "name": "foremankit-control",
+  "displayName": "ForemanKit Control",
+  "description": "Control panel for ForemanKit: router, local llama-server, model tuning.",
+  "publisher": "foremankit",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.85.0" },
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "foremankit", "title": "ForemanKit", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "foremankit": [
+        { "type": "webview", "id": "foremankit.panel", "name": "Control" }
+      ]
+    },
+    "commands": [
+      { "command": "foremankit.refresh", "title": "ForemanKit: Refresh panel" }
+    ]
+  }
+}

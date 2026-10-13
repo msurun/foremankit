@@ -34,6 +34,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
+LOCAL_OFF_FLAG = "local_off"            # file in the state dir: while it exists, local-model requests get a clear 503 (cloud untouched)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
 client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=1800, write=60, pool=None))
@@ -144,6 +145,17 @@ def parse_body(body: bytes) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def local_enabled() -> bool:
+    """False while the panel has switched the local models off; the gateway itself keeps serving the cloud."""
+    return not (state_dir() / LOCAL_OFF_FLAG).exists()
+
+
+def switched_off() -> Response:
+    """503 in the Anthropic error shape for a request to a local model that is switched off."""
+    message = "local models are switched off in the ForemanKit panel; switch them on or pick a cloud model"
+    return JSONResponse({"type": "error", "error": {"type": "api_error", "message": message}}, status_code=503)
+
+
 def failure(local: bool, exc: httpx.HTTPError) -> Response:
     """502 in the Anthropic error shape, so the plugin shows a readable message."""
     what = "local llama-server unavailable" if local else f"cloud unreachable: {type(exc).__name__}"
@@ -162,6 +174,9 @@ async def handle(request: Request) -> Response:
     data = parse_body(body)
     model = data.get("model") if data else None
     call = Call(request.url.path, model, model in cfg["local_models"], time.time())
+    if call.local and not local_enabled():
+        call.log(503)
+        return switched_off()
     if call.local and data is not None:
         data, call.note = shape_local(data, cfg)
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
