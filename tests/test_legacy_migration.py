@@ -186,7 +186,7 @@ def test_remove_legacy_mcp_without_the_claude_cli_does_nothing(
     sandbox: Sandbox, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """remove_legacy_mcp without the claude CLI does nothing."""
-    monkeypatch.setattr(INSTALL.shutil, "which", lambda _: None)
+    monkeypatch.setattr(INSTALL, "find_claude", lambda: None)
 
     installer = INSTALL.Installer(dry=False)
     installer.remove_legacy_mcp()

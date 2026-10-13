@@ -128,6 +128,16 @@ LEGACY_BACKUP_MARK = ".bak-agentkit-"
 LEGACY_MCP_NAME = "agentkit"
 
 
+def find_claude() -> str | None:
+    """The `claude` CLI: on PATH, else the newest binary bundled with the VS Code extension (it is usually not on PATH)."""
+    on_path = shutil.which("claude")
+    if on_path:
+        return on_path
+    name = "claude.exe" if os.name == "nt" else "claude"
+    bundled = sorted((Path.home() / ".vscode" / "extensions").glob(f"anthropic.claude-code-*/resources/native-binary/{name}"))
+    return str(bundled[-1]) if bundled else None
+
+
 class Installer:
     def __init__(self, dry: bool):
         self.dry = dry
@@ -572,7 +582,7 @@ class Installer:
         Silence is the expected outcome: without the `claude` CLI, or when the old server was never
         added, there is nothing to undo. Mirrors register_mcp(remove=True), only with the old name.
         """
-        claude = shutil.which("claude")
+        claude = find_claude()
         if not claude:
             return
         existing = subprocess.run([claude, "mcp", "get", LEGACY_MCP_NAME],
@@ -670,7 +680,7 @@ class Installer:
         return py.with_name("foremankit-mcp.exe" if os.name == "nt" else "foremankit-mcp")
 
     def register_mcp(self, py: Path, remove: bool = False) -> None:
-        claude = shutil.which("claude")
+        claude = find_claude()
         cmd = self.mcp_command(py)
         if not claude:
             print("! `claude` CLI not found on PATH; register manually:")
