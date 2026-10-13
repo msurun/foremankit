@@ -228,6 +228,7 @@ if ($prof) {
     if (-not $PSBoundParameters.ContainsKey('Threads') -and $null -ne $prof.threads) { $Threads = [int]$prof.threads }
     if (-not $PSBoundParameters.ContainsKey('CpuMask')) { $CpuMask = [string]$prof.cpu_mask }
     if (-not $PSBoundParameters.ContainsKey('Ctx') -and $prof.ctx) { $Ctx = [int]$prof.ctx }
+    if (-not $PSBoundParameters.ContainsKey('Temp') -and $prof.temp) { $Temp = [double]$prof.temp }
 } else {
     Write-Warning "No tuned profile for this machine + model ('$fp'). Using safe defaults (llama-server --fit, automatic threads, no CPU pinning)."
     Write-Warning "For the best speed run:  python `"$here\tune_llama.py`"  (about 15 min, on AC power); the next start picks the result up."

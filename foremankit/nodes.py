@@ -6,6 +6,7 @@ all the others as extra sources of the pool `llm`. Nothing here is specific to o
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import platform
 import secrets
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import REPO_DIR, _read_yaml, config_dir
+from .config import REPO_DIR, _read_yaml, config_dir, state_dir
 from .providers import Endpoint
 
 LEVELS = ("normal", "internal", "private")        # data sensitivity, least to most confidential
@@ -76,15 +77,44 @@ def _ipv4(host: str) -> str | None:
     return ip
 
 
+WORKERS_FILE = "workers.json"        # extra llama-server workers added in the VS Code panel (user-level, never committed)
+
+
+def load_workers() -> dict[str, dict[str, Any]]:
+    """Extra workers {name: {url, accept, priority, max_concurrent}} from the state dir; {} when none or unreadable."""
+    try:
+        data = json.loads((state_dir() / WORKERS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def worker_entry(worker: dict[str, Any]) -> dict[str, Any]:
+    """The nodes.yaml-style entry of an extra worker; its URL is used exactly as written (see `_url`)."""
+    return {"lan": [worker["url"]], "serves": True, "accept": worker.get("accept", "internal"),
+            "priority": worker.get("priority", 10), "max_concurrent": worker.get("max_concurrent", 1)}
+
+
+def with_workers(data: dict[str, Any]) -> dict[str, Any]:
+    """`data` (the parsed nodes.yaml) plus the extra workers; a node already named in the file wins."""
+    workers = load_workers()
+    if not workers:
+        return data
+    nodes = {name: worker_entry(worker) for name, worker in workers.items()}
+    nodes.update(data.get("nodes") or {})
+    return {**data, "nodes": nodes}
+
+
 def load_nodes(directory: Path | None = None) -> dict[str, Any]:
-    """nodes.yaml from the active config dir, else from the repo's config/ (a user-level config dir may lack it)."""
+    """nodes.yaml from the active config dir, else from the repo's config/ (a user-level config dir may lack it),
+    plus the extra workers added in the panel (only for the active config, never for an explicit directory)."""
     if os.environ.get("FOREMANKIT_NODES", "").strip().lower() in {"off", "0", "false", "no"}:
         return {}
     for folder in ([directory] if directory else [config_dir(), REPO_DIR / "config"]):
         data = _read_yaml(folder / "nodes.yaml")
         if data:
-            return data
-    return {}
+            return data if directory else with_workers(data)
+    return {} if directory else with_workers({})
 
 
 def self_name(cfg: dict[str, Any]) -> str | None:

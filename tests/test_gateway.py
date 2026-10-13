@@ -405,5 +405,13 @@ def test_switched_off_local_model_gets_503_but_the_gateway_keeps_serving(tmp_pat
     (gateway.state_dir() / gateway.LOCAL_OFF_FLAG).parent.mkdir(parents=True, exist_ok=True)
     (gateway.state_dir() / gateway.LOCAL_OFF_FLAG).write_text("off", encoding="utf-8")
     assert not gateway.local_enabled()
-    response = gateway.switched_off()
+    response = gateway.switched_off(gateway.refusal())
     assert response.status_code == 503 and b"switched off" in response.body
+
+
+def test_worker_role_refuses_claude_code_requests_but_orchestrator_and_both_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    assert gateway.refusal() is None
+    for role, refused in (("worker", True), ("orchestrator", False), ("both", False)):
+        (tmp_path / gateway.LOCAL_ROLE_FILE).write_text(role, encoding="utf-8")
+        assert (gateway.refusal() is not None) is refused
