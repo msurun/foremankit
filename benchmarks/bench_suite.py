@@ -27,7 +27,7 @@ COLS = ["time", "phase", "config", "model", "args", "test", "depth", "mean_ts", 
 COOL_BELOW_C = 75          # wait until the CPU zone is below this before a run
 ABORT_ABOVE_C = 98         # sampled during a run: flag as thermally suspect
 
-# Baseline = what start-qwen3.6.ps1 does (+ explicit threads, since llama-bench defaults to 16)
+# Baseline = what start-llama.ps1 does (+ explicit threads, since llama-bench defaults to 16)
 BASE_OLD = ["-ngl", "99", "-ncmoe", "40", "-fa", "1", "-lm", "none", "-t", "16", "-b", "2048", "-ub", "512"]
 # after phase 1: P-cores only (logical 0,1,10-19), SMT on, pinned
 BASE = BASE_OLD + ["-C", "0xFFC03", "--cpu-strict", "1"]

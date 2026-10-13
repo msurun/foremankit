@@ -3,7 +3,7 @@
 
   python install.py --dry-run     # show every action/command, change nothing
   python install.py               # venv + package + Claude Code agents/rules/MCP registration
-  python install.py --local-orchestrator   # also: Claude Code plugin -> gateway -> local Qwen (VS Code settings + autostart tasks)
+  python install.py --local-orchestrator   # also: Claude Code plugin -> gateway -> local LLM (VS Code settings + gateway autostart at logon)
   python install.py --uninstall   # remove what foremankit added (agents, rules block, hooks, MCP); files that
                                   # existed before the first install come back, files it created go away
   python install.py --restore-original   # exact bytes of CLAUDE.md, settings.json and the agent files
@@ -41,8 +41,12 @@ HOOK_MARK = "notify_delegate.py"
 SESSION_HOOK_MARK = "session_length_reminder.py"   # UserPromptSubmit: one reminder when the transcript gets very long
 CHECKPOINT_HOOK_MARK = "auto_checkpoint.py"         # PostToolUse on delegate: auto-checkpoint after agent tasks
 GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
-PICKER_NAME = "Local Qwen (foremankit)"
-TASK_ROUTER, TASK_SERVER = "ForemanKit: router 8081", "ForemanKit: llama-server 8080"
+PICKER_NAME = "Local LLM (foremankit)"
+TASK_ROUTER, TASK_SERVER = "ForemanKit: router 8081", "ForemanKit: llama-server 8080"   # VS Code tasks of earlier installs
+LOGON_TASK = "ForemanKit router"          # Windows Task Scheduler entry that starts the gateway at logon (replaces the VS Code task)
+SCHEDULER_OFF_ENV = "FOREMANKIT_NO_SCHEDULER"   # tests set it: Task Scheduler calls become an in-memory flag
+_fake_scheduler = {"registered": False}
+LOGON_DELAY = "PT30S"                     # give OneDrive and the network time to come up
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 # STATE_DIR holds the "before" picture of every file the installer touches, so --uninstall can put the
 # user's files back exactly as they were. TRACKED lists those files, relative to CLAUDE_HOME; the
@@ -349,6 +353,7 @@ class Installer:
         found += self._leftover_hooks()
         found += self._leftover_gateway_env(vscode / "settings.json")
         found += self._leftover_tasks(vscode / "tasks.json")
+        found += [f"Task Scheduler entry {LOGON_TASK} still present"] if self.logon_task_registered() else []
         found += self._leftover_legacy_rules()
         found += self._leftover_legacy_tasks(vscode / "tasks.json")
         return found
@@ -762,28 +767,61 @@ class Installer:
         return merged
 
     @staticmethod
-    def merged_vscode_tasks(data: dict, tasks: list[dict], remove: bool = False) -> dict:
-        """Replace the tasks with the same labels (or just remove them); the user's own tasks stay."""
-        labels = {task["label"] for task in tasks}
+    def merged_vscode_tasks(data: dict, tasks: list[dict], remove: bool = False, drop_labels: tuple = ()) -> dict:
+        """Replace the tasks with the same labels (or just remove them); `drop_labels` are removed too. User tasks stay."""
+        labels = {task["label"] for task in tasks} | set(drop_labels)
         kept = [t for t in data.get("tasks", []) if t.get("label") not in labels]
         merged = {"version": "2.0.0", **data, "tasks": kept if remove else kept + tasks}
         return merged
 
     def autostart_tasks(self, py: Path) -> list[dict]:
-        """VS Code folder-open tasks: the gateway always, the llama-server launcher where it exists (Windows)."""
-        llama = ROOT / "llama"
-        run = {"runOn": "folderOpen"}
-        router = f'powershell -NoProfile -ExecutionPolicy Bypass -File "{llama / "Start-Router.ps1"}"'
-        tasks = [{"label": TASK_ROUTER, "type": "shell", "command": router, "runOptions": run,
-                  "presentation": {"reveal": "silent", "panel": "dedicated", "close": True}}]
+        """VS Code folder-open tasks: only the gateway, and only off Windows (Windows uses the logon task)."""
         if sys.platform == "win32":
-            tasks.append({"label": TASK_SERVER, "type": "shell", "command": f'"{llama / "start-orchestrator.cmd"}"',
-                          "runOptions": run, "isBackground": True, "problemMatcher": [],
-                          "presentation": {"reveal": "silent", "panel": "dedicated"}})
-        else:
-            print("! llama-server autostart is Windows-only here: start it yourself (llama/start-qwen3.6.ps1 -Ctx 196608 "
-                  "-NCpuMoe <n> -NoKvOffload -NoThink) and the gateway with `foremankit-gateway`")
-        return tasks
+            return []
+        router = f'powershell -NoProfile -ExecutionPolicy Bypass -File "{ROOT / "llama" / "Start-Router.ps1"}"'
+        return [{"label": TASK_ROUTER, "type": "shell", "command": router, "runOptions": {"runOn": "folderOpen"},
+                 "presentation": {"reveal": "silent", "panel": "dedicated", "close": True}}]
+
+    def register_logon_task(self) -> None:
+        """Windows: start the gateway at logon through Task Scheduler (no-op script when it already runs)."""
+        if sys.platform != "win32":
+            print("! no autostart here: start the gateway with `foremankit-gateway` or let VS Code run the task")
+            return
+        script = ROOT / "llama" / "Start-Router.ps1"
+        command = (f"$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass "
+                   f"-WindowStyle Hidden -File \"{script}\"'; "
+                   f"$t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $t.Delay = '{LOGON_DELAY}'; "
+                   f"Register-ScheduledTask -TaskName '{LOGON_TASK}' -Action $a -Trigger $t -Force "
+                   f"-Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) | Out-Null")
+        self.say(f"register Task Scheduler entry '{LOGON_TASK}' (gateway at logon)")
+        if os.environ.get(SCHEDULER_OFF_ENV):
+            _fake_scheduler["registered"] = not self.dry
+        elif not self.dry:
+            subprocess.run(["powershell", "-NoProfile", "-Command", command], check=False)
+
+    def unregister_logon_task(self) -> None:
+        """Windows: remove the Task Scheduler entry; missing is fine."""
+        if sys.platform != "win32":
+            return
+        self.say(f"remove Task Scheduler entry '{LOGON_TASK}'")
+        if os.environ.get(SCHEDULER_OFF_ENV):
+            _fake_scheduler["registered"] = _fake_scheduler["registered"] and self.dry
+        elif not self.dry:
+            subprocess.run(["powershell", "-NoProfile", "-Command",
+                            f"Unregister-ScheduledTask -TaskName '{LOGON_TASK}' -Confirm:$false -ErrorAction SilentlyContinue"],
+                           check=False)
+
+    @staticmethod
+    def logon_task_registered() -> bool:
+        """True when the Task Scheduler entry exists (always False off Windows)."""
+        if os.environ.get(SCHEDULER_OFF_ENV):
+            return _fake_scheduler["registered"]
+        if sys.platform != "win32":
+            return False
+        query = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                f"Get-ScheduledTask -TaskName '{LOGON_TASK}' -ErrorAction Stop | Out-Null"],
+                               capture_output=True, check=False)
+        return query.returncode == 0
 
     def write_json(self, path: Path, build) -> None:
         """Read a JSON file ({} if absent), apply `build(data) -> data`, write it back if changed (backup first)."""
@@ -799,7 +837,7 @@ class Installer:
         self.write(path, json.dumps(data, indent=4, ensure_ascii=False) + "\n")
 
     def install_local_orchestrator(self, py: Path, remove: bool = False) -> None:
-        """Point the Claude Code plugin at the gateway and start gateway + llama-server when VS Code opens."""
+        """Point the Claude Code plugin at the gateway and start the gateway at logon (the llama-server stays manual)."""
         cfg = yaml_load(ROOT / "config" / "orchestrator.yaml")
         base_url = f"http://127.0.0.1:{cfg.get('port', 8081)}"
         model_id = (cfg.get("local_models") or ["claude-sonnet-5"])[0]
@@ -813,11 +851,17 @@ class Installer:
         self.write_json(settings, lambda d: self.merged_vscode_settings(d, base_url, model_id, remove))
         if remove:
             self.write_json(settings, self._without_auto_tasks)
-        if tasks.exists() or not remove:
-            self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, self.autostart_tasks(py), remove))
-        if not remove:
-            print("  VS Code asks once per folder whether to allow automatic tasks; the gateway must run, or the plugin "
-                  "reaches no model at all (also not the cloud). Undo: python install.py --uninstall")
+        wanted = [] if remove else self.autostart_tasks(py)
+        stale = (TASK_SERVER, TASK_ROUTER) if (remove or sys.platform == "win32") else (TASK_SERVER,)
+        if tasks.exists() or wanted:
+            self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, wanted, remove, stale))
+        if remove:
+            self.unregister_logon_task()
+        else:
+            self.register_logon_task()
+            print("  The gateway must run, or the plugin reaches no model at all (also not the cloud). "
+                  "The llama-server is not started automatically: run llama/start-llama.cmd when you want a local model. "
+                  "Undo: python install.py --uninstall")
 
     def remove_agents(self) -> None:
         """Remove the foremankit agents; an agent file the user had before the installation comes back."""

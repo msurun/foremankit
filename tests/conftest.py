@@ -25,6 +25,12 @@ LOCAL = "http://localhost:11434"
 
 
 @pytest.fixture(autouse=True)
+def no_real_task_scheduler(monkeypatch):
+    """install.py must never register or remove the real Windows Task Scheduler entry from a test."""
+    monkeypatch.setenv("FOREMANKIT_NO_SCHEDULER", "1")
+
+
+@pytest.fixture(autouse=True)
 def clean_env(monkeypatch, tmp_path):
     for var in ENV_VARS:
         monkeypatch.delenv(var, raising=False)

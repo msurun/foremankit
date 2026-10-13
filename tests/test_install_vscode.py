@@ -41,3 +41,9 @@ def test_tasks_replace_same_label_and_keep_user_tasks():
     assert [t["command"] for t in merged["tasks"]] == ["make", "new"]
     assert Installer.merged_vscode_tasks(merged, mine) == merged
     assert [t["label"] for t in Installer.merged_vscode_tasks(merged, mine, remove=True)["tasks"]] == ["build"]
+
+
+def test_stale_llama_server_task_is_dropped_but_user_tasks_stay():
+    base = {"tasks": [{"label": "ForemanKit: llama-server 8080", "command": "old"}, {"label": "build", "command": "make"}]}
+    merged = Installer.merged_vscode_tasks(base, [], drop_labels=("ForemanKit: llama-server 8080",))
+    assert [t["label"] for t in merged["tasks"]] == ["build"]

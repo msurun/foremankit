@@ -80,16 +80,18 @@
   },
   "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || qwen3.6-35b-a3b-ud-q4_k_xl": {
     "host": "Neuron",
-    "tuned": "2026-10-10",
+    "tuned": "2026-10-12",
     "model": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-    "ncmoe": 32,
+    "ncmoe": 34,
     "threads": 8,
     "cpu_mask": null,
-    "ctx": 32768,
-    "tg_tok_s": 40.8,
-    "pp_tok_s": 296,
+    "ctx": 65536,
+    "tg_tok_s": 27.8,
+    "pp_tok_s": 232,
     "ram_gib": 60,
-    "note": "physical cores, t=8"
+    "note": "t=8, 64k ctx, q8_0 KV, thinking off; at 32k ctx ncmoe 32 gave 40.8 tok/s in bench; 128k drops to ~21 tok/s, 262k does not start",
+    "kv_cache": "q8_0",
+    "reasoning": "off"
   },
   "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || qwen3.6-35b-a3b-ud-q3_k_xl": {
     "host": "Neuron",
@@ -111,11 +113,12 @@
     "ncmoe": 24,
     "threads": 8,
     "cpu_mask": null,
-    "ctx": 32768,
-    "tg_tok_s": 31.0,
+    "ctx": 65536,
+    "tg_tok_s": 28.3,
     "pp_tok_s": 343,
     "ram_gib": 60,
-    "note": "physical cores, t=8"
+    "note": "physical cores, t=8",
+    "kv_cache": "q8_0"
   },
   "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || qwen3.8-35b-a3b-q4_k_m": {
     "host": "Neuron",
@@ -151,11 +154,12 @@
     "ncmoe": 20,
     "threads": 16,
     "cpu_mask": null,
-    "ctx": 32768,
-    "tg_tok_s": 33.6,
+    "ctx": 65536,
+    "tg_tok_s": 33.7,
     "pp_tok_s": 536,
     "ram_gib": 60,
-    "note": "logical threads, t=16"
+    "note": "logical threads, t=16",
+    "kv_cache": "q8_0"
   },
   "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || nvidia-nemotron-3.5-lightning-30b-a3b-iq4_xs": {
     "host": "Neuron",
@@ -195,5 +199,47 @@
     "pp_tok_s": 304,
     "ram_gib": 60,
     "note": "physical cores, t=8"
+  },
+  "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || minitron-bielik-7b-v3.0-instruct-gguf.q4_k_m": {
+    "host": "Neuron",
+    "tuned": "2026-10-12",
+    "model": "minitron-Bielik-7B-v3.0-Instruct-GGUF.Q4_K_M.gguf",
+    "ncmoe": null,
+    "threads": 16,
+    "cpu_mask": null,
+    "ctx": 32768,
+    "tg_tok_s": 68.7,
+    "pp_tok_s": 1935,
+    "ram_gib": 60,
+    "note": "logical threads, t=16",
+    "kv_cache": "q8_0"
+  },
+  "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || spark-x2.5-4b-q4_k_m": {
+    "host": "Neuron",
+    "tuned": "2026-10-12",
+    "model": "Spark-X2.5-4B-Q4_K_M.gguf",
+    "ncmoe": null,
+    "threads": 8,
+    "cpu_mask": null,
+    "ctx": 32768,
+    "tg_tok_s": 87.6,
+    "pp_tok_s": 3927,
+    "ram_gib": 60,
+    "note": "physical cores, t=8"
+  },
+  "amd ryzen 7 5800h with radeon graphics | nvidia geforce rtx 3070 laptop gpu | 8gb || spark-x2.5-4b-q8_0": {
+    "host": "Neuron",
+    "tuned": "2026-10-12",
+    "model": "Spark-X2.5-4B-Q8_0.gguf",
+    "ncmoe": null,
+    "threads": 8,
+    "cpu_mask": null,
+    "ctx": 131072,
+    "tg_tok_s": 74.0,
+    "pp_tok_s": 3559,
+    "ram_gib": 60,
+    "note": "physical cores, t=8",
+    "kv_cache": "q8_0",
+    "reasoning": "off"
   }
 }

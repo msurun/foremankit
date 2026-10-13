@@ -53,5 +53,6 @@ nodes:
     hostname: Neuron           # Lenovo Legion, Ryzen 7 5800H + RTX 3070 8 GB (personal)
     priority: 2
     lan: [Neuron]              # the plain name resolves on the home LAN; add a fixed IP here if it ever does not
-    learn: false               # measured (llama/profiles.json): keep the written speed
-    speed: {prompt_tps: 240, gen_tps: 33, expected_output_cap: 1500, max_seconds: 150}
+    learn: true                # this laptop is switched between models (start-llama.ps1 menu: 35B MoE ~28 tok/s, 4-7B dense 60+),
+                               # so the speed is learned from real calls; the written numbers are the 35B Q4_K_XL profile (64k ctx)
+    speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 150}

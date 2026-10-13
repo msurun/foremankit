@@ -246,7 +246,7 @@ def test_read_prompt_returns_empty_string_when_the_file_is_missing(config_dir: P
 
 def test_shape_local_on_the_main_loop_rewrites_the_request(main_loop_request: dict, config_dir: Path):
     data, note = gateway.shape_local(dict(main_loop_request), gateway.settings())
-    assert data["model"] == "qwen3.6-35b-a3b"
+    assert data["model"] == "local-llm"
     assert data["system"] == [{"type": "text", "text": "ORCHESTRATOR PROMPT\n\n# Environment\ncwd=/home/user"}]
     assert [tool["name"] for tool in data["tools"]] == ["Agent", "Bash"]
     assert "main loop" in note
@@ -256,7 +256,7 @@ def test_shape_local_without_a_spawn_tool_only_rewrites_the_model(main_loop_requ
     request = dict(main_loop_request)
     request["tools"] = [tool for tool in request["tools"] if tool["name"] != "Agent"]
     data, note = gateway.shape_local(request, gateway.settings())
-    assert data["model"] == "qwen3.6-35b-a3b"
+    assert data["model"] == "local-llm"
     assert data["system"] == main_loop_request["system"]
     assert "subagent" in note
 
@@ -267,7 +267,7 @@ def test_shape_local_writes_the_shaped_json_when_the_dump_env_is_set(
     monkeypatch.setenv(gateway.DUMP_ENV, str(dump_path))
     gateway.shape_local(dict(main_loop_request), gateway.settings())
     dumped = json.loads(dump_path.read_text(encoding="utf-8"))
-    assert dumped["model"] == "qwen3.6-35b-a3b"
+    assert dumped["model"] == "local-llm"
 
 
 # --- gateway: upstream_headers ---------------------------------------------
@@ -353,11 +353,21 @@ def test_trim_system_messages_keeps_only_wanted_sections():
 def test_shape_local_records_context_usage_for_the_session_hook(tmp_path, monkeypatch):
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     (tmp_path / "orchestrator.yaml").write_text("context_tokens: 65536\n", encoding="utf-8")
+    monkeypatch.setattr(gateway, "server_window", lambda cfg: None)
     request = {"model": "claude-sonnet-5", "system": "s", "tools": [{"name": "Agent"}],
                "messages": [{"role": "user", "content": "x" * 4000}]}
     gateway.shape_local(request, gateway.settings())
     usage = json.loads((gateway.state_dir() / "gateway_context.json").read_text(encoding="utf-8"))
     assert usage["window"] == 65536 and usage["tokens"] > 900
+
+
+def test_session_hook_gets_the_window_the_server_really_has(tmp_path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "orchestrator.yaml").write_text("context_tokens: 98304\n", encoding="utf-8")
+    monkeypatch.setattr(gateway, "server_window", lambda cfg: 32768)
+    gateway.record_usage(1000, gateway.settings())
+    usage = json.loads((gateway.state_dir() / "gateway_context.json").read_text(encoding="utf-8"))
+    assert usage["window"] == 32768
 
 
 def test_read_prompt_fills_in_the_conversation_language(config_dir: Path):
@@ -368,3 +378,22 @@ def test_read_prompt_fills_in_the_conversation_language(config_dir: Path):
 def test_the_default_conversation_language_is_english(config_dir: Path):
     (config_dir / "orchestrator.md").write_text("Talk in {language}.", encoding="utf-8")
     assert gateway.read_prompt(gateway.settings()) == "Talk in English."
+
+
+def test_effort_slider_decides_whether_the_local_model_thinks():
+    by_effort = gateway.settings()["thinking_by_effort"]
+    for effort, expected in (("low", False), ("medium", False), ("high", True), ("xhigh", True), ("max", True)):
+        assert trim.thinking_wanted({"output_config": {"effort": effort}}, by_effort) is expected
+    assert trim.thinking_wanted({"messages": []}, by_effort) is None
+
+
+def test_anthropic_thinking_field_is_used_when_there_is_no_effort():
+    assert trim.thinking_wanted({"thinking": {"type": "disabled"}}, {}) is False
+    assert trim.thinking_wanted({"thinking": {"type": "enabled", "budget_tokens": 4000}}, {}) is True
+
+
+def test_shape_local_sets_enable_thinking_per_request(tmp_path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    request = {"model": "claude-sonnet-5", "output_config": {"effort": "low"}, "messages": [{"role": "user", "content": "x"}]}
+    shaped, note = gateway.shape_local(request, gateway.settings())
+    assert shaped["chat_template_kwargs"] == {"enable_thinking": False} and "thinking=off" in note

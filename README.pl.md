@@ -67,7 +67,7 @@ Projekt nazywał się wcześniej `agentkit`. `python install.py` uruchomiony na 
 | `python install.py --uninstall --purge` | dodatkowo kasuje migawkę stanu sprzed instalacji oraz pliki robocze bramki |
 | `python install.py --restore-original` | przywraca co do bajta pliki sprzed pierwszej instalacji (późniejsze zmiany w nich przepadają) |
 
-`--uninstall` usuwa: agentów, blok reguł w `CLAUDE.md`, trzy hooki, rejestrację MCP oraz, jeśli użyto `--local-orchestrator`, wpisy bramki w `settings.json` VS Code, zadania autostartu w `tasks.json` i `task.allowAutomaticTasks` (tylko jeśli ustawił je instalator). Agent, który istniał przed instalacją, wraca na miejsce; pliki utworzone przez instalator znikają, jeśli są puste. Na końcu wypisuje, co jeszcze zostało.
+`--uninstall` usuwa: agentów, blok reguł w `CLAUDE.md`, trzy hooki, rejestrację MCP oraz, jeśli użyto `--local-orchestrator`, wpisy bramki w `settings.json` VS Code, autostart (wpis Harmonogramu zadań i zadania w `tasks.json`) oraz `task.allowAutomaticTasks` (tylko jeśli ustawił je instalator). Agent, który istniał przed instalacją, wraca na miejsce; pliki utworzone przez instalator znikają, jeśli są puste. Na końcu wypisuje, co jeszcze zostało.
 
 `--stop-services` jest bezpieczne: bramka jest zatrzymywana dopiero po wyczyszczeniu ustawień i tylko jeśli nic już na nią nie wskazuje (ustawienia VS Code, `env` w `~/.claude/settings.json`, zmienna `ANTHROPIC_BASE_URL` w powłoce). W przeciwnym razie wtyczka straciłaby połączenie także z chmurą, więc instalator odmawia i wypisuje, co nadal wskazuje na bramkę. Bez tej flagi bramka i serwer nadal działają.
 
@@ -89,8 +89,8 @@ python install.py --local-orchestrator    # do ~/AppData/Roaming/Code/User (sett
 
 - **Gateway** (`foremankit/gateway.py`, `foremankit-gateway`, port 8081): wtyczka łączy się z nim przez `ANTHROPIC_BASE_URL`. Żądania modelu z `local_models` (picker „Qwen (lokalny)" = `claude-sonnet-5`) idą do `llama-server` (nazwa modelu przepisana, dane logowania usunięte, dokładany `FOREMANKIT_PEER_KEY`). Wszystko inne idzie bez zmian do `api.anthropic.com`, więc modele chmurowe działają jak zwykle. **Gdy gateway nie działa, wtyczka nie dociera do żadnego modelu.**
 - **Odchudzanie promptu** (`foremankit/gateway_trim.py`, ustawienia w `config/orchestrator.yaml`, bez restartu): Claude Code wysyła 66–100 tys. tokenów na żądanie, a lokalny model liczy je na CPU. Dla głównej pętli wtyczki gateway (1) zastępuje prompt systemowy treścią `config/orchestrator.md` plus sekcją `# Environment` z oryginału, (2) zostawia tylko narzędzia z `tools_keep` i skraca ich opisy do `tool_description_max_chars`, (3) usuwa bloki `<system-reminder>` pasujące do `drop_message_blocks` (lista skilli, instrukcje MCP, lista agentów). Główną pętlę rozpoznaje po narzędziu `Agent`; **subagenci i modele chmurowe nie są zmieniane**. Linia w logu pokazuje efekt: `(main loop: ~NNk -> ~MMk tokens)`. `FOREMANKIT_GATEWAY_DUMP=<plik>` zapisuje ostatnie przekształcone żądanie do strojenia listy narzędzi.
-- **Serwer**: `llama/start-orchestrator.cmd` = `start-qwen3.6.ps1 -Ctx 65536 -NCpuMoe 32 -KvCache q8_0 -ThinkBudget 1024 -Share`. Gateway zmniejsza żądania do ok. 25 tys. tokenów, więc 64 tys. wystarcza, a KV w `q8_0` zostaje na GPU. Wariant 196608 z KV w RAM (`--no-kv-offload`) dał 16 tok/s na pustym kontekście i 3–4 na długim (przy 32 tys. na GPU było 40). `-NCpuMoe` powyżej 34 załamuje prędkość. Myślenie jest włączone z limitem 1024 tokenów (`FOREMANKIT_THINK_BUDGET`, `0` = wyłączone): w teście nie spowolniło generowania, a odpowiedzi rzadziej wymagały dopytywania; bez limitu budżet tokenów znika w bloku `thinking`. Skrypt odmawia drugiej instancji.
-- **Autostart**: instalator dodaje dwa zadania VS Code (`runOn: folderOpen`): gateway (`llama/Start-Router.ps1`) i serwer. Ustawia też `task.allowAutomaticTasks: "auto"`, więc VS Code pyta o zgodę. Ręcznie: `llama/Start-Router.ps1 [-Status|-Stop]`, log w `%TEMP%
+- **Serwer**: `llama/start-orchestrator.cmd` = `start-llama.ps1 -NoMenu -Share` (kontekst, offload, KV cache i myślenie z dostrojonego profilu w `llama/profiles.json`). Gateway zmniejsza żądania do ok. 25 tys. tokenów, więc 64 tys. wystarcza, a KV w `q8_0` zostaje na GPU. Wariant 196608 z KV w RAM (`--no-kv-offload`) dał 16 tok/s na pustym kontekście i 3–4 na długim (przy 32 tys. na GPU było 40). `-NCpuMoe` powyżej 34 załamuje prędkość. Myślenie jest włączone z limitem 1024 tokenów (`FOREMANKIT_THINK_BUDGET`, `0` = wyłączone): w teście nie spowolniło generowania, a odpowiedzi rzadziej wymagały dopytywania; bez limitu budżet tokenów znika w bloku `thinking`. Skrypt odmawia drugiej instancji.
+- **Autostart**: w Windows instalator rejestruje w Harmonogramie zadań wpis `ForemanKit router`, który uruchamia gateway (`llama/Start-Router.ps1`) 30 s po zalogowaniu, niezależnie od VS Code; na innych systemach dodaje zadanie VS Code (`runOn: folderOpen`) i ustawia `task.allowAutomaticTasks: "auto"`. Serwer llama nie startuje automatycznie: uruchom `llama/start-llama.cmd` (menu modeli), gdy potrzebujesz lokalnego modelu. Starsze zadania VS Code (`ForemanKit: router 8081`, `ForemanKit: llama-server 8080`) są usuwane przy instalacji i deinstalacji. Ręcznie: `llama/Start-Router.ps1 [-Status|-Stop]`, log w `%TEMP%
 outer.log`.
 - Znane ograniczenia: serwer bez `mmproj` nie przyjmuje obrazów (zrzut ekranu w historii daje HTTP 500, wtedy nowa rozmowa); pierwsza odpowiedź w sesji przetwarza cały prompt. Cofnięcie: `python install.py --uninstall`.
 
@@ -311,7 +311,7 @@ Profile (`config/profiles.yaml`) używają kluczy `"llm:self"`, `"llm:others"`, 
 
 ### Dostęp do węzła (LAN)
 
-`foremankit llm test` sprawdza każdy węzeł: czas odpowiedzi, listę modeli, werdykt netguarda i krótką generację. Poniższe polecenia dotyczą Ollamy (port 11434). Dla `llama-server` użyj `--host <adres LAN> --api-key <klucz>` (launcher `llama/start-qwen3.6.ps1 -Share` i reguła zapory `llama/share-firewall.ps1`), port 8080.
+`foremankit llm test` sprawdza każdy węzeł: czas odpowiedzi, listę modeli, werdykt netguarda i krótką generację. Poniższe polecenia dotyczą Ollamy (port 11434). Dla `llama-server` użyj `--host <adres LAN> --api-key <klucz>` (launcher `llama/start-llama.ps1 -Share` i reguła zapory `llama/share-firewall.ps1`), port 8080.
 
 **1. LAN (dom).** Na maszynie zdalnej:
 ```bash
@@ -363,7 +363,7 @@ Wszystko oznaczone `# VERIFY` w `providers.yaml` (ID modeli, limity, ceny DeepSe
 | `install.py` pisze, że `settings.json` nie jest czystym JSON-em | Plik ma komentarze, więc instalator go nie rusza. Popraw ustawienia ręcznie albo usuń z niego komentarze i uruchom ponownie. |
 | Nie wiem, co z foremankita jest zainstalowane | `python install.py --check` (tylko odczyt). |
 | Chcę wrócić do stanu sprzed instalacji co do bajta | `python install.py --restore-original`, potem `--uninstall`, żeby wyrejestrować MCP. |
-| Działają dwa serwery lokalnego modelu | Uruchamiaj serwer tylko przez `llama/start-qwen3.6.cmd`. `-List` pokazuje, co działa, `-Replace` podmienia, `-Force` służy do celowego drugiego serwera na innym porcie. |
+| Działają dwa serwery lokalnego modelu | Uruchamiaj serwer tylko przez `llama/start-llama.cmd`. `-List` pokazuje, co działa, `-Replace` podmienia, `-Force` służy do celowego drugiego serwera na innym porcie. |
 | Provider jest pomijany | `foremankit status` pokazuje, którzy providerzy są aktywni, ich limity i wydatki; zablokowana sieć firmowa pomija providera automatycznie. |
 
 ## Budowa kodu

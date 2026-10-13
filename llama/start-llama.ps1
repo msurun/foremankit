@@ -1,17 +1,18 @@
 <#
 .SYNOPSIS
-  Start llama.cpp's llama-server with Qwen3.6-35B-A3B (default Q4_K_XL, Q5_K_M as fallback) in the configuration measured as best on this laptop (HP ZBook Firefly 14 G11).
+  Start llama.cpp's llama-server with any GGUF model from this folder (menu in a console; default Qwen3.6-35B-A3B Q4_K_XL) in the configuration tuned for this machine (llama/profiles.json).
 
 .DESCRIPTION
-  Everything is relative to this folder (LLAMA.CPP\llama-server.exe + the first *.gguf next to this script).
+  Everything is relative to this folder (LLAMA.CPP\llama-server.exe + the *.gguf files next to this script).
 
-    .\start-qwen3.6.ps1                # start (blocks; Ctrl+C stops it)
-    .\start-qwen3.6.ps1 -NoThink       # thinking off: faster, fewer tokens (good for simple tasks, foremankit "quick")
-    .\start-qwen3.6.ps1 -ThinkBudget 1024   # thinking on, capped at 1024 tokens per answer (llama-server --reasoning-budget)
-    .\start-qwen3.6.ps1 -PrintOnly     # show the command and the pre-flight checks, start nothing
-    .\start-qwen3.6.ps1 -List          # show every llama-server running on this machine (PID, model, bind address, start time)
-    .\start-qwen3.6.ps1 -Replace       # stop the llama-server(s) already running here, then start this one
-    .\start-qwen3.6.ps1 -Force         # start anyway (e.g. a deliberate second server on another port; each holds ~25 GB of RAM)
+    .\start-llama.ps1                # start (blocks; Ctrl+C stops it)
+    .\start-llama.ps1                # in a console: menu of every .gguf in this folder (Enter = default); -NoMenu skips it
+    .\start-llama.ps1 -NoThink       # thinking off: faster, fewer tokens (good for simple tasks, foremankit "quick")
+    .\start-llama.ps1 -ThinkBudget 1024   # thinking on, capped at 1024 tokens per answer (llama-server --reasoning-budget)
+    .\start-llama.ps1 -PrintOnly     # show the command and the pre-flight checks, start nothing
+    .\start-llama.ps1 -List          # show every llama-server running on this machine (PID, model, bind address, start time)
+    .\start-llama.ps1 -Replace       # stop the llama-server(s) already running here, then start this one
+    .\start-llama.ps1 -Force         # start anyway (e.g. a deliberate second server on another port; each holds ~25 GB of RAM)
 
   ONE SERVER PER MACHINE. Several sessions used to start copies (even on the same port with another bind address, which
   Windows allows). The launcher now: reuses an identical running server (nothing started), refuses when a different one
@@ -32,6 +33,9 @@
     --jinja          chat template embedded in the GGUF (ChatML + <think> + XML tool calls).
     sampling         top_k 20 / top_p 0.95 are embedded in the GGUF; temperature lowered to 0.6 for code/data work.
     -c 32768         hybrid attention: only 10 of 40 layers keep a KV cache, so a long context is cheap.
+                     Context vs speed (RTX 3070 8 GB, Q4_K_XL, q8_0 KV, ncmoe 34, 2026-10-12): 32k 29.3, 64k 27.8, 128k 21-22 tok/s;
+                     262k does not start. Above ~64k attention/buffers cost more speed than the extra context is worth: the
+                     KV cache is allocated at start, so check VRAM stays below ~7.5 GB (nvidia-smi) when raising -Ctx.
 
   Measured 2026-10-09 (llama-bench b11228, 3 repetitions, AC, results in benchmarks\RESULTS.md):
     pinned to the 6 P-cores (-C 0xFFC03 --cpu-strict 1 -t 12): 18.4 tok/s vs 17.0 unpinned; E-cores HURT (18 threads P+E: 11.4).
@@ -49,8 +53,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Model = '',                       # default: Qwen3.6 Q4_K_XL, else Q5_K_M, else first *.gguf
-    [string]$Alias = 'qwen3.6-35b-a3b',
+    [string]$Model = '',                       # empty: menu of all *.gguf here (interactive), else Qwen3.6 Q4_K_XL / Q5_K_M / first *.gguf
+    [switch]$NoMenu,                           # skip the model menu and take the default (scripts, foremankit auto-start)
+    [string]$Alias = '',                       # model name served on /v1; default = the GGUF file name without extension
     [int]$NCpuMoe  = -1,                       # -1 = from the machine profile, else llama-server's own --fit
     [int]$Ctx      = 0,                        # 0 = from the profile, else 32768
     [int]$Port     = 8080,
@@ -116,6 +121,40 @@ function Get-LaunchLock {
 if ($List) { Show-LlamaServers (Get-LlamaServers); return }
 $exe  = Join-Path $here 'LLAMA.CPP\llama-server.exe'
 if (-not (Test-Path $exe)) { throw "llama-server.exe not found: $exe" }
+function Get-Fingerprint {
+    $cpu = ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name -replace '\s+', ' ').Trim().ToLower()
+    $gpu = 'none'; $vram = 0
+    try {
+        $line = (& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+        if ($line) { $n, $m = $line -split ','; $gpu = ($n -replace '\s+', ' ').Trim().ToLower(); $vram = [int][math]::Round([double]$m.Trim() / 1024) }
+    } catch {}
+    "$cpu | $gpu | ${vram}gb"
+}
+function Select-ModelInteractively {
+    # numbered menu of every .gguf next to this script (and in $env:FOREMANKIT_MODELS_DIR); Enter = the default model
+    param([string]$Default)
+    $dirs = @($here, $env:FOREMANKIT_MODELS_DIR) | Where-Object { $_ -and (Test-Path $_) }
+    $files = @($dirs | ForEach-Object { Get-ChildItem -Path $_ -Filter '*.gguf' -File -ErrorAction SilentlyContinue } |
+              Where-Object { $_.Name -notmatch 'mmproj' } | Sort-Object Name)
+    if ($files.Count -eq 0) { return $null }
+    $machine = Get-Fingerprint
+    $profiles = $null
+    $file = Join-Path $here 'profiles.json'
+    if (Test-Path $file) { $profiles = Get-Content $file -Raw | ConvertFrom-Json }
+    Write-Host "`nWhich model to start?" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $files.Count; $i++) {
+        $f = $files[$i]
+        $hit = if ($profiles) { $profiles.PSObject.Properties["$machine || $([IO.Path]::GetFileNameWithoutExtension($f.Name).ToLower())"] } else { $null }
+        $info = if ($hit) { '{0} tok/s, ctx {1}' -f $hit.Value.tg_tok_s, $hit.Value.ctx } else { 'not tuned (safe defaults)' }
+        $mark = if ($f.Name -eq (Split-Path $Default -Leaf)) { '*' } else { ' ' }
+        Write-Host ('  {0}{1,2}) {2,-58} {3,5:N1} GB   {4}' -f $mark, ($i + 1), $f.Name, ($f.Length / 1GB), $info)
+    }
+    $answer = Read-Host "Number (Enter = default marked with *)"
+    if (-not $answer) { return $null }
+    $n = 0
+    if (-not [int]::TryParse($answer, [ref]$n) -or $n -lt 1 -or $n -gt $files.Count) { throw "Not a valid choice: '$answer'" }
+    return $files[$n - 1].FullName
+}
 if (-not $Model) {
     # default model: Qwen3.6 Q4_K_XL (best speed/quality here, see benchmarks/COMPARISON.md); Q5_K_M only if Q4 is absent
     $dirs = @($here, $env:FOREMANKIT_MODELS_DIR) | Where-Object { $_ -and (Test-Path $_) }
@@ -127,7 +166,18 @@ if (-not $Model) {
     if (-not $found) { $found = Get-ChildItem -Path $here -Filter '*.gguf' -File | Sort-Object Name | Select-Object -First 1 }
     if (-not $found) { throw "No .gguf found; pass -Model <path>." }
     $Model = $found.FullName
+    $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    if (-not $NoMenu -and $interactive) {
+        $chosen = Select-ModelInteractively $Model
+        if ($chosen) { $Model = $chosen }
+    }
 }
+if (-not [IO.Path]::IsPathRooted($Model)) {
+    # the launcher changes directory to the exe's folder before starting, so a bare file name must become a full path now
+    $inHere = Join-Path $here $Model
+    if (Test-Path $inHere) { $Model = $inHere } elseif (Test-Path $Model) { $Model = (Resolve-Path $Model).Path }
+}
+if (-not $PSBoundParameters.ContainsKey('Alias')) { $Alias = [IO.Path]::GetFileNameWithoutExtension($Model).ToLower() }
 if (-not (Test-Path $Model)) { throw "Model not found: $Model" }
 
 # ---- guard: never a second server on this machine (checked before the slow profile and RAM steps)
@@ -164,15 +214,6 @@ if (-not $Force) {
 }
 
 # ---- machine profile: tuned by tune_llama.py, looked up by "cpu | gpu | vram || model" (same text the tuner writes)
-function Get-Fingerprint {
-    $cpu = ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name -replace '\s+', ' ').Trim().ToLower()
-    $gpu = 'none'; $vram = 0
-    try {
-        $line = (& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
-        if ($line) { $n, $m = $line -split ','; $gpu = ($n -replace '\s+', ' ').Trim().ToLower(); $vram = [int][math]::Round([double]$m.Trim() / 1024) }
-    } catch {}
-    "$cpu | $gpu | ${vram}gb"
-}
 $fp = (Get-Fingerprint) + ' || ' + ([IO.Path]::GetFileNameWithoutExtension($Model)).ToLower()
 $prof = $null
 $profFile = Join-Path $here 'profiles.json'
@@ -215,7 +256,8 @@ if ($KvCache)       { $argv += @('-ctk', $KvCache, '-ctv', $KvCache) }
 if ($NoKvOffload)   { $argv += '--no-kv-offload' }
 if ($prof -and $prof.ubatch)  { $argv += @('-ub', $prof.ubatch) }
 if ($NoThink -and $ThinkBudget -gt 0) { throw '-NoThink and -ThinkBudget exclude each other.' }
-if ($NoThink)       { $argv += @('--reasoning', 'off') }
+if ($NoThink -or ($prof -and $prof.reasoning -eq 'off' -and $ThinkBudget -le 0)) { $argv += @('--reasoning', 'off') }   # profile can default thinking off; -ThinkBudget wins
+if ($ThinkBudget -le 0 -and -not $NoThink -and $prof -and $prof.think_budget) { $ThinkBudget = [int]$prof.think_budget }   # profile default; -ThinkBudget / -NoThink win
 if ($ThinkBudget -gt 0) { $argv += @('--reasoning', 'on', '--reasoning-budget', $ThinkBudget) }
 $argv = $argv | ForEach-Object { [string]$_ }
 
@@ -258,4 +300,9 @@ Write-Host "Endpoint: http://127.0.0.1:$Port/v1   model name: $Alias`n"
 if ($PrintOnly) { Write-Host 'PrintOnly: nothing started.' -ForegroundColor Yellow; return }
 
 Set-Location (Split-Path $exe)                 # so the exe finds its CUDA/ggml DLLs
-& $exe @argv
+try {
+    & $exe @argv
+} finally {
+    # an interactive terminal outlives this script: without this the lock stayed owned after the server stopped
+    if ($script:launchLock -is [System.Threading.Mutex]) { try { $script:launchLock.ReleaseMutex() } catch {}; $script:launchLock.Dispose() }
+}

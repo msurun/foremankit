@@ -1,4 +1,4 @@
-"""Tune llama.cpp for THIS machine and save the result as a profile that start-qwen3.6.ps1 picks up by itself.
+"""Tune llama.cpp for THIS machine and save the result as a profile that start-llama.ps1 picks up by itself.
 
     python tune_llama.py                      # model: Q4_K_XL, else Q5_K_M (here / $FOREMANKIT_MODELS_DIR), else first *.gguf
     python tune_llama.py --model PATH         # a specific GGUF
@@ -45,7 +45,7 @@ def ps(cmd):
 
 
 def fingerprint():
-    """Must stay identical to Get-Fingerprint in start-qwen3.6.ps1."""
+    """Must stay identical to Get-Fingerprint in start-llama.ps1."""
     cpu = re.sub(r"\s+", " ", ps("(Get-CimInstance Win32_Processor | Select-Object -First 1).Name")).strip().lower()
     gpu, vram = "none", 0
     try:

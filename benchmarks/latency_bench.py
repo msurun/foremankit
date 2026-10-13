@@ -2,7 +2,7 @@
 
 python latency_bench.py [--dir ../llama] [--only Q4,IQ1] [--reps 3] [--report-only]
 
-For every GGUF in the folder (mmproj skipped): serve it through llama/start-qwen3.6.ps1 with its tuned profile, send fixed
+For every GGUF in the folder (mmproj skipped): serve it through llama/start-llama.ps1 with its tuned profile, send fixed
 scenarios with streaming and thinking OFF, and record time to first token (ttft_s) and time to the complete answer (total_s):
   quick      ~30-token question, short answer
   summ2k     ~2k-token input, 3-bullet summary

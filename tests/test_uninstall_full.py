@@ -238,7 +238,7 @@ def test_leftovers_lists_every_trace_a_full_install_leaves_behind(sandbox: Sandb
     assert INSTALL.BEGIN in report
     assert INSTALL.HOOK_MARK in report
     assert INSTALL.GATEWAY_ENV[0] in report
-    assert INSTALL.TASK_ROUTER in report
+    assert INSTALL.LOGON_TASK in report
 
 
 def test_select_foremankit_processes_keeps_this_folder_gateway_and_drops_the_rest() -> None:

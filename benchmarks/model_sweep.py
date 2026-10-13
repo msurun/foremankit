@@ -6,12 +6,12 @@ python model_sweep.py [--dir ../llama] [--only IQ2,Q3] [--skip PATTERN] [--dense
 For each model file (mmproj files are skipped):
   1. llama/tune_llama.py (unless a profile for this machine + model already exists, or --no-tune);
      --dense marks files whose name matches a pattern as dense (no --n-cpu-moe);
-  2. the launcher llama/start-qwen3.6.ps1 -Model <file> serves it with the tuned profile on port 8080;
+  2. the launcher llama/start-llama.ps1 -Model <file> serves it with the tuned profile on port 8080;
   3. the quality_bench task suite (6 short + 3 long tasks with automatic checks, thinking OFF) with --reps-short / --reps-long
      repetitions per task, and agent_task.py (fix 4 bugs with tools, visible + hidden tests) --agent-reps times;
   4. the server is stopped and the next model starts.
 Output: sweep_results.jsonl (every run) and SWEEP_RESULTS.md (table per model + pass rate per task + ranking).
-Port 8080 must be free: stop any shared server (start-qwen3.6.ps1 -Share) first and restart it afterwards.
+Port 8080 must be free: stop any shared server (start-llama.ps1 -Share) first and restart it afterwards.
 Typical cost: 20-30 min per model (tuning ~10-15 min, tests ~10 min).
 """
 import argparse
@@ -33,7 +33,7 @@ import tune_llama as tl
 
 OUT = HERE / "sweep_results.jsonl"
 REPORT = HERE / "SWEEP_RESULTS.md"
-LAUNCHER = LLAMA / "start-qwen3.6.ps1"
+LAUNCHER = LLAMA / "start-llama.ps1"
 HEALTH = "http://127.0.0.1:8080/health"
 
 

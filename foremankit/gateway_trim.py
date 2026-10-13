@@ -23,6 +23,27 @@ def is_main_loop(data: dict[str, Any], spawn_tools: list[str]) -> bool:
     return any(isinstance(tool, dict) and tool.get("name") in spawn_tools for tool in data.get("tools") or [])
 
 
+def thinking_wanted(data: dict[str, Any], by_effort: dict[str, bool]) -> bool | None:
+    """Whether this request wants the model to think: True / False, or None when it does not say.
+
+    Claude Code's effort slider arrives as `output_config.effort` (low, medium, high, xhigh, max); `by_effort` maps each
+    level to on/off. Without an effort the Anthropic `thinking.type` field decides ('disabled' = off, anything else = on)."""
+    output_config = data.get("output_config")
+    effort = str(output_config.get("effort", "")).lower() if isinstance(output_config, dict) else ""
+    if effort in by_effort:
+        return bool(by_effort[effort])
+    thinking = data.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type"):
+        return thinking["type"] != "disabled"
+    return None
+
+
+def with_thinking(data: dict[str, Any], enabled: bool) -> dict[str, Any]:
+    """Copy of the request that tells llama-server's chat template to think (or not), whatever its start-up default is."""
+    kwargs = {**(data.get("chat_template_kwargs") or {}), "enable_thinking": enabled}
+    return {**data, "chat_template_kwargs": kwargs}
+
+
 def system_text(system: Any) -> str:
     """Flatten a `system` field (string or list of text blocks) into one string."""
     if isinstance(system, str):

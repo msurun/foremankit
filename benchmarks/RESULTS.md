@@ -61,7 +61,7 @@ What this means in practice:
 ```
 llama-server.exe --model "...\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --alias qwen3.6-35b-a3b --host 127.0.0.1 --port 8080 -c 32768 -ngl 99 --n-cpu-moe 40 --load-mode none --jinja -fa on -np 1 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --no-webui -t 12 -tb 12 -C 0xFFC03 --cpu-strict 1 --reasoning off
 ```
-Script: `foremankit\llama\start-qwen3.6.ps1` (default model Q4_K_XL, `-PrintOnly` shows the command, `-CpuMask ''` and `-Threads 0` for other CPUs; run `start-qwen3.6.cmd` or the ps1). Omit `--reasoning off` when thinking is wanted.
+Script: `foremankit\llama\start-llama.ps1` (default model Q4_K_XL, `-PrintOnly` shows the command, `-CpuMask ''` and `-Threads 0` for other CPUs; run `start-llama.cmd` or the ps1). Omit `--reasoning off` when thinking is wanted.
 
 ## 4. Checked, and not worth it on this hardware
 

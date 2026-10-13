@@ -1,8 +1,8 @@
 # Local orchestrator: the Claude Code plugin talks to the gateway (foremankit-gateway, port 8081), which sends requests
 # for `local_models` to the local llama-server and everything else unchanged to the Anthropic cloud.
-local_models: [claude-sonnet-5]        # model ids routed locally (the plugin picker entry "Local Qwen (foremankit)")
+local_models: [claude-sonnet-5]        # model ids routed locally (the plugin picker entry "Local LLM (foremankit)")
 local_url: http://127.0.0.1:8080
-local_target: qwen3.6-35b-a3b          # model name sent to llama-server
+local_target: local-llm                  # model name sent to llama-server (it serves one model, whatever it is called)
 cloud_url: https://api.anthropic.com
 port: 8081
 context_tokens: 98304               # window of the local llama-server (-Ctx in llama/start-orchestrator.cmd); feeds the session-length hook
@@ -13,6 +13,11 @@ language: English                     # the language the orchestrator talks to y
 # Only the plugin's main loop is touched: it is recognised by a tool that spawns subagents. Subagent requests
 # (no such tool) and all cloud requests pass through unchanged.
 main_loop_tools: [Agent, Task]
+
+# Claude Code's effort slider -> does the local model think? true/false per level (sent to llama-server per request as
+# chat_template_kwargs.enable_thinking, which overrides the server's start-up default). Levels not listed, and requests
+# without an effort, keep that default. llama.cpp has no per-request thinking budget, so "on" means unlimited thinking.
+thinking_by_effort: {low: false, medium: false, high: true, xhigh: true, max: true}
 
 trim:
   enabled: true

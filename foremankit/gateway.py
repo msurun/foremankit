@@ -23,16 +23,17 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
-from foremankit.gateway_trim import is_main_loop, request_chars, shape_request
+from foremankit.gateway_trim import is_main_loop, request_chars, shape_request, thinking_wanted, with_thinking
 
 CONFIG_NAME = "orchestrator.yaml"
 DROP_REQUEST = {"host", "content-length", "connection", "keep-alive", "te", "trailer",
                 "transfer-encoding", "upgrade", "proxy-authorization", "proxy-authenticate"}
 DROP_RESPONSE = {"content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive"}
 CREDENTIALS = {"x-api-key", "authorization"}
-DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:8080", "local_target": "qwen3.6-35b-a3b",
+DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:8080", "local_target": "local-llm",
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
-            "main_loop_tools": ["Agent", "Task"], "trim": {}}
+            "main_loop_tools": ["Agent", "Task"], "trim": {},
+            "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
 client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=1800, write=60, pool=None))
@@ -68,9 +69,29 @@ class Call:
               f"status={status} {time.time() - self.started:.2f}s{self.note}", flush=True)
 
 
+WINDOW_CACHE_SECONDS = 30
+_window_cache: dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def server_window(cfg: dict[str, Any]) -> int | None:
+    """Context size the running llama-server really has (/props n_ctx), cached; None when it cannot be read."""
+    if time.time() - _window_cache["at"] < WINDOW_CACHE_SECONDS:
+        return _window_cache["value"]
+    try:
+        props = httpx.get(cfg["local_url"].rstrip("/") + "/props", timeout=1.0).json()
+        value = int(props["default_generation_settings"]["n_ctx"])
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        value = None
+    _window_cache.update(at=time.time(), value=value)
+    return value
+
+
 def record_usage(tokens: int, cfg: dict[str, Any]) -> None:
-    """Tell the session-length hook how full the local model's window is (hooks/session_length_reminder.py)."""
-    window = cfg.get("context_tokens")
+    """Tell the session-length hook how full the local model's window is (hooks/session_length_reminder.py).
+
+    The window comes from the running server, because the model can be switched (llama/start-llama.ps1 menu) while
+    `context_tokens` in orchestrator.yaml stays the same; the yaml value is only the fallback."""
+    window = server_window(cfg) or cfg.get("context_tokens")
     if not window:
         return
     usage = {"tokens": tokens, "window": int(window), "time": time.time()}
@@ -83,15 +104,19 @@ def record_usage(tokens: int, cfg: dict[str, Any]) -> None:
 def shape_local(data: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Rewrite a local request; returns it with a log note on how much the prompt shrank (main loop only)."""
     data = {**data, "model": cfg["local_target"]}
+    wanted = thinking_wanted(data, cfg["thinking_by_effort"])
+    if wanted is not None:
+        data = with_thinking(data, wanted)
+    thinking_note = "" if wanted is None else f" thinking={'on' if wanted else 'off'}"
     if not is_main_loop(data, cfg["main_loop_tools"]):
-        return data, " (subagent: untouched)"
+        return data, " (subagent: untouched)" + thinking_note
     before = request_chars(data)
     data = shape_request(data, read_prompt(cfg), cfg["trim"])
     after = request_chars(data)
     record_usage(after // 4, cfg)
     if os.getenv(DUMP_ENV):
         Path(os.environ[DUMP_ENV]).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    return data, f" (main loop: ~{before // 4000}k -> ~{after // 4000}k tokens)"
+    return data, f" (main loop: ~{before // 4000}k -> ~{after // 4000}k tokens)" + thinking_note
 
 
 def peer_key() -> str | None:
