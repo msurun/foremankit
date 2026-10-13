@@ -184,30 +184,41 @@ class PairingHost:
             self.status.state, self.status.detail = "failed", "wrong code entered on the other computer; start again"
 
 
-def find_hosts(wait: float = 2.0, port: int = DISCOVERY_PORT) -> list[dict[str, Any]]:
-    """Broadcast a discovery request and collect the answers: [{"name", "ip", "port"}]."""
+def find_hosts(wait: float = 2.0, port: int = DISCOVERY_PORT, probes: int = 3) -> list[dict[str, Any]]:
+    """Broadcast discovery requests and collect the answers: [{"name", "ip", "port"}].
+
+    The request is repeated `probes` times during `wait` seconds: one UDP packet is easily lost (or sent a moment before
+    the host opened its socket)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     found: dict[str, dict[str, Any]] = {}
+    started = time.monotonic()
+    next_probe, sent = started, 0
     try:
-        sock.sendto(FIND_MAGIC, ("255.255.255.255", port))
-        sock.sendto(FIND_MAGIC, ("127.0.0.1", port))
-        deadline = time.monotonic() + wait
-        while (left := deadline - time.monotonic()) > 0:
-            ready, _, _ = select.select([sock], [], [], left)
+        while (left := started + wait - time.monotonic()) > 0:
+            if sent < probes and time.monotonic() >= next_probe:
+                for target in ("255.255.255.255", "127.0.0.1"):
+                    sock.sendto(FIND_MAGIC, (target, port))
+                sent, next_probe = sent + 1, next_probe + wait / probes
+            ready, _, _ = select.select([sock], [], [], min(left, 0.2))
             if ready:
-                try:
-                    data, address = sock.recvfrom(1024)
-                except ConnectionResetError:
-                    continue   # Windows reports "port unreachable" of our own probe (nobody listens on 127.0.0.1) this way
-                try:
-                    reply = json.loads(data)
-                    found[address[0]] = {"name": str(reply["name"]), "ip": address[0], "port": int(reply["port"])}
-                except (ValueError, KeyError, TypeError):
-                    continue
+                collect_reply(sock, found)
     finally:
         sock.close()
     return list(found.values())
+
+
+def collect_reply(sock: socket.socket, found: dict[str, dict[str, Any]]) -> None:
+    """Read one discovery answer into `found`; garbage and Windows' 'port unreachable' report of our own probe are ignored."""
+    try:
+        data, address = sock.recvfrom(1024)
+    except ConnectionResetError:
+        return   # Windows reports "port unreachable" of a probe nobody listens to (e.g. 127.0.0.1) this way
+    try:
+        reply = json.loads(data)
+        found[address[0]] = {"name": str(reply["name"]), "ip": address[0], "port": int(reply["port"])}
+    except (ValueError, KeyError, TypeError):
+        return
 
 
 def join(host_ip: str, host_port: int, code: str, me: dict[str, Any]) -> dict[str, Any]:

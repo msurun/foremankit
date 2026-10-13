@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,9 @@ def start_host(code: str, ports: tuple[int, int], key: str = "lab-key-123"):
     host = PairingHost(code, key, {"name": "legion", "llama_port": 8080}, lambda s: states.append(s.state), ports=ports)
     thread = threading.Thread(target=host.run, daemon=True)
     thread.start()
+    deadline = time.monotonic() + 5
+    while not states and time.monotonic() < deadline:   # the host publishes 'waiting' once its sockets are open
+        time.sleep(0.01)
     return host, thread, states
 
 
