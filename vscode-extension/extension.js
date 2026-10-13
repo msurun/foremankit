@@ -105,6 +105,7 @@ class Panel {
   async handle(message) {
     if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); await this.pushDelegations(); return; }
     if (message.type === 'config') { await this.runConfig(message); return; }
+    if (message.type === 'pair') { await this.runPair(message); return; }
     if (message.type === 'open' && FILES[message.file]) { await vscode.window.showTextDocument(vscode.Uri.file(FILES[message.file])); return; }
     if (message.type === 'thinking') { await this.quickAnswer(['thinking', '--levels', message.levels]); return; }
     if (message.type === 'quick') await this.runQuick(message.action, message.model, message.share);
@@ -156,6 +157,37 @@ class Panel {
     await this.pushModels();
   }
 
+  async runPair({ action, ip, port, code, replace }) {
+    if (action === 'host') {
+      const answer = await backend(['pair-host']);
+      if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
+      this.post({ type: 'pairState', data: { state: 'waiting', code: answer.code, expires: answer.expires } });
+      this.watchPairing();
+    } else if (action === 'find') {
+      this.post({ type: 'pairFound', data: await backend(['pair-find']) });
+    } else if (action === 'join') {
+      const args = ['pair-join', '--ip', ip, '--port', String(port), '--code', code].concat(replace ? ['--replace'] : []);
+      const answer = await backend(args);
+      const text = answer.message || answer.error;
+      if (/different lab key/.test(text) && !replace) {
+        const ok = await vscode.window.showWarningMessage('This computer already has another lab key. Replace it with the key of the computer you are pairing with? '
+          + 'Do this only if that computer belongs to the lab you want to join.', { modal: true }, 'Replace key');
+        if (ok === 'Replace key') return this.runPair({ action, ip, port, code, replace: true });
+      }
+      vscode.window.showInformationMessage('ForemanKit: ' + text);
+      await this.pushWorkers();
+    }
+  }
+
+  watchPairing() {
+    clearInterval(this.pairTimer);
+    this.pairTimer = setInterval(async () => {
+      const state = await backend(['pair-state']);
+      this.post({ type: 'pairState', data: state });
+      if (state.state !== 'waiting') { clearInterval(this.pairTimer); this.pushWorkers(); }
+    }, 2000);
+  }
+
   async runLong({ action, model }) {
     if (!model && !NEEDS_NO_MODEL.includes(action)) return;
     if (CONFIRM[action] && !(await this.confirm(CONFIRM[action], 'Continue'))) return;
@@ -193,6 +225,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .days{display:flex;align-items:flex-end;gap:3px;height:34px;margin:4px 0} .days div{flex:1;background:var(--vscode-progressBar-background);min-height:2px;border-radius:2px;opacity:.8}
  #delegClaude{font-style:italic}
  .call{font-size:11px;margin:2px 0;display:flex;gap:6px} .call .t{opacity:.6;min-width:34px} .call .bad{color:var(--vscode-errorForeground)}
+ .code{font-size:20px;letter-spacing:.15em;font-weight:bold;margin:4px 0;user-select:all}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
 <h3>Status</h3>
@@ -247,6 +280,11 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="delegToday" class="info"></div>
 <div id="delegClaude" class="info"></div>
 <div id="delegRecent"></div>
+<h3>Pair computers</h3>
+<div class="info">Pair another PC of yours so it gets the lab key without copying files. Windows asks once to allow Python on private networks: allow it.</div>
+<div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
+<div id="pairBox" class="info"></div>
+<div id="pairFound"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
@@ -297,6 +335,33 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    const text = document.createElement('span'); if (!c.ok) text.className = 'bad';
    text.textContent = c.kind + ' -> ' + c.target + (c.escalated ? ' (escalated)' : '') + ' | ' + c.tokens + ' tok, ' + money(c.cost) + (c.seconds ? ', ' + c.seconds + ' s' : '') + (c.ok ? '' : ' FAILED');
    row.appendChild(text); box.appendChild(row);
+  }
+ }
+ function showPairState(s) {
+  const box = $('pairBox'); box.innerHTML = '';
+  if (!s || s.state === 'none') return;
+  const note = document.createElement('div');
+  if (s.state === 'waiting') {
+   const code = document.createElement('div'); code.className = 'code'; code.textContent = s.code; box.appendChild(code);
+   note.textContent = 'Enter this code on the other computer (Find computers, then Pair). Open for ' + Math.max(0, Math.round(s.expires - Date.now() / 1000)) + ' s.';
+  } else if (s.state === 'paired') {
+   note.textContent = 'Paired with ' + (s.peer ? s.peer.name + ' (' + s.peer.ip + ')' : '') + ' - added to the workers below.';
+  } else {
+   note.className = 'err'; note.textContent = s.state === 'expired' ? 'Session expired. Show the code again.' : (s.detail || 'Pairing failed.') ;
+  }
+  box.appendChild(note);
+ }
+ function showFound(list) {
+  const box = $('pairFound'); box.innerHTML = '';
+  if (list.error) { box.textContent = list.error; return; }
+  if (list.length === 0) { box.className = 'info'; box.textContent = 'No computer is showing a pairing code. Press "Show pairing code" on the PC that has the lab key, then search again.'; return; }
+  for (const host of list) {
+   const row = document.createElement('div'); row.className = 'worker';
+   const label = document.createElement('span'); label.textContent = host.name + ' (' + host.ip + ')'; row.appendChild(label);
+   const input = document.createElement('input'); input.placeholder = 'code'; input.style.width = '90px'; row.appendChild(input);
+   const go = document.createElement('button'); go.textContent = 'Pair'; row.appendChild(go);
+   go.onclick = () => send({ type: 'pair', action: 'join', ip: host.ip, port: host.port, code: input.value });
+   box.appendChild(row);
   }
  }
  function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
@@ -367,6 +432,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    l.appendChild(r); l.appendChild(document.createTextNode(' ' + o.label)); box.appendChild(l);
   }
  }
+ $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
+ $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });
@@ -383,7 +450,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
- window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data); });
+ window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
+  if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
 </script></body></html>`;
 
 function activate(context) {

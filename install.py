@@ -59,7 +59,7 @@ TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/deleg
 # folder (llama/Start-Router.ps1 writes router.log and router.err there). --purge deletes them; TEMP_DIR is a
 # constant so that tests never touch the real temp folder.
 TEMP_DIR = Path(tempfile.gettempdir())
-GATEWAY_RUNTIME_FILES = ("gateway_context.json", "local_role", "orchestrator_target.json", "workers.json")
+GATEWAY_RUNTIME_FILES = ("gateway_context.json", "local_role", "orchestrator_target.json", "workers.json", "pairing.json", "gateway_live.json")
 GATEWAY_LOG_FILES = ("router.log", "router.err", "llama-server.log", "llama-server.log.err")
 
 

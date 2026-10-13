@@ -160,6 +160,14 @@ def test_out_of_range_or_unknown_manual_parameter_is_rejected(tmp_path: Path, mo
         panel.set_profile("a.gguf", fields)
 
 
+def test_pair_find_hides_this_computer(monkeypatch):
+    monkeypatch.setattr(panel.platform, "node", lambda: "Neuron")
+    monkeypatch.setattr(panel.pairing, "find_hosts", lambda: [
+        {"name": "neuron", "ip": "192.168.137.1", "port": 8767}, {"name": "neuron", "ip": "127.0.0.1", "port": 8767},
+        {"name": "firefly", "ip": "192.168.1.20", "port": 8767}])
+    assert [host["name"] for host in panel.other_hosts()] == ["firefly"]
+
+
 def test_a_running_process_without_an_answer_is_reported_as_starting(monkeypatch):
     monkeypatch.setattr(panel, "probe", lambda url: None)
     monkeypatch.setattr(panel, "server_process_running", lambda: True)

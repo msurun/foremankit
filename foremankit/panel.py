@@ -12,6 +12,8 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     orchestrator --name <worker|this>    serve Claude Code from another machine of the lab
     worker-test --name N    reachability, lab key and a short generation
     worker-enable true|false --name N    let the router use a worker or not
+    pair-host | pair-state | pair-find | pair-join --ip I --port P --code C [--replace]
+                   pair lab computers: show a code here, find hosts, join with a code (foremankit/pairing.py)
     delegations    delegated tasks, who did them and what they cost (today, last days)
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
@@ -28,6 +30,7 @@ import importlib.util
 import io
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -39,7 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from foremankit.config import _read_yaml, config_dir, state_dir
-from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, load_nodes, load_workers, self_name
+from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
+from foremankit import pairing
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -61,6 +65,8 @@ SERVER_LOG = "llama-server.log"   # in the temp folder: output of the server sta
 CLAUDE_PRICES = {"haiku-5.5": (0.10, 0.50), "sonnet-5.5": (2.00, 10.00)}
 RECENT_CALLS = 8              # delegated calls shown in the panel
 HISTORY_DAYS = 7              # daily cost bars
+PAIRING_STATE_FILE = "pairing.json"      # state dir: what the running pairing host shows (code, waiting/paired/expired)
+PAIRED_PRIORITY = 5                       # a freshly paired lab computer ranks above the default worker priority
 ROLES = {"orchestrator": "off", "worker": "on", "both": "auto"}   # role -> router toggle `llm:self` (delegated tasks)
 WORKER_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")   # Claude Code's effort slider, lowest first
@@ -225,6 +231,87 @@ def call_log() -> Any:
     """The router's call log (a function so tests can point it at a temporary state dir)."""
     from foremankit.state import CallLog
     return CallLog()
+
+
+def my_identity() -> dict[str, Any]:
+    """This computer as the lab sees it: a worker-safe name and the llama-server port."""
+    name = re.sub(r"[^a-z0-9_-]", "-", platform.node().lower()).strip("-")[:32] or "pc"
+    return {"name": name, "llama_port": 8080}
+
+
+def read_lab_key() -> str | None:
+    """The lab key of this computer (environment, else the repo .env), or None when it has none yet."""
+    key = os.getenv("FOREMANKIT_PEER_KEY")
+    env_file = Path(ROOT / ".env")
+    if not key and env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("FOREMANKIT_PEER_KEY="):
+                key = line.split("=", 1)[1].strip()
+    return key or None
+
+
+def write_pairing_state(state: pairing.HostState) -> None:
+    """Publish the host's state for the panel (a missing file is simply 'no pairing running')."""
+    (state_dir() / PAIRING_STATE_FILE).write_text(json.dumps(state.as_dict()), encoding="utf-8")
+
+
+def pairing_state() -> dict[str, Any]:
+    """What the pairing host is doing now: {"state": "none"} when nothing runs or the session is over long ago."""
+    try:
+        state = json.loads((state_dir() / PAIRING_STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"state": "none"}
+    if state.get("state") == "waiting" and state.get("expires", 0) < time.time():
+        state["state"] = "expired"
+    return state
+
+
+def serve_pairing(code: str) -> str:
+    """Run the pairing host in this process (the panel starts it detached); registers the joiner as a worker when paired."""
+    key = read_lab_key()
+    if key is None:
+        raise ValueError("this computer has no lab key yet")
+    host = pairing.PairingHost(code, key, my_identity(), write_pairing_state)
+    final = host.run()
+    if final.state == "paired" and final.peer:
+        peer = final.peer
+        add_worker(re.sub(r"[^a-z0-9_-]", "-", str(peer["name"]).lower())[:32], f"http://{peer['ip']}:{peer['llama_port']}",
+                   "private", PAIRED_PRIORITY)
+    return final.state
+
+
+def other_hosts() -> list[dict[str, Any]]:
+    """Lab computers answering a discovery broadcast, without this computer (its own loopback and adapter addresses)."""
+    me = my_identity()["name"]
+    return [host for host in pairing.find_hosts()
+            if not host["ip"].startswith("127.") and re.sub(r"[^a-z0-9_-]", "-", host["name"].lower())[:32] != me]
+
+
+def start_pairing_host() -> dict[str, Any]:
+    """Create the lab key when this is the first computer of the lab, then start a two-minute pairing session in the
+    background and return the code to show. The code travels to the child through the environment, not the command line."""
+    _, created = ensure_key()
+    code = pairing.new_code()
+    write_pairing_state(pairing.HostState(code=code, expires=time.time() + pairing.SESSION_SECONDS))
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    subprocess.Popen([sys.executable, "-m", "foremankit.panel", "pair-serve"], cwd=ROOT, creationflags=flags,
+                     env={**os.environ, "FOREMANKIT_PAIR_CODE": code}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    note = " (a new lab key was created on this computer)" if created else ""
+    return {"message": f"pairing open for {pairing.SESSION_SECONDS // 60} minutes{note}: enter the code on the other computer",
+            "code": code, "expires": time.time() + pairing.SESSION_SECONDS}
+
+
+def join_lab(ip: str, port: int, code: str, replace: bool = False) -> str:
+    """Fetch the lab key from the computer at ip:port with the code, store it and register that computer as a worker.
+
+    Errors come back as readable PairingError / ValueError messages for the panel."""
+    me = my_identity()
+    payload = pairing.join(ip, int(port), code, me)
+    outcome = pairing.store_key(ROOT / ".env", payload["peer_key"], replace)
+    name = re.sub(r"[^a-z0-9_-]", "-", str(payload["name"]).lower())[:32]
+    add_worker(name, f"http://{ip}:{payload.get('llama_port', 8080)}", "private", PAIRED_PRIORITY)
+    return (f"paired with {name}: lab key {outcome}, {name} added as a worker. Start your llama-server with -Share "
+            f"(panel: 'Share with the lab') so {name} can use it too")
 
 
 def set_role(role: str) -> str:
@@ -514,6 +601,14 @@ def run_quick(action: str, model: str = "", share: bool = False) -> str:
     return (result.stdout.strip().splitlines() or ["done"])[-1]
 
 
+def run_join(args: argparse.Namespace) -> str:
+    """pair-join from the command line; a rejected code or key comes back as a message, not a crash."""
+    try:
+        return join_lab(args.ip, args.port, args.code, args.replace)
+    except (pairing.PairingError, ValueError) as problem:
+        return f"not done: {problem}"
+
+
 def run_config_action(args: argparse.Namespace) -> str:
     """role / worker-add / worker-remove from the command line; a rejected value comes back as a message, not a crash."""
     try:
@@ -537,11 +632,15 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
     parser.add_argument("--share", action="store_true", help="start-server: listen on the LAN with the lab key (-Share)")
+    parser.add_argument("--ip", default="")
+    parser.add_argument("--port", type=int, default=pairing.PAIRING_PORT)
+    parser.add_argument("--code", default="")
+    parser.add_argument("--replace", action="store_true", help="pair-join: replace a different lab key")
     parser.add_argument("--name", default="")
     parser.add_argument("--url", default="")
     parser.add_argument("--accept", default="internal")
@@ -554,6 +653,16 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(list_models()))
     elif args.what == "command":
         print(json.dumps({"command": command_for(args.action, args.model)}))
+    elif args.what == "pair-host":
+        print(json.dumps(start_pairing_host()))
+    elif args.what == "pair-serve":
+        serve_pairing(os.environ["FOREMANKIT_PAIR_CODE"])
+    elif args.what == "pair-state":
+        print(json.dumps(pairing_state()))
+    elif args.what == "pair-find":
+        print(json.dumps(other_hosts()))
+    elif args.what == "pair-join":
+        print(json.dumps({"message": run_join(args)}))
     elif args.what == "delegations":
         print(json.dumps(delegations()))
     elif args.what == "workers":
