@@ -11,18 +11,19 @@ const PYTHON = process.platform === 'win32'
   ? path.join(ROOT, '.venv', 'Scripts', 'python.exe') : path.join(ROOT, '.venv', 'bin', 'python');
 const POLL_MS = 4000;
 const WORKERS_POLL_MS = 12000;
-const RELOAD = 'Reload Window';
+const RELOAD_BUTTON = 'Switch and reload window';
 const CONFIRM = {
   'download-llama': 'Downloads llama.cpp (about 150-650 MB from GitHub, sha256-checked) into llama/LLAMA.CPP.',
   tune: 'Tuning stops the running llama-server, then tunes the offload and finds the largest fast context. '
     + 'It takes about 25 minutes: keep the laptop on AC power.',
 };
+const RELOAD_WARNING = ' The VS Code window reloads immediately after the switch: a running Claude Code answer, '
+  + 'subagents and background tasks in this window are stopped (the conversation can be resumed). '
+  + 'Claude Code reads this setting only when a window starts.';
 const CONFIRM_QUICK = {
   'router-direct': 'Direct mode stops the router and removes it from the VS Code settings, so Claude Code talks straight to '
-    + 'Anthropic and the local models stop working. You must RELOAD THE VS CODE WINDOW afterwards (Claude Code reads the '
-    + 'setting only when a window starts). Until you reload, Claude Code has no connection at all.',
-  'router-normal': 'Router mode starts the router and puts it back into the VS Code settings. You must RELOAD THE VS CODE '
-    + 'WINDOW afterwards.',
+    + 'Anthropic and the local models stop working.' + RELOAD_WARNING,
+  'router-normal': 'Router mode starts the router and puts it back into the VS Code settings.' + RELOAD_WARNING,
 };
 const NEEDS_NO_MODEL = ['download-llama'];
 const NEEDS_RELOAD = ['router-direct', 'router-normal'];
@@ -87,35 +88,13 @@ class Panel {
   }
 
   async runQuick(action) {
-    if (CONFIRM_QUICK[action] && !(await this.confirm(CONFIRM_QUICK[action], 'Continue'))) return;
+    const needsReload = NEEDS_RELOAD.includes(action);
+    if (CONFIRM_QUICK[action] && !(await this.confirm(CONFIRM_QUICK[action], RELOAD_BUTTON))) return;
     const answer = await this.quickAnswer([action]);
     const text = 'ForemanKit: ' + (answer.message || answer.error);
-    if (NEEDS_RELOAD.includes(action) && !answer.error) {
-      const pick = await vscode.window.showInformationMessage(text, RELOAD);
-      if (pick === RELOAD) vscode.commands.executeCommand('workbench.action.reloadWindow');
-    } else {
-      vscode.window.setStatusBarMessage(text, 4000);
-    }
-  }
-
-  configArgs({ action, role, name, url, accept, priority, model, fields }) {
-    const table = {
-      role: ['role', role],
-      workerAdd: ['worker-add', '--name', name, '--url', url, '--accept', accept, '--priority', String(priority || 10)],
-      workerRemove: ['worker-remove', '--name', name],
-      profileSet: ['profile-set', '--model', model, '--fields', fields],
-    };
-    return table[action];
-  }
-
-  async runConfig(message) {
-    const args = this.configArgs(message);
-    if (!args) return;
-    const answer = await backend(args);
-    vscode.window.setStatusBarMessage('ForemanKit: ' + (answer.message || answer.error), 6000);
-    await this.pushStatus();
-    await this.pushWorkers();
-    await this.pushModels();
+    vscode.window.setStatusBarMessage(text, 6000);
+    if (needsReload && !answer.error) vscode.commands.executeCommand('workbench.action.reloadWindow');
+    if (needsReload && answer.error) vscode.window.showErrorMessage(text);
   }
 
   async runLong({ action, model }) {
@@ -162,7 +141,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="directInfo" class="info" style="display:none">Direct mode: Claude Code talks straight to Anthropic; local models are unavailable.</div>
 <h3>Router</h3>
 <div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
-<div class="info">Stop and start change the VS Code settings: reload the window afterwards.</div>
+<div class="info">Start and stop change the VS Code settings and reload this window (you are asked first).</div>
 <div id="llamaMissing" class="err" style="display:none">llama-server is not installed. <button id="downloadLlama">Download llama.cpp</button></div>
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
