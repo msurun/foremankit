@@ -120,7 +120,7 @@ function Get-LaunchLock {
 }
 if ($List) { Show-LlamaServers (Get-LlamaServers); return }
 $exe  = Join-Path $here 'LLAMA.CPP\llama-server.exe'
-if (-not (Test-Path $exe)) { throw "llama-server.exe not found: $exe" }
+if (-not (Test-Path $exe)) { throw "llama-server.exe not found: $exe. Download it with:  python `"$here\get_llama.py`"" }
 function Get-Fingerprint {
     $cpu = ((Get-CimInstance Win32_Processor | Select-Object -First 1).Name -replace '\s+', ' ').Trim().ToLower()
     $gpu = 'none'; $vram = 0

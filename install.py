@@ -879,6 +879,17 @@ class Installer:
             return
         self.write(path, json.dumps(data, indent=4, ensure_ascii=False) + "\n")
 
+    def ensure_llama_server(self, download: bool) -> None:
+        """llama/LLAMA.CPP/llama-server is not in git: download it on request (--with-llama), else say how."""
+        server = ROOT / "llama" / "LLAMA.CPP" / ("llama-server.exe" if os.name == "nt" else "llama-server")
+        if server.exists():
+            self.say(f"llama-server present: {server}")
+        elif download and not self.dry:
+            subprocess.run([sys.executable, str(ROOT / "llama" / "get_llama.py")], check=False)
+        else:
+            print("! llama-server is missing (no local models without it): run  python install.py --local-orchestrator "
+                  "--with-llama  or  python llama/get_llama.py  (downloads about 150-650 MB from GitHub, sha256-checked)")
+
     def install_local_orchestrator(self, py: Path, remove: bool = False) -> None:
         """Point the Claude Code plugin at the gateway and start the gateway at logon (the llama-server stays manual)."""
         cfg = yaml_load(ROOT / "config" / "orchestrator.yaml")
@@ -962,6 +973,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--restore-original", action="store_true",
                     help="put CLAUDE.md, settings.json, the agent files and the VS Code files back byte for byte "
                          "as they were before the first install (later edits are lost)")
+    ap.add_argument("--with-llama", action="store_true",
+                    help="with --local-orchestrator: download llama-server (llama/get_llama.py) when it is missing")
     ap.add_argument("--local-orchestrator", action="store_true",
                     help="also route the Claude Code plugin through the gateway (local Qwen as orchestrator, VS Code only)")
     ap.add_argument("--skip-claude", action="store_true", help="only venv + package, do not touch ~/.claude")
@@ -1036,6 +1049,7 @@ def run_install(inst: Installer, args: argparse.Namespace) -> None:
         inst.check_subagent_override()
     if args.local_orchestrator:
         inst.install_local_orchestrator(py)
+        inst.ensure_llama_server(args.with_llama)
     report_keys()
     print(f"\nNext: `{py} -m foremankit.cli status`  (or activate .venv and run `foremankit status`)")
 

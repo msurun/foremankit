@@ -13,6 +13,7 @@ const POLL_MS = 4000;
 const WORKERS_POLL_MS = 12000;
 const RELOAD = 'Reload Window';
 const CONFIRM = {
+  'download-llama': 'Downloads llama.cpp (about 150-650 MB from GitHub, sha256-checked) into llama/LLAMA.CPP.',
   tune: 'Tuning stops the running llama-server, then tunes the offload and finds the largest fast context. '
     + 'It takes about 25 minutes: keep the laptop on AC power.',
 };
@@ -23,6 +24,7 @@ const CONFIRM_QUICK = {
   'router-normal': 'Router mode starts the router and puts it back into the VS Code settings. You must RELOAD THE VS CODE '
     + 'WINDOW afterwards.',
 };
+const NEEDS_NO_MODEL = ['download-llama'];
 const NEEDS_RELOAD = ['router-direct', 'router-normal'];
 const FILES = {
   profiles: path.join(ROOT, 'llama', 'profiles.json'),
@@ -117,7 +119,7 @@ class Panel {
   }
 
   async runLong({ action, model }) {
-    if (!model) return;
+    if (!model && !NEEDS_NO_MODEL.includes(action)) return;
     if (CONFIRM[action] && !(await this.confirm(CONFIRM[action], 'Continue'))) return;
     const answer = await backend(['command', action, '--model', model]);
     if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
@@ -162,6 +164,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
 <label class="info"><input type="checkbox" id="localOn"> Local models enabled (off = cloud only, router keeps running)</label>
 <div class="info">Stop and start change the VS Code settings: reload the window afterwards.</div>
+<div id="llamaMissing" class="err" style="display:none">llama-server is not installed. <button id="downloadLlama">Download llama.cpp</button></div>
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
@@ -216,6 +219,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   if (s.error) return;
   $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
+  $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
   $('localOn').checked = s.local_enabled; showLevels(s.thinking); showRole(s.role);
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   dot('serverDot', s.server.up);
@@ -252,6 +256,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    box.appendChild(row);
   }
  }
+ $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });

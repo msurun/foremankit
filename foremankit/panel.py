@@ -93,7 +93,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "local_enabled": not (state_dir() / LOCAL_OFF_FLAG).exists(), "direct_mode": direct_mode(), "role": local_role(),
+            "local_enabled": not (state_dir() / LOCAL_OFF_FLAG).exists(), "direct_mode": direct_mode(), "role": local_role(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -128,6 +128,11 @@ def list_models() -> list[dict[str, Any]]:
     return [model_entry(path, profiles, machine) for path in files]
 
 
+def llama_installed() -> bool:
+    """True when llama/LLAMA.CPP holds the llama-server binary (it is not in git: llama/get_llama.py downloads it)."""
+    return (LLAMA / "LLAMA.CPP" / ("llama-server.exe" if os.name == "nt" else "llama-server")).exists()
+
+
 def python_exe() -> str:
     """The interpreter of this repository's virtual environment (the one running this module)."""
     return sys.executable
@@ -146,6 +151,7 @@ def command_for(action: str, model: str = "") -> str:
     commands = {
         "start-server": f"& '{LLAMA / 'start-llama.ps1'}' -Model '{model}' -NoMenu -Replace",
         "tune": f"{stop}; {tune}; {sweep}",
+        "download-llama": f"{py} '{LLAMA / 'get_llama.py'}'",
     }
     return commands[action]
 
