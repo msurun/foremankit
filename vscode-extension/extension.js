@@ -191,6 +191,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .grid label{display:flex;flex-direction:column;gap:2px} input[type=number],input:not([type]),select{width:100%;box-sizing:border-box}
  input:not([type=checkbox]):not([type=radio]){background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,transparent);padding:3px}
  .days{display:flex;align-items:flex-end;gap:3px;height:34px;margin:4px 0} .days div{flex:1;background:var(--vscode-progressBar-background);min-height:2px;border-radius:2px;opacity:.8}
+ #delegClaude{font-style:italic}
  .call{font-size:11px;margin:2px 0;display:flex;gap:6px} .call .t{opacity:.6;min-width:34px} .call .bad{color:var(--vscode-errorForeground)}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
@@ -286,7 +287,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   const max = Math.max(...d.days.map((x) => x.cost), 0.000001); const bars = $('delegDays'); bars.innerHTML = '';
   for (const x of d.days) { const b = document.createElement('div'); b.style.height = Math.max(2, Math.round(34 * x.cost / max)) + 'px'; b.title = x.day + ': ' + money(x.cost); bars.appendChild(b); }
   const q = d.claude_equivalent;
-  $('delegClaude').textContent = 'same tokens on Claude (upper bound, no cache discount): Haiku 5.5 ' + money(q.today['haiku-5.5']) + ' today / ' + money(q.week['haiku-5.5']) + ' week; Sonnet 5.5 ' + money(q.today['sonnet-5.5']) + ' today / ' + money(q.week['sonnet-5.5']) + ' week';
+  $('delegClaude').textContent = 'NOT spent - for comparison: the same tokens on Claude would cost Haiku 5.5 ' + money(q.today['haiku-5.5']) + ' today, ' + money(q.week['haiku-5.5']) + ' in 7 days; Sonnet 5.5 ' + money(q.today['sonnet-5.5']) + ' today, ' + money(q.week['sonnet-5.5']) + ' in 7 days (list prices, no cache discount).';
   const targets = Object.entries(d.today.by_target).sort((a, b) => b[1].cost - a[1].cost);
   $('delegToday').textContent = targets.length ? 'today by target: ' + targets.map(([n, v]) => n + ' ' + v.calls + 'x ' + money(v.cost)).join('; ') : '';
   const box = $('delegRecent'); box.innerHTML = '';
