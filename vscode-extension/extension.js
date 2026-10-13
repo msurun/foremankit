@@ -149,7 +149,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info">Role of this server:</div>
 <div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
 <label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
-<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only.</div>
+<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only; both = default.</div>
+<div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
 <div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
 <details><summary class="info">Advanced parameters of the selected model</summary>
 <div class="grid">
@@ -199,6 +200,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
   $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
   showLevels(s.thinking); showRole(s.role);
+  $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   dot('serverDot', s.server.up);
   $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')' : 'llama-server stopped';
@@ -235,6 +237,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   }
  }
  $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
+ $('roleStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });
