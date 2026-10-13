@@ -44,21 +44,13 @@ def test_unknown_action_is_rejected():
         panel.command_for("format-disk")
 
 
-def test_local_switch_writes_and_removes_the_flag_the_gateway_checks(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
-    assert panel.set_local(False) == "local models off"
-    assert (panel.state_dir() / panel.LOCAL_OFF_FLAG).exists()
-    assert panel.set_local(True) == "local models on"
-    assert not (panel.state_dir() / panel.LOCAL_OFF_FLAG).exists()
-
-
-def test_status_reports_router_server_and_local_switch(monkeypatch, tmp_path: Path):
+def test_status_reports_router_server_and_role(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(panel, "port_open", lambda port: True)
     monkeypatch.setattr(panel, "probe", lambda url: {"model_alias": "m", "default_generation_settings": {"n_ctx": 4096}})
     result = panel.status()
     assert result["router"]["up"] and result["server"] == {"up": True, "model": "m", "n_ctx": 4096}
-    assert result["local_enabled"] is True and json.dumps(result)
+    assert result["role"] == "both" and json.dumps(result)
 
 
 def write_orchestrator_yaml(folder: Path) -> Path:

@@ -35,7 +35,6 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default both)
-LOCAL_OFF_FLAG = "local_off"            # file in the state dir: while it exists, local-model requests get a clear 503 (cloud untouched)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
 client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=1800, write=60, pool=None))
@@ -146,11 +145,6 @@ def parse_body(body: bytes) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def local_enabled() -> bool:
-    """False while the panel has switched the local models off; the gateway itself keeps serving the cloud."""
-    return not (state_dir() / LOCAL_OFF_FLAG).exists()
-
-
 def local_role() -> str:
     """What the local llama-server is for: orchestrator (Claude Code), worker (delegated tasks) or both."""
     try:
@@ -162,15 +156,13 @@ def local_role() -> str:
 
 def refusal() -> str | None:
     """Why a request to the local model must be refused right now, or None when it may go through."""
-    if not local_enabled():
-        return "local models are switched off in the ForemanKit panel; switch them on or pick a cloud model"
     if local_role() == "worker":
         return "the local server works as a worker (delegated tasks only); switch it to orchestrator in the ForemanKit panel"
     return None
 
 
 def switched_off(message: str) -> Response:
-    """503 in the Anthropic error shape for a request to a local model that is refused."""
+    """503 in the Anthropic error shape for a request to the local model that its role refuses."""
     return JSONResponse({"type": "error", "error": {"type": "api_error", "message": message}}, status_code=503)
 
 

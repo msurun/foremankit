@@ -162,7 +162,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="directInfo" class="info" style="display:none">Direct mode: Claude Code talks straight to Anthropic; local models are unavailable.</div>
 <h3>Router</h3>
 <div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
-<label class="info"><input type="checkbox" id="localOn"> Local models enabled (off = cloud only, router keeps running)</label>
 <div class="info">Stop and start change the VS Code settings: reload the window afterwards.</div>
 <div id="llamaMissing" class="err" style="display:none">llama-server is not installed. <button id="downloadLlama">Download llama.cpp</button></div>
 <h3>Local model</h3>
@@ -220,7 +219,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
   $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
-  $('localOn').checked = s.local_enabled; showLevels(s.thinking); showRole(s.role);
+  showLevels(s.thinking); showRole(s.role);
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   dot('serverDot', s.server.up);
   $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')' : 'llama-server stopped';
@@ -269,7 +268,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value });
  $('routerStart').onclick = () => send({ type: 'quick', action: 'router-normal' });
  $('routerDirect').onclick = () => send({ type: 'quick', action: 'router-direct' });
- $('localOn').onchange = () => send({ type: 'quick', action: $('localOn').checked ? 'local-on' : 'local-off' });
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));

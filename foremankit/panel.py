@@ -6,7 +6,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     status                  router up?, llama-server up (model, context size), context fill reported by the gateway
     models                  every .gguf next to llama/start-llama.ps1 with its tuned profile (speed, context, offload)
     command <action> ...    the PowerShell line the extension runs in a visible terminal (long jobs: start, tune, sweep)
-    start-router | stop-router | stop-server | local-on | local-off | router-direct | router-normal
+    start-router | stop-router | stop-server | router-direct | router-normal
     role <orchestrator|worker|both>    what the local server is for
     profile-set --model F --fields '{"ctx": 65536, "temp": 0.6}'    hand-picked launch parameters
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
@@ -33,7 +33,7 @@ from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, load_nodes, load_workers, self_name
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
-from foremankit.gateway import LOCAL_OFF_FLAG, LOCAL_ROLE_FILE, local_role
+from foremankit.gateway import LOCAL_ROLE_FILE, local_role
 
 ROOT = Path(__file__).resolve().parents[1]
 LLAMA = ROOT / "llama"
@@ -93,7 +93,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "local_enabled": not (state_dir() / LOCAL_OFF_FLAG).exists(), "direct_mode": direct_mode(), "role": local_role(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -154,17 +154,6 @@ def command_for(action: str, model: str = "") -> str:
         "download-llama": f"{py} '{LLAMA / 'get_llama.py'}'",
     }
     return commands[action]
-
-
-def set_local(enabled: bool) -> str:
-    """Switch the local models on or off in the running gateway (a flag file it checks on every request)."""
-    flag = state_dir() / LOCAL_OFF_FLAG
-    if enabled:
-        flag.unlink(missing_ok=True)
-    else:
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.write_text("off", encoding="utf-8")
-    return "local models " + ("on" if enabled else "off")
 
 
 def set_role(role: str) -> str:
@@ -337,8 +326,6 @@ def parse_levels(text: str) -> dict[str, bool]:
 
 def run_quick(action: str) -> str:
     """Execute a quick action and return one line saying what happened."""
-    if action in ("local-on", "local-off"):
-        return set_local(action == "local-on")
     if action in ("router-direct", "router-normal"):
         return set_direct_mode(action == "router-direct")
     if action == "stop-server":
@@ -368,7 +355,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "local-on", "local-off", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "profile-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "profile-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
