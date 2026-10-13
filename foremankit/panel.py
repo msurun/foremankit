@@ -12,6 +12,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     orchestrator --name <worker|this>    serve Claude Code from another machine of the lab
     worker-test --name N    reachability, lab key and a short generation
     worker-enable true|false --name N    let the router use a worker or not
+    delegations    delegated tasks, who did them and what they cost (today, last days)
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
                             settings: the window must be reloaded afterwards)
@@ -19,7 +20,9 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
+import datetime
 import importlib.util
 import io
 import json
@@ -53,6 +56,8 @@ MANUAL_RANGES = {"ctx": (int, 2048, 262144), "ncmoe": (int, 0, 99), "threads": (
 MANUAL_CHOICES = {"kv_cache": ("f16", "q8_0", "q4_0"), "reasoning": ("off", "on")}
 ROUTER_OFF_FLAG = "router_off"      # state dir: while it exists, Start-Router.ps1 does not start the router (direct mode)
 SERVER_LOG = "llama-server.log"   # in the temp folder: output of the server started from the panel
+RECENT_CALLS = 8              # delegated calls shown in the panel
+HISTORY_DAYS = 7              # daily cost bars
 ROLES = {"orchestrator": "off", "worker": "on", "both": "auto"}   # role -> router toggle `llm:self` (delegated tasks)
 WORKER_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")   # Claude Code's effort slider, lowest first
@@ -170,6 +175,44 @@ def command_for(action: str, model: str = "") -> str:
         "download-llama": f"{py} '{LLAMA / 'get_llama.py'}'",
     }
     return commands[action]
+
+
+def call_target(call: dict[str, Any]) -> str:
+    """Who did the work: provider (and node for a local machine) plus model, as far as the log knows."""
+    place = f"{call.get('provider', '?')}@{call['node']}" if call.get("node") else call.get("provider", "?")
+    return f"{place} / {call['model']}" if call.get("model") else place
+
+
+def delegations(now: float | None = None) -> dict[str, Any]:
+    """Delegated tasks from the router's call log: the latest ones, today's and the last days' cost, split by target.
+
+    Costs are what the providers charged according to the log (`cost_usd`; free and local calls are 0). Days are local."""
+    now = time.time() if now is None else now
+    today = datetime.date.fromtimestamp(now)
+    calls = [call for call in call_log().read() if call.get("event") == "call" and not call.get("dry_run")]
+    per_day: dict[str, float] = collections.defaultdict(float)
+    today_by_target: dict[str, dict[str, float]] = collections.defaultdict(lambda: {"calls": 0, "cost": 0.0})
+    for call in calls:
+        day = datetime.date.fromtimestamp(call["ts"])
+        per_day[day.isoformat()] += call.get("cost_usd") or 0.0
+        if day == today:
+            row = today_by_target[call_target(call)]
+            row["calls"] += 1
+            row["cost"] += call.get("cost_usd") or 0.0
+    days = [(today - datetime.timedelta(days=back)).isoformat() for back in range(HISTORY_DAYS - 1, -1, -1)]
+    recent = [{"ts": call["ts"], "kind": call.get("kind"), "target": call_target(call), "ok": bool(call.get("success")),
+               "tokens": (call.get("tokens_in") or 0) + (call.get("tokens_out") or 0), "cost": call.get("cost_usd") or 0.0,
+               "seconds": call.get("latency_s"), "escalated": bool(call.get("escalate"))} for call in calls[-RECENT_CALLS:]]
+    return {"today": {"calls": sum(row["calls"] for row in today_by_target.values()), "cost": per_day.get(today.isoformat(), 0.0),
+                      "by_target": dict(today_by_target)},
+            "days": [{"day": day, "cost": round(per_day.get(day, 0.0), 6)} for day in days],
+            "week_cost": round(sum(per_day.get(day, 0.0) for day in days), 6), "recent": list(reversed(recent))}
+
+
+def call_log() -> Any:
+    """The router's call log (a function so tests can point it at a temporary state dir)."""
+    from foremankit.state import CallLog
+    return CallLog()
 
 
 def set_role(role: str) -> str:
@@ -429,7 +472,7 @@ def parse_levels(text: str) -> dict[str, bool]:
     return levels
 
 
-def start_server(model: str) -> str:
+def start_server(model: str, share: bool = False) -> str:
     """Start llama-server detached from VS Code: a terminal child dies when the window reloads (the router switch does that).
 
     The output goes to llama-server.log in the temp folder; -Replace swaps a server that is already running."""
@@ -438,17 +481,19 @@ def start_server(model: str) -> str:
     log = Path(tempfile.gettempdir()) / SERVER_LOG
     script = LLAMA / "start-llama.ps1"
     # redirect at process level: PowerShell 5.1's `*>` turns the server's stderr lines into errors and stops the script
-    arguments = f"'-NoProfile','-ExecutionPolicy','Bypass','-File','\"{script}\"','-Model','{model}','-NoMenu','-Replace'"
+    share_flag = ",'-Share'" if share else ""
+    arguments = f"'-NoProfile','-ExecutionPolicy','Bypass','-File','\"{script}\"','-Model','{model}','-NoMenu','-Replace'{share_flag}"
     subprocess.run(["powershell", "-NoProfile", "-Command",
                     f"Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList {arguments} "
                     f"-RedirectStandardOutput '{log}' -RedirectStandardError '{log}.err'"], check=False)
-    return f"starting {model} (log: {log}); loading takes about a minute"
+    shared = " shared with the lab (-Share)" if share else ""
+    return f"starting {model}{shared} (log: {log}); loading takes about a minute"
 
 
-def run_quick(action: str, model: str = "") -> str:
+def run_quick(action: str, model: str = "", share: bool = False) -> str:
     """Execute a quick action and return one line saying what happened."""
     if action == "start-server":
-        return start_server(model)
+        return start_server(model, share)
     if action in ("router-direct", "router-normal"):
         return set_direct_mode(action == "router-direct")
     if action == "stop-server":
@@ -484,10 +529,11 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
+    parser.add_argument("--share", action="store_true", help="start-server: listen on the LAN with the lab key (-Share)")
     parser.add_argument("--name", default="")
     parser.add_argument("--url", default="")
     parser.add_argument("--accept", default="internal")
@@ -500,6 +546,8 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(list_models()))
     elif args.what == "command":
         print(json.dumps({"command": command_for(args.action, args.model)}))
+    elif args.what == "delegations":
+        print(json.dumps(delegations()))
     elif args.what == "workers":
         print(json.dumps(list_workers()))
     elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set"):
@@ -507,7 +555,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.what == "thinking":
         print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))
     else:
-        print(json.dumps({"message": run_quick(args.what, args.model)}))
+        print(json.dumps({"message": run_quick(args.what, args.model, args.share)}))
 
 
 if __name__ == "__main__":

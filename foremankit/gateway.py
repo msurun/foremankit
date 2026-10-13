@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
+from foremankit.live import LiveMeter
 from foremankit.gateway_trim import is_main_loop, request_chars, shape_request, thinking_wanted, with_thinking
 
 CONFIG_NAME = "orchestrator.yaml"
@@ -36,6 +37,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
+LIVE_FILE = "gateway_live.json"                 # state dir: what the local model is doing right now (foremankit/live.py)
 LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default worker)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
@@ -87,12 +89,12 @@ class Call:
 
 
 WINDOW_CACHE_SECONDS = 30
-_window_cache: dict[str, Any] = {"at": 0.0, "value": None}
+_window_cache: dict[str, Any] = {"at": 0.0, "value": None, "url": ""}
 
 
 def server_window(cfg: dict[str, Any]) -> int | None:
     """Context size the running llama-server really has (/props n_ctx), cached; None when it cannot be read."""
-    if time.time() - _window_cache["at"] < WINDOW_CACHE_SECONDS:
+    if _window_cache["url"] == cfg["local_url"] and time.time() - _window_cache["at"] < WINDOW_CACHE_SECONDS:
         return _window_cache["value"]
     try:
         headers = {"authorization": f"Bearer {peer_key()}"} if peer_key() else {}
@@ -100,7 +102,7 @@ def server_window(cfg: dict[str, Any]) -> int | None:
         value = int(props["default_generation_settings"]["n_ctx"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         value = None
-    _window_cache.update(at=time.time(), value=value)
+    _window_cache.update(at=time.time(), value=value, url=cfg["local_url"])
     return value
 
 
@@ -135,6 +137,26 @@ def shape_local(data: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, An
     if os.getenv(DUMP_ENV):
         Path(os.environ[DUMP_ENV]).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return data, f" (main loop: ~{before // 4000}k -> ~{after // 4000}k tokens)" + thinking_note
+
+
+def write_live(state: dict[str, Any]) -> None:
+    """Publish the live state for the panel; a missing hint must never fail the request."""
+    try:
+        (state_dir() / LIVE_FILE).write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+async def metered(chunks: Any) -> Any:
+    """Pass the answer stream through unchanged while a LiveMeter watches it."""
+    meter = LiveMeter(write_live)
+    meter.begin()
+    try:
+        async for chunk in chunks:
+            meter.feed(chunk)
+            yield chunk
+    finally:
+        meter.end()
 
 
 def peer_key() -> str | None:
@@ -217,7 +239,9 @@ async def handle(request: Request) -> Response:
         return failure(call.local, exc)
     call.log(upstream.status_code)
     headers = {name: value for name, value in upstream.headers.items() if name.lower() not in DROP_RESPONSE}
-    return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code, headers=headers,
+    streamed = call.local and "text/event-stream" in upstream.headers.get("content-type", "")
+    body_stream = metered(upstream.aiter_raw()) if streamed else upstream.aiter_raw()
+    return StreamingResponse(body_stream, status_code=upstream.status_code, headers=headers,
                              background=BackgroundTask(upstream.aclose))
 
 

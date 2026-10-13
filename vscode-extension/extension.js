@@ -11,6 +11,11 @@ const PYTHON = process.platform === 'win32'
   ? path.join(ROOT, '.venv', 'Scripts', 'python.exe') : path.join(ROOT, '.venv', 'bin', 'python');
 const POLL_MS = 4000;
 const WORKERS_POLL_MS = 12000;
+const LIVE_POLL_MS = 1000;
+const DELEGATIONS_POLL_MS = 8000;
+const LIVE_FRESH_MS = 4000;
+const http = require('http');
+const STATE_DIR = process.env.FOREMANKIT_STATE_DIR || path.join(os.homedir(), '.config', 'foremankit');
 const RELOAD_BUTTON = 'Switch and reload window';
 const CONFIRM = {
   'download-llama': 'Downloads llama.cpp (about 150-650 MB from GitHub, sha256-checked) into llama/LLAMA.CPP.',
@@ -32,6 +37,30 @@ const FILES = {
   orchestrator: path.join(ROOT, 'config', 'orchestrator.yaml'),
   routerlog: path.join(os.tmpdir(), 'router.log'),
 };
+
+function readLive() {
+  try {
+    const live = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'gateway_live.json'), 'utf8'));
+    return { ...live, fresh: Date.now() - live.time * 1000 < LIVE_FRESH_MS };
+  } catch (e) { return null; }
+}
+
+function readSlots() {
+  return new Promise((resolve) => {
+    const request = http.get({ host: '127.0.0.1', port: 8080, path: '/slots', timeout: 800 }, (answer) => {
+      let text = '';
+      answer.on('data', (chunk) => { text += chunk; });
+      answer.on('end', () => {
+        try {
+          const slot = JSON.parse(text)[0];
+          resolve(slot ? { busy: !!slot.is_processing, promptTokens: slot.n_prompt_tokens, promptDone: slot.n_prompt_tokens_processed } : null);
+        } catch (e) { resolve(null); }
+      });
+    });
+    request.on('error', () => resolve(null));
+    request.on('timeout', () => { request.destroy(); resolve(null); });
+  });
+}
 
 function backend(args) {
   return new Promise((resolve) => {
@@ -57,7 +86,10 @@ class Panel {
     view.webview.onDidReceiveMessage((message) => this.handle(message));
     this.timer = setInterval(() => this.pushStatus(), POLL_MS);
     this.workersTimer = setInterval(() => this.pushWorkers(), WORKERS_POLL_MS);
-    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); });
+    this.liveTimer = setInterval(() => this.pushLive(), LIVE_POLL_MS);
+    this.delegationsTimer = setInterval(() => this.pushDelegations(), DELEGATIONS_POLL_MS);
+    this.pushDelegations();
+    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); });
     this.pushStatus();
     this.pushWorkers();
     this.pushModels();
@@ -65,15 +97,17 @@ class Panel {
 
   post(message) { if (this.view) this.view.webview.postMessage(message); }
   async pushStatus() { if (this.view && this.view.visible) this.post({ type: 'status', data: await backend(['status']) }); }
+  async pushDelegations() { if (this.view && this.view.visible) this.post({ type: 'delegations', data: await backend(['delegations']) }); }
+  async pushLive() { if (this.view && this.view.visible) this.post({ type: 'live', data: { gateway: readLive(), slot: await readSlots() } }); }
   async pushWorkers() { if (this.view && this.view.visible) this.post({ type: 'workers', data: await backend(['workers']) }); }
   async pushModels() { this.post({ type: 'models', data: await backend(['models']) }); }
 
   async handle(message) {
-    if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); return; }
+    if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); await this.pushDelegations(); return; }
     if (message.type === 'config') { await this.runConfig(message); return; }
     if (message.type === 'open' && FILES[message.file]) { await vscode.window.showTextDocument(vscode.Uri.file(FILES[message.file])); return; }
     if (message.type === 'thinking') { await this.quickAnswer(['thinking', '--levels', message.levels]); return; }
-    if (message.type === 'quick') await this.runQuick(message.action, message.model);
+    if (message.type === 'quick') await this.runQuick(message.action, message.model, message.share);
     if (message.type === 'terminal') await this.runLong(message);
   }
 
@@ -87,10 +121,10 @@ class Panel {
     return answer;
   }
 
-  async runQuick(action, model) {
+  async runQuick(action, model, share) {
     const needsReload = NEEDS_RELOAD.includes(action);
     if (CONFIRM_QUICK[action] && !(await this.confirm(CONFIRM_QUICK[action], RELOAD_BUTTON))) return;
-    const answer = await this.quickAnswer(model ? [action, '--model', model] : [action]);
+    const answer = await this.quickAnswer(model ? [action, '--model', model].concat(share ? ['--share'] : []) : [action]);
     const text = 'ForemanKit: ' + (answer.message || answer.error);
     vscode.window.setStatusBarMessage(text, 6000);
     if (needsReload && !answer.error) vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -156,11 +190,14 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .levels label{margin-right:8px;font-size:12px} .grid{display:grid;grid-template-columns:1fr;gap:4px;font-size:12px;margin:6px 0}
  .grid label{display:flex;flex-direction:column;gap:2px} input[type=number],input:not([type]),select{width:100%;box-sizing:border-box}
  input:not([type=checkbox]):not([type=radio]){background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,transparent);padding:3px}
+ .days{display:flex;align-items:flex-end;gap:3px;height:34px;margin:4px 0} .days div{flex:1;background:var(--vscode-progressBar-background);min-height:2px;border-radius:2px;opacity:.8}
+ .call{font-size:11px;margin:2px 0;display:flex;gap:6px} .call .t{opacity:.6;min-width:34px} .call .bad{color:var(--vscode-errorForeground)}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
 <h3>Status</h3>
 <div class="row"><span class="dot" id="routerDot"></span><span id="routerText">router</span></div>
 <div class="row"><span class="dot" id="serverDot"></span><span id="serverText">llama-server</span></div>
+<div id="liveLine" class="info" style="display:none"></div>
 <div id="ctxWrap" style="display:none"><div class="bar"><div class="fill" id="ctxFill"></div></div><div class="info" id="ctxText"></div></div>
 <div id="error" class="err"></div>
 <div id="routerWarn" class="err" style="display:none">Router stopped: Claude Code in VS Code cannot reach any model, also not Anthropic. Start it, or use direct mode and reload the window.</div>
@@ -172,6 +209,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
+<label class="info"><input type="checkbox" id="shareLab"> Share with the lab (-Share: other PCs can use this server; needs FOREMANKIT_PEER_KEY)</label>
 <div class="info">Role of this server:</div>
 <div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
 <label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
@@ -202,6 +240,11 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>accepts data up to <select id="w_accept"><option>normal</option><option selected>internal</option><option>private</option></select></label>
 <label>priority (lower = first) <input id="w_priority" type="number" value="10" min="1" max="99"></label></div>
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
+<h3>Delegation</h3>
+<div id="delegSummary" class="info">no delegated calls yet</div>
+<div id="delegDays" class="days"></div>
+<div id="delegToday" class="info"></div>
+<div id="delegRecent"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
@@ -221,6 +264,37 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   for (const level of LEVELS) if (document.activeElement !== $('lvl_' + level)) $('lvl_' + level).checked = !!thinking[level];
  }
  function sendLevels() { send({ type: 'thinking', levels: LEVELS.map((l) => l + '=' + $('lvl_' + l).checked).join(',') }); }
+ function showLive(live) {
+  const line = $('liveLine'); const g = live.gateway; const slot = live.slot;
+  let text = '';
+  if (g && g.fresh && g.active) {
+   text = g.phase === 'reading prompt' ? 'reading the prompt... ' + Math.round(Date.now() / 1000 - g.since) + ' s'
+    : g.phase + ' - ' + g.tps.toFixed(1) + ' tok/s (' + g.tokens + ' tokens)';
+  } else if (slot && slot.busy) {
+   const pct = slot.promptTokens ? Math.round(100 * slot.promptDone / slot.promptTokens) : 0;
+   text = pct < 100 ? 'working on a delegated task: reading the prompt ' + pct + '%' : 'working on a delegated task';
+  } else if (g && g.tokens > 0) {
+   text = 'idle - last answer ' + g.tps.toFixed(1) + ' tok/s (' + g.tokens + ' tokens)';
+  }
+  line.style.display = text ? 'block' : 'none'; line.textContent = text;
+ }
+ const money = (v) => '$' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2));
+ function showDelegations(d) {
+  if (d.error) return;
+  $('delegSummary').textContent = 'today: ' + d.today.calls + ' delegated calls, ' + money(d.today.cost) + ' | last 7 days: ' + money(d.week_cost);
+  const max = Math.max(...d.days.map((x) => x.cost), 0.000001); const bars = $('delegDays'); bars.innerHTML = '';
+  for (const x of d.days) { const b = document.createElement('div'); b.style.height = Math.max(2, Math.round(34 * x.cost / max)) + 'px'; b.title = x.day + ': ' + money(x.cost); bars.appendChild(b); }
+  const targets = Object.entries(d.today.by_target).sort((a, b) => b[1].cost - a[1].cost);
+  $('delegToday').textContent = targets.length ? 'today by target: ' + targets.map(([n, v]) => n + ' ' + v.calls + 'x ' + money(v.cost)).join('; ') : '';
+  const box = $('delegRecent'); box.innerHTML = '';
+  for (const c of d.recent) {
+   const row = document.createElement('div'); row.className = 'call';
+   const t = document.createElement('span'); t.className = 't'; const when = new Date(c.ts * 1000); t.textContent = when.toTimeString().slice(0, 5); row.appendChild(t);
+   const text = document.createElement('span'); if (!c.ok) text.className = 'bad';
+   text.textContent = c.kind + ' -> ' + c.target + (c.escalated ? ' (escalated)' : '') + ' | ' + c.tokens + ' tok, ' + money(c.cost) + (c.seconds ? ', ' + c.seconds + ' s' : '') + (c.ok ? '' : ' FAILED');
+   row.appendChild(text); box.appendChild(row);
+  }
+ }
  function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
  function showStatus(s) {
   $('error').textContent = s.error || '';
@@ -298,14 +372,14 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   accept: $('w_accept').value, priority: Number($('w_priority').value) || 10 }); $('workerForm').style.display = 'none'; };
  $('models').onchange = showInfo;
  $('startServer').onclick = () => { startingUntil = Date.now() + 180000; showWaiting();
-  send({ type: 'quick', action: 'start-server', model: $('models').value }); };
+  send({ type: 'quick', action: 'start-server', model: $('models').value, share: $('shareLab').checked }); };
  $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value });
  $('routerStart').onclick = () => send({ type: 'quick', action: 'router-normal' });
  $('routerDirect').onclick = () => send({ type: 'quick', action: 'router-direct' });
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
- window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); });
+ window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data); });
 </script></body></html>`;
 
 function activate(context) {

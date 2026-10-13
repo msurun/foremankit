@@ -5,7 +5,7 @@ local_url: http://127.0.0.1:8080
 local_target: local-llm                  # model name sent to llama-server (it serves one model, whatever it is called)
 cloud_url: https://api.anthropic.com
 port: 8081
-context_tokens: 98304               # window of the local llama-server (-Ctx in llama/start-orchestrator.cmd); feeds the session-length hook
+context_tokens: 65536               # fallback only: the gateway reads the real window from the running llama-server (/props)
 prompt_file: orchestrator.md           # next to this file; re-read on every request, no restart needed
 language: English                     # the language the orchestrator talks to you in (fills {language} in the prompt)
                                        # Polish prompt: prompt_file: orchestrator.pl.md and language: Polish

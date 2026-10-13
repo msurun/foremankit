@@ -34,6 +34,15 @@ def test_server_start_is_detached_and_needs_a_model(monkeypatch):
         panel.start_server("")
 
 
+def test_server_can_be_started_shared_with_the_lab(monkeypatch):
+    calls = []
+    monkeypatch.setattr(panel.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert "-Share" in panel.start_server("a.gguf", share=True)
+    assert "'-Share'" in " ".join(calls[0])
+    panel.start_server("a.gguf")
+    assert "'-Share'" not in " ".join(calls[1])
+
+
 def test_tune_runs_the_tuner_and_then_the_context_sweep_as_one_job():
     tune = panel.command_for("tune", "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf")
     assert tune.index("stop-server") < tune.index("tune_llama.py") < tune.index("sweep_ctx.py")
@@ -284,3 +293,26 @@ def test_worker_test_says_so_when_nothing_answers(tmp_path: Path, monkeypatch):
     lab_with_worker(tmp_path, monkeypatch)
     panel.add_worker("dead", "http://127.0.0.1:9")
     assert "no connection" in panel.test_worker("dead")
+
+
+def test_delegations_sum_today_and_name_the_targets(tmp_path: Path, monkeypatch):
+    import datetime as dt
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    now = dt.datetime(2026, 10, 13, 15, 0).timestamp()
+    rows = [(now - 86400 * 2, "groq", None, "llama", 0.5, True), (now - 3600, "deepseek", None, "deepseek-flash", 0.002, True),
+            (now - 600, "deepseek", None, "deepseek-flash", 0.001, True), (now - 300, "llm", "legion", "qwen", 0.0, False)]
+    lines = [json.dumps({"ts": ts, "event": "call", "kind": "quick", "provider": provider, "node": node, "model": model,
+                         "success": ok, "cost_usd": cost, "tokens_in": 10, "tokens_out": 5, "dry_run": False})
+             for ts, provider, node, model, cost, ok in rows]
+    (tmp_path / "calls.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = panel.delegations(now)
+    assert result["today"]["calls"] == 3 and abs(result["today"]["cost"] - 0.003) < 1e-9
+    assert set(result["today"]["by_target"]) == {"deepseek / deepseek-flash", "llm@legion / qwen"}
+    assert abs(result["week_cost"] - 0.503) < 1e-9 and len(result["days"]) == 7
+    assert result["recent"][0]["target"] == "llm@legion / qwen" and result["recent"][0]["ok"] is False
+
+
+def test_delegations_with_no_log_are_empty(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    result = panel.delegations()
+    assert result["today"]["calls"] == 0 and result["recent"] == [] and result["week_cost"] == 0

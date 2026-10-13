@@ -59,8 +59,9 @@ TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/deleg
 # folder (llama/Start-Router.ps1 writes router.log and router.err there). --purge deletes them; TEMP_DIR is a
 # constant so that tests never touch the real temp folder.
 TEMP_DIR = Path(tempfile.gettempdir())
-GATEWAY_RUNTIME_FILES = ("gateway_context.json",)
-GATEWAY_LOG_FILES = ("router.log", "router.err")
+GATEWAY_RUNTIME_FILES = ("gateway_context.json", "local_role", "orchestrator_target.json", "workers.json", "router_off")
+GATEWAY_LOG_FILES = ("router.log", "router.err", "llama-server.log", "llama-server.log.err")
+ROUTER_OFF_FILE = "router_off"            # direct mode marker (panel); it must not outlive the installation
 
 
 # Extra tracked files outside ~/.claude: keys starting with "vscode/" resolve under the VS Code
@@ -366,6 +367,8 @@ class Installer:
         found += self._leftover_gateway_env(vscode / "settings.json")
         found += self._leftover_tasks(vscode / "tasks.json")
         found += [f"Task Scheduler entry {LOGON_TASK} still present"] if self.logon_task_registered() else []
+        link = self.extension_dir()
+        found += [f"VS Code panel extension still linked: {link}"] if (link.is_symlink() or link.exists()) else []
         found += self._leftover_legacy_rules()
         found += self._leftover_legacy_tasks(vscode / "tasks.json")
         return found
@@ -808,7 +811,8 @@ class Installer:
                    f"-RepetitionDuration (New-TimeSpan -Days 3650); "
                    f"$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew "
                    f"-ExecutionTimeLimit (New-TimeSpan -Minutes 5); "
-                   f"Register-ScheduledTask -TaskName '{LOGON_TASK}' -Action $a -Trigger @($logon, $again) -Settings $s -Force | Out-Null")
+                   f"Register-ScheduledTask -TaskName '{LOGON_TASK}' -Action $a -Trigger @($logon, $again) -Settings $s -Force | Out-Null; "
+                   f"Start-ScheduledTask -TaskName '{LOGON_TASK}'")
         self.say(f"register Task Scheduler entry '{LOGON_TASK}' (gateway at logon)")
         if os.environ.get(SCHEDULER_OFF_ENV):
             _fake_scheduler["registered"] = not self.dry
@@ -833,6 +837,14 @@ class Installer:
         manifest = json.loads((ROOT / "vscode-extension" / "package.json").read_text(encoding="utf-8"))
         folder = Path(os.environ.get(EXTENSIONS_DIR_ENV) or Path.home() / ".vscode" / "extensions")
         return folder / f"{manifest['publisher']}.{manifest['name']}-{manifest['version']}"
+
+    def forget_direct_mode(self) -> None:
+        """Delete the direct-mode marker: with the installation gone nothing may keep the router from starting."""
+        marker = STATE_DIR.parent / ROUTER_OFF_FILE
+        if marker.exists():
+            self.say(f"remove {marker}")
+            if not self.dry:
+                marker.unlink()
 
     def link_extension(self) -> None:
         """Make the panel visible in VS Code: a directory link to vscode-extension/ (updates with the repository)."""
@@ -900,8 +912,12 @@ class Installer:
             # Before the write: afterwards the key is always present, so we could not tell who set it.
             self._record_auto_tasks_marker(folder / "settings.json")
         settings, tasks = folder / "settings.json", folder / "tasks.json"
+        if remove:
+            self.unregister_logon_task()
+            self.unlink_extension()
+            self.forget_direct_mode()
         if remove and not (settings.exists() or tasks.exists()):
-            return   # nothing to undo; writing here would CREATE empty VS Code files
+            return   # nothing more to undo; writing here would CREATE empty VS Code files
         self.write_json(settings, lambda d: self.merged_vscode_settings(d, base_url, model_id, remove))
         if remove:
             self.write_json(settings, self._without_auto_tasks)
@@ -909,10 +925,7 @@ class Installer:
         stale = (TASK_SERVER, TASK_ROUTER) if (remove or sys.platform == "win32") else (TASK_SERVER,)
         if tasks.exists() or wanted:
             self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, wanted, remove, stale))
-        if remove:
-            self.unregister_logon_task()
-            self.unlink_extension()
-        else:
+        if not remove:
             self.register_logon_task()
             self.link_extension()
             print("  The gateway must run, or the plugin reaches no model at all (also not the cloud). "
