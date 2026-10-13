@@ -1054,7 +1054,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--with-llama", action="store_true",
                     help="with --local-orchestrator: download llama-server (llama/get_llama.py) when it is missing")
     ap.add_argument("--local-orchestrator", action="store_true",
-                    help="also route the Claude Code plugin through the gateway (local Qwen as orchestrator, VS Code only)")
+                    help="also check/download llama-server; installs the VS Code panel even with --skip-claude "
+                         "(the panel itself is installed by default; Claude Code stays in direct mode unless --router)")
+    ap.add_argument("--no-panel", action="store_true", help="do not install the VS Code panel (ForemanKit sidebar)")
     ap.add_argument("--skip-claude", action="store_true", help="only venv + package, do not touch ~/.claude")
     return ap
 
@@ -1113,20 +1115,22 @@ def run_uninstall(inst: Installer, args: argparse.Namespace) -> int:
 
 
 def run_install(inst: Installer, args: argparse.Namespace) -> None:
-    """Install: venv and package, then (unless skipped) the Claude Code parts, then the optional orchestrator."""
+    """Install: venv and package, then (unless skipped) the Claude Code parts and the VS Code panel (direct mode)."""
     py = inst.make_venv()
     inst.migrate_legacy()   # moves ~/.config/agentkit (API keys, state) and removes the old entries
-    if not args.skip_claude or args.local_orchestrator:
-        # Before the first change, so --restore-original has a baseline; VS Code files only when they will change.
-        inst.take_snapshot(VSCODE_TRACKED if args.local_orchestrator else ())
+    panel = args.local_orchestrator or not (args.skip_claude or args.no_panel)
+    if not args.skip_claude or panel:
+        # Before the first change, so --restore-original has a baseline; VS Code files only when they can change.
+        inst.take_snapshot(VSCODE_TRACKED if panel else ())
     if not args.skip_claude:
         inst.install_agents()
         inst.install_rules()
         inst.register_mcp(py)
         inst.install_hooks(py)
         inst.check_subagent_override()
-    if args.local_orchestrator:
+    if panel:
         inst.install_local_orchestrator(py, router=args.router)
+    if args.local_orchestrator:
         inst.ensure_llama_server(args.with_llama)
     report_keys()
     print(f"\nNext: `{py} -m foremankit.cli status`  (or activate .venv and run `foremankit status`)")
