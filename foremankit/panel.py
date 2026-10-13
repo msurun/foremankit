@@ -9,6 +9,8 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     start-router | stop-router | start-server --model F | stop-server | router-direct | router-normal
     role <orchestrator|worker|both>    what the local server is for
     profile-set --model F --fields '{"ctx": 65536, "temp": 0.6}'    hand-picked launch parameters
+    orchestrator --name <worker|this>    serve Claude Code from another machine of the lab
+    worker-enable true|false --name N    let the router use a worker or not
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
                             settings: the window must be reloaded afterwards)
@@ -32,9 +34,10 @@ from typing import Any
 
 from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, load_nodes, load_workers, self_name
+from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
-from foremankit.gateway import LOCAL_ROLE_FILE, local_role
+from foremankit.gateway import LOCAL_ROLE_FILE, ORCHESTRATOR_FILE, local_role, orchestrator_target
 
 ROOT = Path(__file__).resolve().parents[1]
 LLAMA = ROOT / "llama"
@@ -105,7 +108,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "orchestrator": orchestrator_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -193,19 +196,58 @@ def worker_status(url: str) -> dict[str, Any]:
     return {"up": models is not None, "model": listed[0].get("id")}
 
 
+def worker_enabled(name: str) -> bool:
+    """False while the router toggle `llm:<name>` is off (the worker stays configured but gets no tasks)."""
+    return normalize_toggle(StateStore().load().get("toggles", {}).get(f"llm:{name}")) != "off"
+
+
 def list_workers() -> list[dict[str, Any]]:
     """Every node except this machine: the lab's machines from nodes.yaml (read-only here) and the extra workers added in
-    the panel (`editable`), each with its live status."""
+    the panel (`editable`), each with its live status, whether the router may use it and whether it is the orchestrator."""
     nodes = load_nodes()
     me = self_name(nodes)
     extra = load_workers()
+    chosen = (orchestrator_target() or {}).get("name")
     rows = []
     for name, entry in (nodes.get("nodes") or {}).items():
         if name != me:
             url = worker_url(name, entry or {})
             rows.append({"name": name, "url": url, "accept": (entry or {}).get("accept", "private"),
-                         "priority": (entry or {}).get("priority"), "editable": name in extra, **worker_status(url)})
+                         "priority": (entry or {}).get("priority"), "editable": name in extra,
+                         "enabled": worker_enabled(name), "orchestrator": name == chosen, **worker_status(url)})
     return rows
+
+
+def set_worker_enabled(name: str, enabled: bool) -> str:
+    """Let the router use a worker (auto) or not (off) without deleting it."""
+    if name not in {row["name"] for row in list_workers()}:
+        raise ValueError(f"{name} is not a known worker")
+    StateStore().update(lambda state: state.setdefault("toggles", {}).__setitem__(f"llm:{name}", "auto" if enabled else "off"))
+    return f"worker {name} {'enabled' if enabled else 'disabled'}"
+
+
+def orchestrator_status() -> dict[str, Any]:
+    """Where Claude Code's local model runs: {"name": "this PC" or a worker name, "url", "up", "model"}."""
+    target = orchestrator_target()
+    if target is None:
+        return {"name": "this PC", "url": SERVER_URL}
+    return {"name": target.get("name", "?"), "url": target["url"], **worker_status(target["url"])}
+
+
+def set_orchestrator(name: str) -> str:
+    """Serve Claude Code from `name` (a worker of the pool, which must run its llama-server with -Share) or from this PC.
+
+    The gateway reads the file on every request: no restart. A remote machine needs the same FOREMANKIT_PEER_KEY."""
+    path = state_dir() / ORCHESTRATOR_FILE
+    if name in ("", "this", "this PC"):
+        path.unlink(missing_ok=True)
+        return "orchestrator: this PC"
+    row = next((worker for worker in list_workers() if worker["name"] == name), None)
+    if row is None or not row["url"]:
+        raise ValueError(f"{name} is not a known worker with an address")
+    path.write_text(json.dumps({"name": name, "url": row["url"]}), encoding="utf-8")
+    note = "" if row["up"] else " (it does not answer right now: start its llama-server with -Share)"
+    return f"orchestrator: {name} at {row['url']}{note}"
 
 
 def add_worker(name: str, url: str, accept: str = "internal", priority: int = 10) -> str:
@@ -377,6 +419,10 @@ def run_config_action(args: argparse.Namespace) -> str:
     try:
         if args.what == "role":
             return set_role(args.action or "")
+        if args.what == "orchestrator":
+            return set_orchestrator(args.name)
+        if args.what == "worker-enable":
+            return set_worker_enabled(args.name, args.action == "true")
         if args.what == "profile-set":
             return set_profile(args.model, json.loads(args.fields))
         if args.what == "worker-add":
@@ -389,7 +435,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "profile-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "orchestrator", "profile-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -407,7 +453,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps({"command": command_for(args.action, args.model)}))
     elif args.what == "workers":
         print(json.dumps(list_workers()))
-    elif args.what in ("role", "worker-add", "worker-remove", "profile-set"):
+    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "orchestrator", "profile-set"):
         print(json.dumps({"message": run_config_action(args)}))
     elif args.what == "thinking":
         print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))

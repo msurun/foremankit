@@ -34,15 +34,30 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
+ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
 LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default both)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
 client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=1800, write=60, pool=None))
 
 
+def orchestrator_target() -> dict[str, str] | None:
+    """The remote machine chosen in the panel to serve Claude Code ({"name", "url"}), or None for this PC."""
+    try:
+        target = json.loads((state_dir() / ORCHESTRATOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return target if isinstance(target, dict) and str(target.get("url", "")).startswith(("http://", "https://")) else None
+
+
 def settings() -> dict[str, Any]:
-    """orchestrator.yaml over the defaults; read on every request so edits need no restart."""
-    return {**DEFAULTS, **_read_yaml(config_dir() / CONFIG_NAME)}
+    """orchestrator.yaml over the defaults; read on every request so edits need no restart.
+
+    A remote orchestrator chosen in the panel replaces `local_url`: requests for the local models then go to that
+    machine's llama-server (with the lab key, see `peer_key`)."""
+    merged = {**DEFAULTS, **_read_yaml(config_dir() / CONFIG_NAME)}
+    target = orchestrator_target()
+    return {**merged, "local_url": target["url"]} if target else merged
 
 
 def read_prompt(cfg: dict[str, Any]) -> str:
@@ -79,7 +94,8 @@ def server_window(cfg: dict[str, Any]) -> int | None:
     if time.time() - _window_cache["at"] < WINDOW_CACHE_SECONDS:
         return _window_cache["value"]
     try:
-        props = httpx.get(cfg["local_url"].rstrip("/") + "/props", timeout=1.0).json()
+        headers = {"authorization": f"Bearer {peer_key()}"} if peer_key() else {}
+        props = httpx.get(cfg["local_url"].rstrip("/") + "/props", headers=headers, timeout=1.0).json()
         value = int(props["default_generation_settings"]["n_ctx"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         value = None
@@ -156,7 +172,7 @@ def local_role() -> str:
 
 def refusal() -> str | None:
     """Why a request to the local model must be refused right now, or None when it may go through."""
-    if local_role() == "worker":
+    if orchestrator_target() is None and local_role() == "worker":
         return "the local server works as a worker (delegated tasks only); switch it to orchestrator in the ForemanKit panel"
     return None
 

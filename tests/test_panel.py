@@ -186,3 +186,50 @@ def test_a_running_process_without_an_answer_is_reported_as_starting(monkeypatch
     assert panel.server_status() == {"up": False, "starting": True}
     monkeypatch.setattr(panel, "server_process_running", lambda: False)
     assert panel.server_status() == {"up": False, "starting": False}
+
+
+def lab_with_worker(tmp_path: Path, monkeypatch, up: bool = True) -> None:
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("FOREMANKIT_NODES", raising=False)
+    monkeypatch.setattr(panel, "worker_status", lambda url: {"up": up, "model": "m" if up else None})
+    panel.add_worker("garage", "http://192.168.1.50:8080", "private", 3)
+
+
+def test_orchestrator_can_move_to_another_machine_and_back(tmp_path: Path, monkeypatch):
+    from foremankit import gateway
+    lab_with_worker(tmp_path, monkeypatch)
+    assert "garage" in panel.set_orchestrator("garage")
+    assert gateway.settings()["local_url"] == "http://192.168.1.50:8080"
+    assert panel.list_workers()[0]["orchestrator"] is True
+    panel.set_orchestrator("this")
+    assert gateway.settings()["local_url"] != "http://192.168.1.50:8080" and gateway.orchestrator_target() is None
+
+
+def test_a_worker_role_does_not_refuse_claude_code_while_the_orchestrator_is_remote(tmp_path: Path, monkeypatch):
+    from foremankit import gateway
+    lab_with_worker(tmp_path, monkeypatch)
+    panel.set_role("worker")
+    assert gateway.refusal() is not None
+    panel.set_orchestrator("garage")
+    assert gateway.refusal() is None
+
+
+def test_unknown_machine_cannot_become_the_orchestrator(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch)
+    with pytest.raises(ValueError):
+        panel.set_orchestrator("nowhere")
+
+
+def test_remote_orchestrator_that_is_down_is_chosen_with_a_hint(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch, up=False)
+    assert "-Share" in panel.set_orchestrator("garage")
+
+
+def test_worker_can_be_disabled_for_the_router_without_deleting_it(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch)
+    assert panel.list_workers()[0]["enabled"] is True
+    panel.set_worker_enabled("garage", False)
+    assert panel.list_workers()[0]["enabled"] is False and panel.StateStore().load()["toggles"]["llm:garage"] == "off"
+    panel.set_worker_enabled("garage", True)
+    assert panel.list_workers()[0]["enabled"] is True

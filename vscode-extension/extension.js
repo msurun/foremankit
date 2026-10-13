@@ -97,8 +97,10 @@ class Panel {
     if (needsReload && answer.error) vscode.window.showErrorMessage(text);
   }
 
-  configArgs({ action, role, name, url, accept, priority, model, fields }) {
+  configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
+      orchestrator: ['orchestrator', '--name', name || 'this'],
+      workerEnable: ['worker-enable', String(!!enabled), '--name', name],
       role: ['role', role],
       workerAdd: ['worker-add', '--name', name, '--url', url, '--accept', accept, '--priority', String(priority || 10)],
       workerRemove: ['worker-remove', '--name', name],
@@ -187,6 +189,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info">Empty field = launcher default. Applies at the next server start. Tuning overwrites ctx, ncmoe and threads.</div>
 </details>
 <h3>Extra workers</h3>
+<div class="info">Orchestrator for Claude Code runs on:</div>
+<div id="orchChoice"></div>
 <div id="workers"></div>
 <div class="row"><button class="secondary" id="workerAddToggle">Add worker...</button></div>
 <div id="workerForm" style="display:none"><div class="grid">
@@ -250,19 +254,36 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  function fillAdvanced(m) { for (const name of PARAMS) $('p_' + name).value = m[name] == null ? '' : m[name]; }
  function showRole(role) { for (const r of document.querySelectorAll('input[name=role]')) if (document.activeElement !== r) r.checked = r.value === role; }
  function showWorkers(list) {
-  if (list.error) return; const box = $('workers'); box.innerHTML = '';
+  if (list.error) return; const box = $('workers'); box.innerHTML = ''; showOrchestratorChoice(list);
   if (list.length === 0) { box.textContent = 'none configured'; box.className = 'info'; return; }
   for (const w of list) {
    const row = document.createElement('div'); row.className = 'worker';
    const d = document.createElement('span'); d.className = 'dot ' + (w.up ? 'up' : 'down'); row.appendChild(d);
    const t = document.createElement('span'); t.textContent = w.name + ' ' + w.url + (w.up ? (w.model ? ' ' + w.model : '') : ' (down)') + ' [' + w.accept + ']'; row.appendChild(t);
-   if (w.editable) { const x = document.createElement('span'); x.className = 'x'; x.textContent = 'remove';
-    x.onclick = () => send({ type: 'config', action: 'workerRemove', name: w.name }); row.appendChild(x); }
+   const on = document.createElement('input'); on.type = 'checkbox'; on.checked = w.enabled; on.title = 'router may send tasks here';
+   on.onchange = () => send({ type: 'config', action: 'workerEnable', name: w.name, enabled: on.checked }); row.insertBefore(on, row.firstChild);
+   if (w.editable) {
+    const ed = document.createElement('button'); ed.className = 'secondary'; ed.textContent = 'Edit';
+    ed.onclick = () => { $('w_name').value = w.name; $('w_url').value = w.url; $('w_accept').value = w.accept; $('w_priority').value = w.priority || 10; $('workerForm').style.display = 'block'; };
+    const rm = document.createElement('button'); rm.className = 'secondary'; rm.textContent = 'Remove';
+    rm.onclick = () => send({ type: 'config', action: 'workerRemove', name: w.name }); row.appendChild(ed); row.appendChild(rm);
+   } else { const f = document.createElement('span'); f.className = 'info'; f.textContent = 'nodes.yaml'; row.appendChild(f); }
    box.appendChild(row);
   }
  }
  $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
  $('roleStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
+ function showOrchestratorChoice(list) {
+  const box = $('orchChoice'); box.innerHTML = '';
+  const options = [{ name: 'this', label: 'This PC', checked: !list.some((w) => w.orchestrator) }]
+   .concat(list.map((w) => ({ name: w.name, label: w.name + (w.up ? '' : ' (down)'), checked: w.orchestrator })));
+  for (const o of options) {
+   const l = document.createElement('label'); l.className = 'info'; l.style.marginRight = '10px';
+   const r = document.createElement('input'); r.type = 'radio'; r.name = 'orch'; r.checked = o.checked;
+   r.onchange = () => send({ type: 'config', action: 'orchestrator', name: o.name });
+   l.appendChild(r); l.appendChild(document.createTextNode(' ' + o.label)); box.appendChild(l);
+  }
+ }
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });
