@@ -10,7 +10,7 @@ even if the model forgets the CLAUDE.md rule. It never blocks the call. Two inde
    the local model and that model's window to `gateway_context.json` (state dir). The file is shared by every session, so
    the hook first checks that THIS session talks to the local model (its last answer was not produced by a `claude-*`
    model, see `uses_local_model`); a cloud session never gets the local model's fill level. While the file is fresh the hook
-   warns once per level at 60 % and 75 %; from 90 % it orders the model to stop its work and write a handoff, on every
+   warns once per level at 60 % and 75 %; from 85 % it orders the model to stop its work and write a handoff, on every
    prompt until the session is replaced. The size of a transcript file is no usable token count (JSONL overhead, tool
    results the gateway cuts), so cloud sessions get no token levels.
 """
@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-LEVELS = (0.60, 0.75, 0.90)       # fractions of the context window; the last one means: stop and hand over
+LEVELS = (0.60, 0.75, 0.85)       # fractions of the context window; the last one means: stop and hand over
 TAIL_BYTES = 256 * 1024           # how much of the transcript's end is searched for the model of the last answer
 GATEWAY_FRESH_S = 10 * 60         # older gateway data belongs to a finished local session
 # User-facing texts per language: English by default, Polish with FOREMANKIT_LANG=pl.

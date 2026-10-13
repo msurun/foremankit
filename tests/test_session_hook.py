@@ -169,14 +169,14 @@ def test_local_context_levels_escalate_once_each(tmp_path: Path) -> None:
     stdout, _ = run_hook(event, tmp_path, now=1_000_000)
     assert "systemMessage" in stdout and "64%" in stdout
     assert run_hook(event, tmp_path, now=1_000_000)[0] == ""    # same level: silent
-    write_gateway_usage(tmp_path, 60_000)                       # 92 %: level 3 (stop and hand over)
+    write_gateway_usage(tmp_path, 60_000)                       # 91 %: level 3 (stop and hand over)
     assert "told to stop" in json.loads(run_hook(event, tmp_path, now=1_000_000)[0])["systemMessage"]
 
 
 def test_messages_are_polish_when_foremankit_lang_is_pl(tmp_path: Path) -> None:
     transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     event = {"session_id": "1", "transcript_path": str(transcript)}
-    write_gateway_usage(tmp_path, 60_000)                       # 92 %: level 3
+    write_gateway_usage(tmp_path, 60_000)                       # 91 %: level 3
     stdout, _ = run_hook(event, tmp_path, now=1_000_000, language="pl")
     assert "zatrzymania pracy" in json.loads(stdout)["systemMessage"]
 
@@ -224,8 +224,8 @@ def test_a_session_without_an_answer_yet_is_not_treated_as_local(tmp_path: Path)
     assert stdout == ""
 
 
-def test_at_ninety_percent_the_local_model_is_told_to_stop_and_hand_over(tmp_path: Path) -> None:
-    write_usage(tmp_path, 59065)
+def test_at_eighty_five_percent_the_local_model_is_told_to_stop_and_hand_over(tmp_path: Path) -> None:
+    write_usage(tmp_path, 56000)
     transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     stdout, _ = run_hook({"session_id": "local", "transcript_path": str(transcript)}, tmp_path)
     context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
@@ -240,8 +240,8 @@ def test_the_stop_order_is_repeated_on_every_prompt_while_the_context_stays_full
     assert "STOP" in run_hook(event, tmp_path)[0] and "STOP" in run_hook(event, tmp_path)[0]
 
 
-def test_below_ninety_percent_there_is_no_stop_order(tmp_path: Path) -> None:
-    write_usage(tmp_path, 50000)
+def test_below_eighty_five_percent_there_is_no_stop_order(tmp_path: Path) -> None:
+    write_usage(tmp_path, 54000)
     transcript = create_model_transcript(tmp_path, "qwen3.6-35b-a3b-ud-q4_k_xl")
     stdout, _ = run_hook({"session_id": "local", "transcript_path": str(transcript)}, tmp_path)
     assert "STOP" not in stdout
