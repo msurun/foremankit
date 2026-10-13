@@ -14,6 +14,12 @@ language: English                     # the language the orchestrator talks to y
 # (no such tool) and all cloud requests pass through unchanged.
 main_loop_tools: [Agent, Task]
 
+# Requests without any tools (Claude Code's auto-mode safety check, session titles) expect a real Claude model and
+# a strict answer format; the local model fails them ("Error executing tool"). They go to the cloud as this model.
+# Subagents that carry tools stay local. false = send everything for local_models to the local model, as before.
+side_requests_to_cloud: true
+side_request_model: claude-sonnet-5-5
+
 # Claude Code's effort slider -> does the local model think? true/false per level (sent to llama-server per request as
 # chat_template_kwargs.enable_thinking, which overrides the server's start-up default). Levels not listed, and requests
 # without an effort, keep that default. llama.cpp has no per-request thinking budget, so "on" means unlimited thinking.

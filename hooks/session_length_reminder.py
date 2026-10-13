@@ -146,12 +146,62 @@ def remember(state: dict, state_file: Path) -> None:
     state_file.write_text(json.dumps(state), encoding="utf-8")
 
 
+def read_event() -> dict:
+    """The hook event from stdin (a UTF-8 BOM is tolerated); an empty dict when stdin holds no JSON."""
+    try:
+        return json.loads(sys.stdin.read().lstrip("﻿"))
+    except ValueError:
+        return {}
+
+
+def session_entry(state: dict, session_id: str) -> dict:
+    """This session's entry in the reminder state; an empty dict for a new or broken entry."""
+    entry = state.get(session_id)
+    return entry if isinstance(entry, dict) else {}
+
+
+def remind_context(state: dict, state_file: Path, session_id: str, fill: tuple) -> bool:
+    """Warn about the local model's context fill (level, tokens, window, fraction); True when this call printed a reminder."""
+    level, tokens, window, fraction = fill
+    session_state = session_entry(state, session_id)
+    if level == len(LEVELS):
+        emit(LEVEL_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window),
+             STOP_INSTRUCTION.format(pct=fraction, tokens=tokens, window=window))
+        return True
+    if level <= int(session_state.get("level", 0)):
+        return False
+    state[session_id] = {**session_state, "level": level}
+    remember(state, state_file)
+    text = LEVEL_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window)
+    emit(text, f"The local model's context is {fraction:.0%} full (~{tokens:,} of {window:,} tokens). At the next "
+               f"natural breakpoint save the state to a handoff file and suggest a NEW session in ONE line.")
+    return True
+
+
+def size_reminder(session_state: dict, transcript_path: str, now: float) -> dict:
+    """The session entry to store when the transcript-size reminder is due now; an empty dict when it is not."""
+    try:
+        size_mb = os.path.getsize(transcript_path) / (1024 * 1024)
+    except OSError:
+        return {}
+    threshold = number_env("FOREMANKIT_SESSION_REMINDER_MB", 8.0, positive=True)
+    if size_mb < threshold or not size_due(session_state, size_mb, now):
+        return {}
+    return {**session_state, "time": now, "mb": size_mb}
+
+
+def emit_size_reminder(size_mb: float) -> None:
+    """Print the note that the conversation transcript has grown large (the model suggests a new session at a breakpoint)."""
+    emit(LONG_TEXT[ui_language()].format(mb=size_mb),
+         f"The conversation transcript is about {size_mb:.0f} MB and every turn re-reads it. At the next natural "
+         f"breakpoint (a task finished and committed, results delivered) suggest in ONE line continuing in a NEW "
+         f"session after saving the state to memory or the repo. Never interrupt a task in progress; do not "
+         f"repeat this suggestion.")
+
+
 def run() -> int:
     """Read the hook event and print at most one reminder."""
-    try:
-        event = json.loads(sys.stdin.read().lstrip("﻿"))
-    except ValueError:
-        return 0
+    event = read_event()
     session_id, transcript_path = event.get("session_id"), event.get("transcript_path")
     if not session_id or not transcript_path:
         return 0
@@ -160,35 +210,14 @@ def run() -> int:
     state_file = state_dir / "session_reminder.json"
     state = load_json(state_file)
     now = number_env("FOREMANKIT_FAKE_NOW", time.time())
-    session_state = state.get(session_id)
-    session_state = session_state if isinstance(session_state, dict) else {}
-
-    level, tokens, window, fraction = context_level(state_dir, now) if uses_local_model(transcript_path) else (0, 0, 0, 0.0)
-    if level == len(LEVELS):
-        emit(LEVEL_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window),
-             STOP_INSTRUCTION.format(pct=fraction, tokens=tokens, window=window))
+    fill = context_level(state_dir, now) if uses_local_model(transcript_path) else (0, 0, 0, 0.0)
+    if remind_context(state, state_file, session_id, fill):
         return 0
-    if level > int(session_state.get("level", 0)):
-        state[session_id] = {**session_state, "level": level}
+    updated = size_reminder(session_entry(state, session_id), transcript_path, now)
+    if updated:
+        state[session_id] = updated
         remember(state, state_file)
-        text = LEVEL_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window)
-        emit(text, f"The local model's context is {fraction:.0%} full (~{tokens:,} of {window:,} tokens). At the next "
-                   f"natural breakpoint save the state to a handoff file and suggest a NEW session in ONE line.")
-        return 0
-
-    try:
-        size_mb = os.path.getsize(transcript_path) / (1024 * 1024)
-    except OSError:
-        return 0
-    threshold = number_env("FOREMANKIT_SESSION_REMINDER_MB", 8.0, positive=True)
-    if size_mb >= threshold and size_due(session_state, size_mb, now):
-        state[session_id] = {**session_state, "time": now, "mb": size_mb}
-        remember(state, state_file)
-        emit(LONG_TEXT[ui_language()].format(mb=size_mb),
-             f"The conversation transcript is about {size_mb:.0f} MB and every turn re-reads it. At the next natural "
-             f"breakpoint (a task finished and committed, results delivered) suggest in ONE line continuing in a NEW "
-             f"session after saving the state to memory or the repo. Never interrupt a task in progress; do not "
-             f"repeat this suggestion.")
+        emit_size_reminder(updated["mb"])
     return 0
 
 

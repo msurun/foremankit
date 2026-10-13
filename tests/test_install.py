@@ -244,3 +244,15 @@ def test_restore_original_in_dry_run_mode_changes_nothing(sandbox: Path) -> None
 
     assert (sandbox / CLAUDE_MD).read_bytes() == edited_bytes
     assert list(sandbox.glob(f"{CLAUDE_MD}.bak-foremankit-*")) == []
+
+
+def test_router_mode_is_detected_from_the_vscode_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(INSTALL.Installer, "vscode_user_dir", staticmethod(lambda: tmp_path))
+    installer = INSTALL.Installer.__new__(INSTALL.Installer)
+    assert installer.router_mode_active() is False
+
+    (tmp_path / SETTINGS_JSON).write_text('{"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8081"}}', encoding="utf-8")
+    assert installer.router_mode_active() is True
+
+    (tmp_path / SETTINGS_JSON).write_text('{"editor.fontSize": 14}', encoding="utf-8")
+    assert installer.router_mode_active() is False

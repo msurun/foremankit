@@ -40,7 +40,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
@@ -677,8 +677,8 @@ def run_config_action(args: argparse.Namespace) -> str:
         return f"not done: {problem}"
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Console entry: print JSON for status/models/command, run the quick actions."""
+def build_parser() -> argparse.ArgumentParser:
+    """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
     parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
@@ -694,31 +694,34 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--accept", default="internal")
     parser.add_argument("--priority", type=int, default=10)
     parser.add_argument("--levels", default="", help="thinking: comma list like low=false,high=true")
-    args = parser.parse_args(argv)
-    if args.what == "status":
-        print(json.dumps(status()))
-    elif args.what == "models":
-        print(json.dumps(list_models()))
-    elif args.what == "command":
-        print(json.dumps({"command": command_for(args.action, args.model)}))
-    elif args.what == "pair-host":
-        print(json.dumps(start_pairing_host()))
-    elif args.what == "pair-serve":
+    return parser
+
+
+def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
+    """Read-only actions and the function that answers each; the lambdas run only when their action is chosen."""
+    return {
+        "status": status,
+        "models": list_models,
+        "command": lambda: {"command": command_for(args.action, args.model)},
+        "pair-host": start_pairing_host,
+        "pair-firewall": lambda: {"message": open_pair_firewall()},
+        "pair-firewall-status": lambda: {"open": pair_firewall_open()},
+        "pair-state": pairing_state,
+        "pair-find": other_hosts,
+        "pair-join": lambda: {"message": run_join(args)},
+        "delegations": delegations,
+        "workers": list_workers,
+    }
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Console entry: print the JSON answer of a read-only action, or carry out a change or a quick action."""
+    args = build_parser().parse_args(argv)
+    answers = info_answers(args)
+    if args.what == "pair-serve":
         serve_pairing(os.environ["FOREMANKIT_PAIR_CODE"])
-    elif args.what == "pair-firewall":
-        print(json.dumps({"message": open_pair_firewall()}))
-    elif args.what == "pair-firewall-status":
-        print(json.dumps({"open": pair_firewall_open()}))
-    elif args.what == "pair-state":
-        print(json.dumps(pairing_state()))
-    elif args.what == "pair-find":
-        print(json.dumps(other_hosts()))
-    elif args.what == "pair-join":
-        print(json.dumps({"message": run_join(args)}))
-    elif args.what == "delegations":
-        print(json.dumps(delegations()))
-    elif args.what == "workers":
-        print(json.dumps(list_workers()))
+    elif args.what in answers:
+        print(json.dumps(answers[args.what]()))
     elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegation-set"):
         print(json.dumps({"message": run_config_action(args)}))
     elif args.what == "thinking":

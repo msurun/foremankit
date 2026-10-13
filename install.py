@@ -142,6 +142,77 @@ def find_claude() -> str | None:
     return str(bundled[-1]) if bundled else None
 
 
+def _hook_command(py: Path, script_name: str) -> str:
+    """Shell command that runs one of our hook scripts with the Python interpreter `py`."""
+    script = (ROOT / "hooks" / script_name).as_posix()
+    return f'"{py.as_posix()}" "{script}"'
+
+
+def _tool_entry(command: str) -> dict:
+    """A hook entry that fires for the delegate tool (matcher HOOK_TOOL)."""
+    return {"matcher": HOOK_TOOL, "hooks": [{"type": "command", "command": command}]}
+
+
+def _without_marked(entries: list, mark: str) -> list:
+    """The hook entries that do NOT run a command containing `mark`, i.e. everything that is not ours."""
+    return [e for e in entries if not any(mark in h.get("command", "") for h in e.get("hooks", []))]
+
+
+def _store_event(hooks: dict, event: str, kept: list) -> None:
+    """Write the entries back under `event`; an empty list drops the key so settings.json stays clean."""
+    if kept:
+        hooks[event] = kept
+    else:
+        hooks.pop(event, None)
+
+
+def _update_event(hooks: dict, event: str, mark: str, entry: dict | None) -> None:
+    """Replace our old entries under `event` (matched by `mark`) with `entry`; None only removes them."""
+    kept = _without_marked(hooks.get(event, []), mark)
+    if entry is not None:
+        kept.append(entry)
+    _store_event(hooks, event, kept)
+
+
+def _apply_notify(hooks: dict, py: Path, remove: bool) -> None:
+    """Notify hook: PreToolUse and PostToolUse on the delegate tool."""
+    command = _hook_command(py, "notify_delegate.py")
+    for event in ("PreToolUse", "PostToolUse"):
+        _update_event(hooks, event, HOOK_MARK, None if remove else _tool_entry(command))
+
+
+def _apply_session(hooks: dict, py: Path, remove: bool) -> None:
+    """Session-length reminder: UserPromptSubmit, no matcher."""
+    command = _hook_command(py, "session_length_reminder.py")
+    entry = {"hooks": [{"type": "command", "command": command}]}
+    _update_event(hooks, "UserPromptSubmit", SESSION_HOOK_MARK, None if remove else entry)
+
+
+def _apply_checkpoint(hooks: dict, py: Path, remove: bool) -> None:
+    """Auto-checkpoint: PostToolUse on the delegate tool, writes .agent-out/checkpoint-<time>.md."""
+    command = _hook_command(py, "auto_checkpoint.py")
+    _update_event(hooks, "PostToolUse", CHECKPOINT_HOOK_MARK, None if remove else _tool_entry(command))
+
+
+def _apply_nudge(hooks: dict, py: Path, remove: bool) -> None:
+    """Delegation counter: UserPromptSubmit, and PostToolUse on the tools whose output it measures."""
+    command = _hook_command(py, "delegation_nudge.py")
+    for event, matcher in (("UserPromptSubmit", None), ("PostToolUse", NUDGE_TOOLS)):
+        entry = {"hooks": [{"type": "command", "command": command}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        _update_event(hooks, event, NUDGE_HOOK_MARK, None if remove else entry)
+
+
+def _apply_hooks(hooks: dict, py: Path, remove: bool, only: str | None) -> None:
+    """Add or remove, in `hooks`, every hook group that `only` selects (None selects all of them)."""
+    groups = (("notify", _apply_notify), ("session", _apply_session),
+              ("checkpoint", _apply_checkpoint), ("nudge", _apply_nudge))
+    for name, apply in groups:
+        if only in (None, name):
+            apply(hooks, py, remove)
+
+
 class Installer:
     def __init__(self, dry: bool):
         self.dry = dry
@@ -715,50 +786,7 @@ class Installer:
             print(f"! {target} is not valid JSON: hook not installed, fix the file and re-run")
             return
         hooks = data.setdefault("hooks", {})
-        script = (ROOT / "hooks" / "notify_delegate.py").as_posix()
-        command = f'"{py.as_posix()}" "{script}"'
-        for event in (("PreToolUse", "PostToolUse") if only in (None, "notify") else ()):
-            kept = [e for e in hooks.get(event, [])
-                    if not any(HOOK_MARK in h.get("command", "") for h in e.get("hooks", []))]
-            if not remove:
-                kept.append({"matcher": HOOK_TOOL, "hooks": [{"type": "command", "command": command}]})
-            if kept:
-                hooks[event] = kept
-            else:
-                hooks.pop(event, None)
-        if only in (None, "session"):
-            session = (ROOT / "hooks" / "session_length_reminder.py").as_posix()
-            kept = [e for e in hooks.get("UserPromptSubmit", [])
-                    if not any(SESSION_HOOK_MARK in h.get("command", "") for h in e.get("hooks", []))]
-            if not remove:
-                kept.append({"hooks": [{"type": "command", "command": f'"{py.as_posix()}" "{session}"'}]})
-            if kept:
-                hooks["UserPromptSubmit"] = kept
-            else:
-                hooks.pop("UserPromptSubmit", None)
-        # auto-checkpoint hook: PostToolUse on delegate → writes .agent-out/checkpoint-<time>.md after agent tasks
-        if only in (None, "checkpoint"):
-            checkpoint = (ROOT / "hooks" / "auto_checkpoint.py").as_posix()
-            kept = [e for e in hooks.get("PostToolUse", [])
-                    if not any(CHECKPOINT_HOOK_MARK in h.get("command", "") for h in e.get("hooks", []))]
-            if not remove:
-                kept.append({"matcher": HOOK_TOOL, "hooks": [{"type": "command", "command": f'"{py.as_posix()}" "{checkpoint}"'}]})
-            if kept:
-                hooks["PostToolUse"] = kept
-            else:
-                hooks.pop("PostToolUse", None)
-        if only in (None, "nudge"):
-            nudge = f'"{py.as_posix()}" "{(ROOT / "hooks" / "delegation_nudge.py").as_posix()}"'
-            for event, matcher in (("UserPromptSubmit", None), ("PostToolUse", NUDGE_TOOLS)):
-                kept = [e for e in hooks.get(event, [])
-                        if not any(NUDGE_HOOK_MARK in h.get("command", "") for h in e.get("hooks", []))]
-                if not remove:
-                    entry = {"hooks": [{"type": "command", "command": nudge}]}
-                    kept.append({"matcher": matcher, **entry} if matcher else entry)
-                if kept:
-                    hooks[event] = kept
-                else:
-                    hooks.pop(event, None)
+        _apply_hooks(hooks, py, remove, only)
         if not hooks:
             data.pop("hooks")
         text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -942,6 +970,14 @@ class Installer:
         if tasks.exists():
             self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, [], True, (TASK_SERVER, TASK_ROUTER)))
 
+    def router_mode_active(self) -> bool:
+        """True when the VS Code user settings still point Claude Code at the local gateway."""
+        settings = self.vscode_user_dir() / "settings.json"
+        if not settings.exists():
+            return False
+        port = yaml_load(ROOT / "config" / "orchestrator.yaml").get("port", 8081)
+        return f"127.0.0.1:{port}" in settings.read_text(encoding="utf-8-sig", errors="replace")
+
     def install_local_orchestrator(self, py: Path, remove: bool = False, router: bool = False) -> None:
         """The ForemanKit panel in VS Code. Direct mode stays the default: the router is only set up with `router=True`
         (or later with the panel's "Router mode" switch), and removed again by `remove` or the panel's "Direct mode"."""
@@ -952,6 +988,9 @@ class Installer:
         self.link_extension()
         if router:
             self.enable_router_mode(py)
+        elif self.router_mode_active():
+            print("! VS Code is still in ROUTER mode (gateway entries in its settings): open the ForemanKit panel and click "
+                  "\"Stop (direct mode)\" - or run  python install.py --local-orchestrator --uninstall  - to talk to Anthropic directly")
         print("  ForemanKit panel installed: reload the VS Code window once and open the helmet icon in the sidebar. "
               "Claude Code talks straight to Anthropic (direct mode); switch to router mode in the panel to use the local models. "
               "The llama-server is not started automatically. Undo: python install.py --uninstall")

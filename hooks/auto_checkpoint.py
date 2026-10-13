@@ -24,85 +24,105 @@ def main() -> int:
 
 
 def run() -> int:
+    """Hook entry: record a checkpoint after a delegate call and tell the user; returns the exit code."""
     try:
         event = json.loads(sys.stdin.read().lstrip("﻿"))
     except ValueError:
         return 0
 
     # Only trigger on PostToolUse for the delegate tool
-    if event.get("hook_event_name") != "PostToolUse":
+    if not _is_delegate_post_tool_event(event):
         return 0
 
-    tool_name = event.get("tool_name", "")
-    if tool_name != "mcp__foremankit__delegate":
-        return 0
-
-    # Parse tool input to get task context
-    tool_input = event.get("tool_input") or {}
-    kind = tool_input.get("kind", "")
-    task_desc = tool_input.get("task", "")
-
+    kind, task_desc = _task_fields(event)
     # Skip quick/status probes — only checkpoint real agent tasks
     if kind in ("quick",) or not task_desc:
         return 0
 
-    # Parse tool response
+    # Determine project root: look for .agent-out in current working dir or parent
+    project_root = _find_project_root()
+    state_dir = _prepare_state_dir()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    checkpoints = _record_checkpoint(state_dir, kind, task_desc, timestamp)
+    if project_root:
+        compact = _build_compact(kind, task_desc, _response_text(event), checkpoints)
+        checkpoint_file = _write_checkpoint(project_root, timestamp, compact)
+        _notify_user(checkpoint_file, kind, task_desc)
+
+    return 0
+
+
+def _is_delegate_post_tool_event(event: dict) -> bool:
+    """True only for a PostToolUse event of the foremankit delegate tool."""
+    return (
+        event.get("hook_event_name") == "PostToolUse"
+        and event.get("tool_name", "") == "mcp__foremankit__delegate"
+    )
+
+
+def _task_fields(event: dict) -> tuple[str, str]:
+    """Return (kind, task description) from the delegate call's tool input."""
+    tool_input = event.get("tool_input") or {}
+    return tool_input.get("kind", ""), tool_input.get("task", "")
+
+
+def _response_text(event: dict) -> str:
+    """Flatten the tool response (dict, list or plain value) into plain text."""
     tool_response = event.get("tool_response") or ""
     if isinstance(tool_response, dict):
-        response_text = json.dumps(tool_response, ensure_ascii=False)
-    elif isinstance(tool_response, list):
-        response_text = "\n".join(
+        return json.dumps(tool_response, ensure_ascii=False)
+    if isinstance(tool_response, list):
+        return "\n".join(
             json.dumps(item, ensure_ascii=False) if isinstance(item, dict) else str(item)
             for item in tool_response
         )
-    else:
-        response_text = str(tool_response)
+    return str(tool_response)
 
-    # Determine project root: look for .agent-out in current working dir or parent
-    project_root = _find_project_root()
 
-    # State dir
+def _prepare_state_dir() -> Path:
+    """Return the state directory (FOREMANKIT_STATE_DIR or ~/.config/foremankit), creating it."""
     state_dir = Path(os.getenv("FOREMANKIT_STATE_DIR", "~/.config/foremankit")).expanduser()
     state_dir.mkdir(parents=True, exist_ok=True)
-    state = _load_state(state_dir)
+    return state_dir
 
-    # Build checkpoint content
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+def _record_checkpoint(state_dir: Path, kind: str, task_desc: str, timestamp: str) -> list:
+    """Append this task to the session state, save it, and return the full checkpoint list."""
+    state = _load_state(state_dir)
     checkpoint_entry = {
         "timestamp": timestamp,
         "kind": kind,
         "task": task_desc[:300],  # cap length
         "status": "completed",
     }
-
-    # Update state
     checkpoints = state.get("checkpoints", [])
     checkpoints.append(checkpoint_entry)
     state["checkpoints"] = checkpoints
     state["last_checkpoint"] = timestamp
     state["last_checkpoint_task"] = task_desc[:200]
     _save_state(state_dir, state)
+    return checkpoints
 
-    # Write the checkpoint file into <project root>/.agent-out
-    if project_root:
-        checkpoint_dir = project_root / ".agent-out"
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_file = checkpoint_dir / f"checkpoint-{timestamp}.md"
 
-        compact = _build_compact(kind, task_desc, response_text, checkpoints)
-        checkpoint_file.write_text(compact, encoding="utf-8")
+def _write_checkpoint(project_root: Path, timestamp: str, compact: str) -> Path:
+    """Write the compact summary into <project root>/.agent-out and return its path."""
+    checkpoint_dir = project_root / ".agent-out"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_file = checkpoint_dir / f"checkpoint-{timestamp}.md"
+    checkpoint_file.write_text(compact, encoding="utf-8")
+    return checkpoint_file
 
-        # Notify user
-        print(json.dumps({
-            "systemMessage": f"foremankit: auto-checkpoint zapisany → {checkpoint_file.name}",
-            "hookSpecificOutput": {
-                "hookEventName": "PostToolUse",
-                "additionalContext": f"Checkpoint saved to {checkpoint_file.name}. "
-                                     f"Task: {kind} — {task_desc[:150]}"
-            }
-        }))
 
-    return 0
+def _notify_user(checkpoint_file: Path, kind: str, task_desc: str) -> None:
+    """Print the hook JSON that shows the saved checkpoint to the user and the model."""
+    print(json.dumps({
+        "systemMessage": f"foremankit: auto-checkpoint zapisany → {checkpoint_file.name}",
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": f"Checkpoint saved to {checkpoint_file.name}. "
+                                 f"Task: {kind} — {task_desc[:150]}"
+        }
+    }))
 
 
 def _find_project_root() -> Path | None:
@@ -141,8 +161,8 @@ def _build_compact(kind: str, task: str, response: str, checkpoints: list) -> st
     # Last 5 checkpoints summary
     recent = checkpoints[-5:] if len(checkpoints) > 5 else checkpoints
     recent_lines = "\n".join(
-        f"- [{c.get('timestamp', '?')}] {c.get('kind', '?')}: {c.get('task', '?')[:120]}"
-        for c in recent
+        f"- [{entry.get('timestamp', '?')}] {entry.get('kind', '?')}: {entry.get('task', '?')[:120]}"
+        for entry in recent
     )
 
     compact = f"""## Kontekst sesji

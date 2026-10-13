@@ -35,6 +35,7 @@ CREDENTIALS = {"x-api-key", "authorization"}
 DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:8080", "local_target": "local-llm",
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
+            "side_requests_to_cloud": True, "side_request_model": "claude-sonnet-5-5",
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
@@ -193,6 +194,21 @@ def parse_body(body: bytes) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def is_toolless_message(path: str, data: dict[str, Any] | None) -> bool:
+    """True for a /v1/messages request without tools: the auto-mode safety check, titles and similar side calls.
+
+    Claude Code expects a real Claude model to answer them in a strict format; the local model does not, and the
+    session fails with a bare 'Error executing tool'. Subagents with tools stay local."""
+    return path == "/v1/messages" and data is not None and not data.get("tools")
+
+
+def send_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> bytes:
+    """Re-aim a local call at the cloud with a real Claude model; returns the new request body."""
+    call.local = False
+    call.note = f" (side request without tools -> cloud as {cfg['side_request_model']})"
+    return json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
+
+
 def local_role() -> str:
     """What the local llama-server is for: orchestrator (Claude Code), worker (delegated tasks) or both."""
     try:
@@ -236,7 +252,9 @@ async def handle(request: Request) -> Response:
     if reason:
         call.log(503)
         return switched_off(reason)
-    if call.local and data is not None:
+    if call.local and cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
+        body = send_to_cloud(call, data, cfg)
+    elif call.local and data is not None:
         data, call.note = shape_local(data, cfg)
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
     try:

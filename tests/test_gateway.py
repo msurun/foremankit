@@ -420,3 +420,87 @@ def test_side_requests_are_described_in_the_log_line(tmp_path, monkeypatch):
                "messages": [{"role": "user", "content": "x" * 8000}]}
     _, note = gateway.shape_local(request, gateway.settings())
     assert "subagent: untouched" in note and "tools=0" in note and "stream=False" in note and "security monitor" in note
+
+
+# --- gateway: toolless side requests go to the cloud -------------------------
+
+class FakeUpstreamResponse:
+    """Stands in for an httpx streaming response: a status, headers and an empty body."""
+    status_code = 200
+    headers = {"content-type": "application/json"}
+
+    async def aiter_raw(self):
+        yield b"{}"
+
+    async def aclose(self):
+        return None
+
+
+@pytest.fixture
+def fake_upstream(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Replaces the shared httpx client so each forwarded request is recorded instead of sent."""
+    sent: list = []
+
+    async def fake_send(request, stream=True):
+        sent.append(request)
+        return FakeUpstreamResponse()
+
+    monkeypatch.setattr(gateway.client, "send", fake_send)
+    return sent
+
+
+@pytest.fixture
+def gateway_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Config and state dirs in tmp_path, with the local role set to orchestrator so requests are not refused."""
+    config = tmp_path / "config"
+    state = tmp_path / "state"
+    config.mkdir()
+    state.mkdir()
+    (state / gateway.LOCAL_ROLE_FILE).write_text("orchestrator", encoding="utf-8")
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(config))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(state))
+    return config
+
+
+def post_through_gateway(path: str, data: dict) -> None:
+    """Send one POST with a JSON body through gateway.handle, as Claude Code would."""
+    import asyncio
+    body = json.dumps(data).encode("utf-8")
+    scope = {"type": "http", "method": "POST", "path": path, "query_string": b"",
+             "headers": [(b"content-type", b"application/json"), (b"x-api-key", b"user-key")]}
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    asyncio.run(gateway.handle(Request(scope, receive)))
+
+
+def test_a_toolless_messages_request_for_the_local_model_reaches_the_cloud_with_the_side_model(
+        gateway_dirs: Path, fake_upstream: list, capsys: pytest.CaptureFixture):
+    post_through_gateway("/v1/messages", {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]})
+    upstream = fake_upstream[-1]
+    assert str(upstream.url).startswith("https://api.anthropic.com/v1/messages")
+    assert json.loads(upstream.content)["model"] == "claude-sonnet-5-5"
+    assert "side request without tools -> cloud" in capsys.readouterr().out
+
+
+def test_a_messages_request_with_a_tool_still_reaches_the_local_upstream(
+        gateway_dirs: Path, fake_upstream: list):
+    post_through_gateway("/v1/messages", {"model": "claude-sonnet-5", "tools": [{"name": "Read"}],
+                                          "messages": [{"role": "user", "content": "hi"}]})
+    upstream = fake_upstream[-1]
+    assert str(upstream.url).startswith("http://127.0.0.1:8080/v1/messages")
+    assert json.loads(upstream.content)["model"] == "local-llm"
+
+
+def test_a_count_tokens_request_without_tools_stays_local(gateway_dirs: Path, fake_upstream: list):
+    post_through_gateway("/v1/messages/count_tokens", {"model": "claude-sonnet-5",
+                                                       "messages": [{"role": "user", "content": "hi"}]})
+    assert str(fake_upstream[-1].url).startswith("http://127.0.0.1:8080/v1/messages/count_tokens")
+
+
+def test_a_toolless_request_stays_local_when_side_requests_to_cloud_is_off(
+        gateway_dirs: Path, fake_upstream: list):
+    (gateway_dirs / "orchestrator.yaml").write_text("side_requests_to_cloud: false\n", encoding="utf-8")
+    post_through_gateway("/v1/messages", {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]})
+    assert str(fake_upstream[-1].url).startswith("http://127.0.0.1:8080/v1/messages")

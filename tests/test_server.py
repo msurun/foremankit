@@ -37,3 +37,17 @@ def test_stdio_server_exposes_two_tools(tmp_path):
     assert names == ["delegate", "router_status"]
     assert len(res.content) == 1 and "DRY RUN" in res.content[0].text and "file:" in res.content[0].text
     assert "providers:" in status.content[0].text
+
+
+def test_failing_tool_returns_readable_error_and_logs_traceback(tmp_path, monkeypatch):
+    from foremankit import server
+
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+
+    def explode() -> str:
+        raise ValueError("boom")
+
+    message = anyio.run(server._run_guarded, "delegate", explode)
+
+    assert "ValueError: boom" in message
+    assert "ValueError" in server.error_log_path().read_text(encoding="utf-8")
