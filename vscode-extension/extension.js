@@ -92,12 +92,14 @@ class Panel {
     view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); });
     this.pushStatus();
     this.pushWorkers();
+    this.pushFirewall();
     this.pushModels();
   }
 
   post(message) { if (this.view) this.view.webview.postMessage(message); }
   async pushStatus() { if (this.view && this.view.visible) this.post({ type: 'status', data: await backend(['status']) }); }
   async pushDelegations() { if (this.view && this.view.visible) this.post({ type: 'delegations', data: await backend(['delegations']) }); }
+  async pushFirewall() { this.post({ type: 'firewall', data: await backend(['pair-firewall-status']) }); }
   async pushLive() { if (this.view && this.view.visible) this.post({ type: 'live', data: { gateway: readLive(), slot: await readSlots() } }); }
   async pushWorkers() { if (this.view && this.view.visible) this.post({ type: 'workers', data: await backend(['workers']) }); }
   async pushModels() { this.post({ type: 'models', data: await backend(['models']) }); }
@@ -164,6 +166,10 @@ class Panel {
       if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
       this.post({ type: 'pairState', data: { state: 'waiting', code: answer.code, expires: answer.expires } });
       this.watchPairing();
+    } else if (action === 'firewall') {
+      const answer = await backend(['pair-firewall']);
+      vscode.window.showInformationMessage('ForemanKit: ' + (answer.message || answer.error));
+      await this.pushFirewall();
     } else if (action === 'find') {
       this.post({ type: 'pairFound', data: await backend(['pair-find']) });
     } else if (action === 'join') {
@@ -275,7 +281,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>accepts data up to <select id="w_accept"><option>normal</option><option selected>internal</option><option>private</option></select></label>
 <label>priority (lower = first) <input id="w_priority" type="number" value="10" min="1" max="99"></label></div>
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
-<div class="info" style="margin-top:8px">Pair another PC of yours (it gets the lab key without copying files; Windows asks once to allow Python on private networks - allow it):</div>
+<div class="info" style="margin-top:8px">Pair another PC of yours (it gets the lab key without copying files):</div>
+<div id="fwLine" class="info"></div>
+<div class="row"><button class="secondary" id="pairFirewall">Open firewall (Private + Public)</button></div>
 <div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
 <div id="pairBox" class="info"></div>
 <div id="pairFound"></div>
@@ -374,6 +382,12 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
   $('delegOff').style.display = any ? 'none' : 'block';
  }
+ function showFirewall(f) {
+  const open = f && f.open;
+  $('fwLine').textContent = f && f.open === null ? '' : open ? 'Firewall: open for pairing on Private and Public networks (this subnet only).'
+   : 'Firewall: not open yet. Other computers cannot reach pairing until you open it (Windows asks for administrator consent once).';
+  $('pairFirewall').style.display = f && f.open === null ? 'none' : (open ? 'none' : 'inline-block');
+ }
  function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
  function showStatus(s) {
   $('error').textContent = s.error || '';
@@ -442,6 +456,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    l.appendChild(r); l.appendChild(document.createTextNode(' ' + o.label)); box.appendChild(l);
   }
  }
+ $('pairFirewall').onclick = () => send({ type: 'pair', action: 'firewall' });
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
@@ -463,7 +478,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
  window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
-  if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
+  if (e.data.type === 'firewall') showFirewall(e.data.data); if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
 </script></body></html>`;
 
 function activate(context) {

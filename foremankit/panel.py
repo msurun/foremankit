@@ -235,6 +235,37 @@ def call_log() -> Any:
     return CallLog()
 
 
+def listening_programs() -> list[str]:
+    """The python.exe files a firewall rule must name: the venv launcher and the base interpreter it starts (the process
+    that opens the socket is the base one, and Windows rules match the file)."""
+    base = getattr(sys, "_base_executable", "") or str(Path(sys.base_prefix) / "python.exe")
+    return list(dict.fromkeys([sys.executable, base]))
+
+
+def pair_firewall_open() -> bool | None:
+    """True when allow rules for pairing exist on both the Private and the Public profile; None off Windows (no rule needed)."""
+    if os.name != "nt":
+        return None
+    query = ("(Get-NetFirewallRule -DisplayName 'ForemanKit pairing*' -ErrorAction SilentlyContinue | "
+             "Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' } | ForEach-Object { $_.Profile }) -join ','")
+    profiles = subprocess.run(["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True, check=False).stdout
+    return "Private" in profiles and "Public" in profiles
+
+
+def open_pair_firewall() -> str:
+    """Create the firewall rules for pairing on Private and Public networks. Windows asks for administrator consent (UAC)
+    once; the script runs elevated and the result is checked afterwards."""
+    if os.name != "nt":
+        return "no firewall rule needed on this system"
+    script = LLAMA / "pair-firewall.ps1"
+    programs = ";".join(listening_programs())
+    inner = f'-NoProfile -ExecutionPolicy Bypass -File "{script}" -Python "{programs}"'
+    subprocess.run(["powershell", "-NoProfile", "-Command",
+                    f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{inner}'"], check=False)
+    return ("firewall open for pairing on Private and Public networks (local subnet only)" if pair_firewall_open()
+            else "the firewall was not changed (administrator consent refused or the script failed)")
+
+
 def my_identity() -> dict[str, Any]:
     """This computer as the lab sees it: a worker-safe name and the llama-server port."""
     name = re.sub(r"[^a-z0-9_-]", "-", platform.node().lower()).strip("-")[:32] or "pc"
@@ -649,7 +680,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -674,6 +705,10 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(start_pairing_host()))
     elif args.what == "pair-serve":
         serve_pairing(os.environ["FOREMANKIT_PAIR_CODE"])
+    elif args.what == "pair-firewall":
+        print(json.dumps({"message": open_pair_firewall()}))
+    elif args.what == "pair-firewall-status":
+        print(json.dumps({"open": pair_firewall_open()}))
     elif args.what == "pair-state":
         print(json.dumps(pairing_state()))
     elif args.what == "pair-find":

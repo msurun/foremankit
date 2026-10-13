@@ -353,3 +353,26 @@ def test_delegation_can_be_switched_off_as_a_whole_and_per_category(tmp_path: Pa
     assert panel.delegation_switches() == {"paid": False, "free": False, "local": True}
     panel.set_delegation("all", True)
     assert all(panel.delegation_switches().values())
+
+
+def test_firewall_rules_name_the_venv_launcher_and_the_base_interpreter(monkeypatch):
+    monkeypatch.setattr(panel.sys, "executable", r"C:\proj\.venv\Scripts\python.exe")
+    monkeypatch.setattr(panel.sys, "_base_executable", r"C:\Python310\python.exe", raising=False)
+    assert panel.listening_programs() == [r"C:\proj\.venv\Scripts\python.exe", r"C:\Python310\python.exe"]
+
+
+def test_firewall_counts_as_open_only_when_private_and_public_are_both_allowed(monkeypatch):
+    monkeypatch.setattr(panel.os, "name", "nt")
+    for output, expected in (("Private,Public", True), ("Private", False), ("Public", False), ("", False)):
+        monkeypatch.setattr(panel.subprocess, "run", lambda *a, _o=output, **k: type("R", (), {"stdout": _o})())
+        assert panel.pair_firewall_open() is expected
+
+
+def test_no_firewall_step_is_offered_off_windows(monkeypatch):
+    monkeypatch.setattr(panel.os, "name", "posix")
+    assert panel.pair_firewall_open() is None and "no firewall rule needed" in panel.open_pair_firewall()
+
+
+def test_the_firewall_script_names_both_profiles_and_limits_the_remote_scope():
+    script = (panel.LLAMA / "pair-firewall.ps1").read_text(encoding="utf-8")
+    assert "'Private', 'Public'" in script and "-RemoteAddress LocalSubnet" in script and "8766" in script and "8767" in script
