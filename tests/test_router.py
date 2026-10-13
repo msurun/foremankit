@@ -771,3 +771,16 @@ def test_switching_paid_delegation_off_skips_paid_sources(monkeypatch, make_rout
     res = router.delegate("x", kind="quick", sensitivity="normal")
     assert res["provider"] == "llm"
     assert "generativelanguage.googleapis.com" not in mock.hosts()
+
+
+def test_delegate_with_everything_switched_off_tells_the_caller_to_do_the_work_itself(monkeypatch, mock, make_router):
+    from foremankit import delegation
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
+    mock.on(DEEPSEEK, "/chat/completions", chat_json())
+    router = make_router()
+    delegation.set_switch(router.store, "all", "off")
+    with pytest.raises(RouterError, match="DELEGATION IS SWITCHED OFF"):
+        router.delegate("anything", kind="quick")
+    assert not any(call.startswith(DEEPSEEK) for call in mock.calls)
+    delegation.set_switch(router.store, "paid", "on")
+    assert router.delegate("anything", kind="bulk_code")["provider"] == "deepseek"

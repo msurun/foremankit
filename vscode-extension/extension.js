@@ -135,6 +135,7 @@ class Panel {
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
+      delegationSet: ['delegation-set', String(!!enabled), '--name', name],
       workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
       role: ['role', role],
@@ -275,6 +276,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>priority (lower = first) <input id="w_priority" type="number" value="10" min="1" max="99"></label></div>
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
 <h3>Delegation</h3>
+<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on Claude)</label>
+<div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
+<div id="delegOff" class="err" style="display:none">Delegation is OFF: Claude does every task itself, nothing goes to cheaper models.</div>
 <div id="delegSummary" class="info">no delegated calls yet</div>
 <div id="delegDays" class="days"></div>
 <div id="delegToday" class="info"></div>
@@ -364,6 +368,13 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    box.appendChild(row);
   }
  }
+ function showDelegationSwitches(d) {
+  if (!d) return;
+  const any = d.paid || d.free || d.local;
+  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
+  if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
+  $('delegOff').style.display = any ? 'none' : 'block';
+ }
  function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
  function showStatus(s) {
   $('error').textContent = s.error || '';
@@ -371,7 +382,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
   $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
-  showLevels(s.thinking); showRole(s.role);
+  showLevels(s.thinking); showRole(s.role); showDelegationSwitches(s.delegation);
   $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   const waiting = !s.server.up && (s.server.starting || Date.now() < startingUntil);
@@ -434,6 +445,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  }
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
+ $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
+ for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });

@@ -342,3 +342,14 @@ def test_delegated_tokens_are_priced_as_if_they_ran_on_claude(tmp_path: Path, mo
     worth = panel.delegations(now)["claude_equivalent"]
     assert abs(worth["today"]["haiku-5.5"] - 0.15) < 1e-9 and abs(worth["today"]["sonnet-5.5"] - 3.0) < 1e-9
     assert worth["week"] == worth["today"]
+
+
+def test_delegation_can_be_switched_off_as_a_whole_and_per_category(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    assert panel.delegation_switches() == {"paid": True, "free": True, "local": True}
+    assert "everything runs on Claude" in panel.set_delegation("all", False)
+    assert panel.delegation_switches() == {"paid": False, "free": False, "local": False}
+    panel.set_delegation("local", True)
+    assert panel.delegation_switches() == {"paid": False, "free": False, "local": True}
+    panel.set_delegation("all", True)
+    assert all(panel.delegation_switches().values())

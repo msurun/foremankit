@@ -43,6 +43,15 @@ def is_switched_off(state: dict, category: str) -> bool:
     return value == _VALUE_OFF
 
 
+def all_switched_off(state: dict) -> bool:
+    """True when every category is off: the user turned delegation off as a whole."""
+    return all(is_switched_off(state, category) for category in CATEGORIES)
+
+
+SWITCHED_OFF_MESSAGE = ("DELEGATION IS SWITCHED OFF by the user (ForemanKit panel or `foremankit delegation all off`). "
+                        "Do this task yourself; do not retry delegation and do not look for another way around it.")
+
+
 def set_switch(store: StateStore, target: str, value: str) -> list[str]:
     """Turn on or off the specified category or all categories.
 

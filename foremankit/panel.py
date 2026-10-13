@@ -14,6 +14,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     worker-enable true|false --name N    let the router use a worker or not
     pair-host | pair-state | pair-find | pair-join --ip I --port P --code C [--replace]
                    pair lab computers: show a code here, find hosts, join with a code (foremankit/pairing.py)
+    delegation-set true|false --name paid|free|local|all    switch delegation (everything on Claude when all is off)
     delegations    delegated tasks, who did them and what they cost (today, last days)
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
@@ -43,6 +44,7 @@ from typing import Any
 
 from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
+from foremankit import delegation as delegation_module
 from foremankit import pairing
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
@@ -124,7 +126,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "orchestrator": orchestrator_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -312,6 +314,19 @@ def join_lab(ip: str, port: int, code: str, replace: bool = False) -> str:
     add_worker(name, f"http://{ip}:{payload.get('llama_port', 8080)}", "private", PAIRED_PRIORITY)
     return (f"paired with {name}: lab key {outcome}, {name} added as a worker. Start your llama-server with -Share "
             f"(panel: 'Share with the lab') so {name} can use it too")
+
+
+def delegation_switches() -> dict[str, bool]:
+    """Which source categories delegation may use: paid clouds, free clouds, local models (all on unless switched off)."""
+    state = StateStore().load()
+    return {category: not delegation_module.is_switched_off(state, category) for category in delegation_module.CATEGORIES}
+
+
+def set_delegation(target: str, enabled: bool) -> str:
+    """Switch one category (paid, free, local) or `all` of delegation on or off; the router reads it on every call."""
+    changed = delegation_module.set_switch(StateStore(), target, "on" if enabled else "off")
+    return f"delegation {'on' if enabled else 'off'}: {', '.join(changed)}" + (
+        "" if enabled or target != "all" else " (everything runs on Claude now)")
 
 
 def set_role(role: str) -> str:
@@ -614,6 +629,8 @@ def run_config_action(args: argparse.Namespace) -> str:
     try:
         if args.what == "role":
             return set_role(args.action or "")
+        if args.what == "delegation-set":
+            return set_delegation(args.name or "all", args.action == "true")
         if args.what == "worker-test":
             return test_worker(args.name)
         if args.what == "orchestrator":
@@ -632,7 +649,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -667,7 +684,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(delegations()))
     elif args.what == "workers":
         print(json.dumps(list_workers()))
-    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set"):
+    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegation-set"):
         print(json.dumps({"message": run_config_action(args)}))
     elif args.what == "thinking":
         print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))

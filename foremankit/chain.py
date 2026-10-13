@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from . import netguard, prompting, reasoning
+from . import delegation, netguard, prompting, reasoning
 from .records import (
     MAX_OUTPUT_CAP,
     MIN_OUTPUT_TOKENS,
@@ -106,6 +106,8 @@ class ChainRun:
         return result
 
     def _failure(self) -> Exception:
+        if delegation.all_switched_off(self.router.store.load()):
+            return RouterError(delegation.SWITCHED_OFF_MESSAGE)
         tried = "; ".join(self.skipped)
         if self.ctx.sensitivity != "normal":
             return netguard.PrivacyError(

@@ -10,6 +10,8 @@ from foremankit.delegation import (
     CATEGORIES,
     category_of,
     describe,
+    SWITCHED_OFF_MESSAGE,
+    all_switched_off,
     is_switched_off,
     set_switch,
 )
@@ -111,3 +113,14 @@ class TestDescribe:
         assert "paid: off" in lines
         assert "free: on" in lines
         assert "local: on" in lines
+
+
+class TestSwitchedOffMessage:
+    """When the user turns every category off, the caller must be told clearly to do the work itself."""
+
+    def test_all_switched_off_needs_every_category_off(self):
+        assert not all_switched_off({"toggles": {"delegation:paid": "off", "delegation:free": "off"}})
+        assert all_switched_off({"toggles": {f"delegation:{c}": "off" for c in CATEGORIES}})
+
+    def test_the_message_says_to_do_the_task_yourself_and_not_to_retry(self):
+        assert "Do this task yourself" in SWITCHED_OFF_MESSAGE and "do not retry" in SWITCHED_OFF_MESSAGE
