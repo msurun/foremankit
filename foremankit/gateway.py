@@ -24,7 +24,8 @@ from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.live import LiveMeter
-from foremankit.gateway_trim import is_main_loop, request_chars, shape_request, thinking_wanted, with_thinking
+from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
+                                     with_thinking)
 
 CONFIG_NAME = "orchestrator.yaml"
 DROP_REQUEST = {"host", "content-length", "connection", "keep-alive", "te", "trailer",
@@ -121,6 +122,14 @@ def record_usage(tokens: int, cfg: dict[str, Any]) -> None:
         pass   # a missing hint must never fail the request
 
 
+def describe_side_request(data: dict[str, Any]) -> str:
+    """One short line about a request that is not the main loop (tools, streaming, size, first words of the system
+    prompt), so the log shows what kind of side request (subagent, auto-mode check, title) reaches the local model."""
+    system = " ".join(system_text(data.get("system")).split())[:50]
+    return (f"tools={len(data.get('tools') or [])} stream={bool(data.get('stream'))} "
+            f"~{request_chars(data) // 4000}k tokens system=\"{system}\"")
+
+
 def shape_local(data: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Rewrite a local request; returns it with a log note on how much the prompt shrank (main loop only)."""
     data = {**data, "model": cfg["local_target"]}
@@ -129,7 +138,7 @@ def shape_local(data: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, An
         data = with_thinking(data, wanted)
     thinking_note = "" if wanted is None else f" thinking={'on' if wanted else 'off'}"
     if not is_main_loop(data, cfg["main_loop_tools"]):
-        return data, " (subagent: untouched)" + thinking_note
+        return data, f" (subagent: untouched; {describe_side_request(data)})" + thinking_note
     before = request_chars(data)
     data = shape_request(data, read_prompt(cfg), cfg["trim"])
     after = request_chars(data)

@@ -412,3 +412,11 @@ def test_refused_local_request_gets_a_503_in_the_anthropic_error_shape(tmp_path,
     (tmp_path / gateway.LOCAL_ROLE_FILE).write_text("worker", encoding="utf-8")
     response = gateway.switched_off(gateway.refusal())
     assert response.status_code == 503 and b"worker" in response.body
+
+
+def test_side_requests_are_described_in_the_log_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    request = {"model": "claude-sonnet-5", "system": "You are a security monitor for an agent", "stream": False,
+               "messages": [{"role": "user", "content": "x" * 8000}]}
+    _, note = gateway.shape_local(request, gateway.settings())
+    assert "subagent: untouched" in note and "tools=0" in note and "stream=False" in note and "security monitor" in note
