@@ -97,6 +97,26 @@ class Panel {
     if (needsReload && answer.error) vscode.window.showErrorMessage(text);
   }
 
+  configArgs({ action, role, name, url, accept, priority, model, fields }) {
+    const table = {
+      role: ['role', role],
+      workerAdd: ['worker-add', '--name', name, '--url', url, '--accept', accept, '--priority', String(priority || 10)],
+      workerRemove: ['worker-remove', '--name', name],
+      profileSet: ['profile-set', '--model', model, '--fields', fields],
+    };
+    return table[action];
+  }
+
+  async runConfig(message) {
+    const args = this.configArgs(message);
+    if (!args) return;
+    const answer = await backend(args);
+    vscode.window.setStatusBarMessage('ForemanKit: ' + (answer.message || answer.error), 6000);
+    await this.pushStatus();
+    await this.pushWorkers();
+    await this.pushModels();
+  }
+
   async runLong({ action, model }) {
     if (!model && !NEEDS_NO_MODEL.includes(action)) return;
     if (CONFIRM[action] && !(await this.confirm(CONFIRM[action], 'Continue'))) return;
