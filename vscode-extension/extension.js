@@ -141,7 +141,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);padding:8px}
  h3{margin:14px 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.7}
  .row{display:flex;align-items:center;gap:6px;margin:4px 0;flex-wrap:wrap} .dot{width:9px;height:9px;border-radius:50%;background:#888}
- .dot.up{background:#3fb950} .dot.down{background:#f85149}
+ .dot.up{background:#3fb950} .dot.down{background:#f85149} .dot.wait{background:#d29922;animation:blink 1s infinite}
+ @keyframes blink{50%{opacity:.3}}
  button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:5px 10px;cursor:pointer;border-radius:2px}
  button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
  button:hover{filter:brightness(1.1)} select{width:100%;background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:4px}
@@ -201,7 +202,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info"><a data-open="profiles">profiles.json</a> &middot; <a data-open="orchestrator">orchestrator.yaml</a> &middot; <a data-open="routerlog">router.log</a></div>
 <div class="row"><button class="secondary" id="refresh">Refresh</button></div>
 <script nonce="__NONCE__">
- const vscode = acquireVsCodeApi(); let models = []; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+ const vscode = acquireVsCodeApi(); let models = []; let startingUntil = 0; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
  const $ = (id) => document.getElementById(id);
  const send = (m) => vscode.postMessage(m);
  const current = () => models.find((m) => m.file === $('models').value);
@@ -213,6 +214,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   for (const level of LEVELS) if (document.activeElement !== $('lvl_' + level)) $('lvl_' + level).checked = !!thinking[level];
  }
  function sendLevels() { send({ type: 'thinking', levels: LEVELS.map((l) => l + '=' + $('lvl_' + l).checked).join(',') }); }
+ function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
  function showStatus(s) {
   $('error').textContent = s.error || '';
   if (s.error) return;
@@ -222,8 +224,11 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   showLevels(s.thinking); showRole(s.role);
   $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
-  dot('serverDot', s.server.up);
-  $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')' : 'llama-server stopped';
+  const waiting = !s.server.up && (s.server.starting || Date.now() < startingUntil);
+  if (s.server.up) startingUntil = 0;
+  $('serverDot').className = 'dot ' + (s.server.up ? 'up' : waiting ? 'wait' : 'down');
+  $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')'
+   : waiting ? 'llama-server starting, loading the model (about a minute)...' : 'llama-server stopped';
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -266,7 +271,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('workerSave').onclick = () => { send({ type: 'config', action: 'workerAdd', name: $('w_name').value.trim(), url: $('w_url').value.trim(),
   accept: $('w_accept').value, priority: Number($('w_priority').value) || 10 }); $('workerForm').style.display = 'none'; };
  $('models').onchange = showInfo;
- $('startServer').onclick = () => send({ type: 'quick', action: 'start-server', model: $('models').value });
+ $('startServer').onclick = () => { startingUntil = Date.now() + 180000; showWaiting();
+  send({ type: 'quick', action: 'start-server', model: $('models').value }); };
  $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value });
  $('routerStart').onclick = () => send({ type: 'quick', action: 'router-normal' });
  $('routerDirect').onclick = () => send({ type: 'quick', action: 'router-direct' });

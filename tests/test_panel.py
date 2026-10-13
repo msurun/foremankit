@@ -178,3 +178,11 @@ def test_direct_mode_leaves_a_flag_that_keeps_the_scheduled_task_from_reviving_t
     assert (tmp_path / panel.ROUTER_OFF_FLAG).exists()
     panel.set_direct_mode(False)
     assert not (tmp_path / panel.ROUTER_OFF_FLAG).exists()
+
+
+def test_a_running_process_without_an_answer_is_reported_as_starting(monkeypatch):
+    monkeypatch.setattr(panel, "probe", lambda url: None)
+    monkeypatch.setattr(panel, "server_process_running", lambda: True)
+    assert panel.server_status() == {"up": False, "starting": True}
+    monkeypatch.setattr(panel, "server_process_running", lambda: False)
+    assert panel.server_status() == {"up": False, "starting": False}

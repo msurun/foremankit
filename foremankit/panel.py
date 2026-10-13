@@ -72,11 +72,20 @@ def port_open(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
+def server_process_running() -> bool:
+    """True when a llama-server process exists. Without an answer on /props that means it is still loading the model."""
+    if os.name != "nt":
+        return subprocess.run(["pgrep", "-x", "llama-server"], capture_output=True, check=False).returncode == 0
+    listing = subprocess.run(["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/NH"], capture_output=True, text=True,
+                             check=False).stdout
+    return "llama-server.exe" in listing
+
+
 def server_status() -> dict[str, Any]:
     """llama-server: up?, the model it serves and the context size it was started with."""
     props = probe(SERVER_URL.rstrip("/") + "/props")
     if props is None:
-        return {"up": False}
+        return {"up": False, "starting": server_process_running()}
     settings = props.get("default_generation_settings", {})
     return {"up": True, "model": props.get("model_alias") or props.get("model_path", "?"), "n_ctx": settings.get("n_ctx")}
 
