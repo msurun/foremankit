@@ -5,7 +5,7 @@
     .\Start-Router.ps1 -Stop      stop it (the extension then cannot reach the cloud until you start it again,
                                   or remove claudeCode.environmentVariables from the VS Code settings)
 #>
-param([switch]$Stop, [switch]$Status, [switch]$Force, [int]$Port = 8081)
+param([switch]$Stop, [switch]$Status, [int]$Port = 8081)
 
 $here   = $PSScriptRoot
 $python = Join-Path $here '..\.venv\Scripts\python.exe'
@@ -32,9 +32,6 @@ if ($Status) {
 }
 
 if (Get-Router) { Write-Host "Router already running on port $Port."; return }
-# direct mode (ForemanKit panel): the router is off on purpose, so the Task Scheduler must not bring it back
-$offFlag = Join-Path (Join-Path $env:USERPROFILE '.config\foremankit') 'router_off'
-if ((Test-Path $offFlag) -and -not $Force) { Write-Host 'Direct mode: router stays off (use -Force, or the panel: Start router).'; return }
 
 # `-c` instead of the foremankit-gateway.exe console script: the exe is locked while the MCP server of the same venv runs
 Start-Process -WindowStyle Hidden -FilePath $python -ArgumentList '-c', '"from foremankit.gateway import main; main()"' `

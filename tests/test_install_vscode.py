@@ -19,11 +19,15 @@ def test_settings_add_keeps_foreign_entries_and_is_idempotent():
     twice = Installer.merged_vscode_settings(once, URL, MODEL)
     assert once == twice
     assert "MY_VAR" in names(once) and "ANTHROPIC_BASE_URL" in names(once) and once["editor.fontSize"] == 14
-    assert once["task.allowAutomaticTasks"] == "auto"
+
+
+def test_the_task_policy_is_only_added_together_with_a_folder_open_task():
+    assert "task.allowAutomaticTasks" not in Installer.merged_vscode_settings({}, URL, MODEL)
+    assert Installer.merged_vscode_settings({}, URL, MODEL, tasks=True)["task.allowAutomaticTasks"] == "auto"
 
 
 def test_settings_do_not_override_an_existing_task_policy():
-    merged = Installer.merged_vscode_settings({"task.allowAutomaticTasks": "off"}, URL, MODEL)
+    merged = Installer.merged_vscode_settings({"task.allowAutomaticTasks": "off"}, URL, MODEL, tasks=True)
     assert merged["task.allowAutomaticTasks"] == "off"
 
 

@@ -81,6 +81,12 @@ def write_file(path: Path, content: bytes) -> Path:
     return path
 
 
+def use_a_folder_open_task(installer) -> None:
+    """Behave like a non-Windows machine: router mode adds a folder-open VS Code task (and so the task policy)."""
+    task = {"label": INSTALL.TASK_ROUTER, "type": "shell", "command": "x", "runOptions": {"runOn": "folderOpen"}}
+    installer.autostart_tasks = lambda py: [task]
+
+
 def full_install(sandbox: Sandbox) -> None:
     """Run the real install steps that touch files, so leftovers() has something to report."""
     installer = INSTALL.Installer(dry=False)
@@ -88,7 +94,7 @@ def full_install(sandbox: Sandbox) -> None:
     installer.install_agents()
     installer.install_rules()
     installer.install_hooks(FAKE_PYTHON)
-    installer.install_local_orchestrator(FAKE_PYTHON)
+    installer.install_local_orchestrator(FAKE_PYTHON, router=True)
 
 
 def full_uninstall() -> None:
@@ -193,8 +199,9 @@ def test_install_local_orchestrator_records_allow_automatic_tasks_and_uninstall_
 ) -> None:
     """The install writes the marker and the value; remove=True takes the value out again."""
     installer = INSTALL.Installer(dry=False)
+    use_a_folder_open_task(installer)
 
-    installer.install_local_orchestrator(FAKE_PYTHON)
+    installer.install_local_orchestrator(FAKE_PYTHON, router=True)
     marker = json.loads((sandbox.state / ADDED_MARKER).read_text(encoding="utf-8"))
     value_after_install = json.loads(
         (sandbox.vscode / SETTINGS_JSON).read_text(encoding="utf-8"))["task.allowAutomaticTasks"]
@@ -211,7 +218,8 @@ def test_uninstall_keeps_a_user_value_of_allow_automatic_tasks(sandbox: Sandbox)
     """A task.allowAutomaticTasks the user set before the installation is never removed."""
     write_file(sandbox.vscode / SETTINGS_JSON, b'{"task.allowAutomaticTasks": "on"}\n')
     installer = INSTALL.Installer(dry=False)
-    installer.install_local_orchestrator(FAKE_PYTHON)
+    use_a_folder_open_task(installer)
+    installer.install_local_orchestrator(FAKE_PYTHON, router=True)
 
     installer.install_local_orchestrator(FAKE_PYTHON, remove=True)
 

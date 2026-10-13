@@ -23,6 +23,7 @@ import argparse
 import collections
 import contextlib
 import datetime
+import functools
 import importlib.util
 import io
 import json
@@ -54,7 +55,6 @@ PROFILE_FIELDS = ("ctx", "tg_tok_s", "ncmoe", "threads", "kv_cache", "reasoning"
 MANUAL_RANGES = {"ctx": (int, 2048, 262144), "ncmoe": (int, 0, 99), "threads": (int, 1, 64),
                  "think_budget": (int, 0, 32768), "temp": (float, 0.0, 2.0)}
 MANUAL_CHOICES = {"kv_cache": ("f16", "q8_0", "q4_0"), "reasoning": ("off", "on")}
-ROUTER_OFF_FLAG = "router_off"      # state dir: while it exists, Start-Router.ps1 does not start the router (direct mode)
 SERVER_LOG = "llama-server.log"   # in the temp folder: output of the server started from the panel
 RECENT_CALLS = 8              # delegated calls shown in the panel
 HISTORY_DAYS = 7              # daily cost bars
@@ -400,8 +400,9 @@ def set_profile(model: str, fields: dict[str, Any]) -> str:
     return f"{model}: profile saved (applies at the next server start)"
 
 
+@functools.cache
 def load_installer() -> Any:
-    """install.py is a script, not a package: load it by path to reuse its VS Code settings logic."""
+    """install.py is a script, not a package: load it by path (once) to reuse its VS Code and scheduler logic."""
     spec = importlib.util.spec_from_file_location("foremankit_install", ROOT / "install.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -414,35 +415,30 @@ def vscode_settings_path() -> Path:
 
 
 def direct_mode() -> bool:
-    """True when VS Code no longer points Claude Code at the router, i.e. it talks straight to Anthropic."""
+    """True when VS Code no longer points Claude Code at the router, i.e. it talks straight to Anthropic (the default)."""
     try:
         settings = json.loads(vscode_settings_path().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return False
+        return True
     names = {entry.get("name") for entry in settings.get("claudeCode.environmentVariables", [])}
     return "ANTHROPIC_BASE_URL" not in names
 
 
 def set_direct_mode(direct: bool) -> str:
-    """Direct mode: stop the router and remove its entries from VS Code settings; otherwise put them back and start it.
+    """Direct mode (default): nothing of the router stays in VS Code or the Task Scheduler and the router is stopped.
+    Router mode: the settings entries and the autostart are put in place and the router is started.
 
     Claude Code reads these variables only when a window starts, so the caller must tell the user to reload the window."""
     install = load_installer()
-    config = _read_yaml(config_dir() / "orchestrator.yaml")
-    base_url = f"http://127.0.0.1:{config.get('port', 8081)}"
-    model_id = (config.get("local_models") or ["claude-sonnet-5"])[0]
+    installer = install.Installer(dry=False)
     with contextlib.redirect_stdout(io.StringIO()):   # the installer narrates; stdout must stay pure JSON
-        install.Installer(dry=False).write_json(
-            vscode_settings_path(),
-            lambda data: install.Installer.merged_vscode_settings(data, base_url, model_id, remove=direct))
-    flag = state_dir() / ROUTER_OFF_FLAG
-    if direct:
-        flag.write_text("direct mode", encoding="utf-8")
-    else:
-        flag.unlink(missing_ok=True)
+        if direct:
+            installer.disable_router_mode()
+        else:
+            installer.enable_router_mode(Path(sys.executable))
     run_quick("stop-router" if direct else "start-router")
     mode = ("direct mode: Claude Code will talk straight to Anthropic" if direct
-            else "router mode: Claude Code goes through the router again")
+            else "router mode: Claude Code goes through the router (local models available)")
     return mode + ". RELOAD THE VS CODE WINDOW to apply."
 
 

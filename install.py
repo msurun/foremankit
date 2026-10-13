@@ -59,9 +59,8 @@ TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/deleg
 # folder (llama/Start-Router.ps1 writes router.log and router.err there). --purge deletes them; TEMP_DIR is a
 # constant so that tests never touch the real temp folder.
 TEMP_DIR = Path(tempfile.gettempdir())
-GATEWAY_RUNTIME_FILES = ("gateway_context.json", "local_role", "orchestrator_target.json", "workers.json", "router_off")
+GATEWAY_RUNTIME_FILES = ("gateway_context.json", "local_role", "orchestrator_target.json", "workers.json")
 GATEWAY_LOG_FILES = ("router.log", "router.err", "llama-server.log", "llama-server.log.err")
-ROUTER_OFF_FILE = "router_off"            # direct mode marker (panel); it must not outlive the installation
 
 
 # Extra tracked files outside ~/.claude: keys starting with "vscode/" resolve under the VS Code
@@ -768,7 +767,7 @@ class Installer:
         return Path.home() / ".config" / "Code" / "User"
 
     @staticmethod
-    def merged_vscode_settings(data: dict, base_url: str, model_id: str, remove: bool = False) -> dict:
+    def merged_vscode_settings(data: dict, base_url: str, model_id: str, remove: bool = False, tasks: bool = False) -> dict:
         """Add (or remove) the three gateway entries in claudeCode.environmentVariables; other entries stay."""
         values = dict(zip(GATEWAY_ENV, (base_url, model_id, PICKER_NAME)))
         entries = [e for e in data.get("claudeCode.environmentVariables", []) if e.get("name") not in values]
@@ -777,8 +776,8 @@ class Installer:
         merged = {**data, "claudeCode.environmentVariables": entries}
         if not entries:
             merged.pop("claudeCode.environmentVariables")
-        if not remove:
-            merged.setdefault("task.allowAutomaticTasks", "auto")   # VS Code asks before running folder-open tasks
+        if tasks and not remove:
+            merged.setdefault("task.allowAutomaticTasks", "auto")   # only needed when a folder-open task is added
         return merged
 
     @staticmethod
@@ -838,14 +837,6 @@ class Installer:
         folder = Path(os.environ.get(EXTENSIONS_DIR_ENV) or Path.home() / ".vscode" / "extensions")
         return folder / f"{manifest['publisher']}.{manifest['name']}-{manifest['version']}"
 
-    def forget_direct_mode(self) -> None:
-        """Delete the direct-mode marker: with the installation gone nothing may keep the router from starting."""
-        marker = STATE_DIR.parent / ROUTER_OFF_FILE
-        if marker.exists():
-            self.say(f"remove {marker}")
-            if not self.dry:
-                marker.unlink()
-
     def link_extension(self) -> None:
         """Make the panel visible in VS Code: a directory link to vscode-extension/ (updates with the repository)."""
         target, link = ROOT / "vscode-extension", self.extension_dir()
@@ -902,35 +893,53 @@ class Installer:
             print("! llama-server is missing (no local models without it): run  python install.py --local-orchestrator "
                   "--with-llama  or  python llama/get_llama.py  (downloads about 150-650 MB from GitHub, sha256-checked)")
 
-    def install_local_orchestrator(self, py: Path, remove: bool = False) -> None:
-        """Point the Claude Code plugin at the gateway and start the gateway at logon (the llama-server stays manual)."""
+    def enable_router_mode(self, py: Path) -> None:
+        """Router mode: Claude Code in VS Code goes through the gateway (the local models become available).
+
+        Writes the three gateway entries into the VS Code settings and makes sure the gateway runs (Task Scheduler logon
+        entry on Windows, a folder-open VS Code task elsewhere). Claude Code reads the settings only when a window starts."""
         cfg = yaml_load(ROOT / "config" / "orchestrator.yaml")
         base_url = f"http://127.0.0.1:{cfg.get('port', 8081)}"
         model_id = (cfg.get("local_models") or ["claude-sonnet-5"])[0]
         folder = self.vscode_user_dir()
-        if not remove:
-            # Before the write: afterwards the key is always present, so we could not tell who set it.
-            self._record_auto_tasks_marker(folder / "settings.json")
+        wanted = self.autostart_tasks(py)
+        if wanted:
+            self._record_auto_tasks_marker(folder / "settings.json")   # before the write: afterwards the key always exists
+        self.write_json(folder / "settings.json", lambda d: self.merged_vscode_settings(d, base_url, model_id, False, bool(wanted)))
+        if wanted:
+            self.write_json(folder / "tasks.json", lambda d: self.merged_vscode_tasks(d, wanted, False, (TASK_SERVER,)))
+        self.register_logon_task()
+
+    def disable_router_mode(self) -> None:
+        """Direct mode (the default): nothing of the router is left in VS Code or in the Task Scheduler.
+
+        Removes the gateway entries from the settings, the folder-open tasks (current and from earlier installs) and the
+        logon entry. Nothing is created when VS Code files are missing."""
+        cfg = yaml_load(ROOT / "config" / "orchestrator.yaml")
+        base_url = f"http://127.0.0.1:{cfg.get('port', 8081)}"
+        model_id = (cfg.get("local_models") or ["claude-sonnet-5"])[0]
+        self.unregister_logon_task()
+        folder = self.vscode_user_dir()
         settings, tasks = folder / "settings.json", folder / "tasks.json"
-        if remove:
-            self.unregister_logon_task()
-            self.unlink_extension()
-            self.forget_direct_mode()
-        if remove and not (settings.exists() or tasks.exists()):
-            return   # nothing more to undo; writing here would CREATE empty VS Code files
-        self.write_json(settings, lambda d: self.merged_vscode_settings(d, base_url, model_id, remove))
-        if remove:
+        if settings.exists():
+            self.write_json(settings, lambda d: self.merged_vscode_settings(d, base_url, model_id, True))
             self.write_json(settings, self._without_auto_tasks)
-        wanted = [] if remove else self.autostart_tasks(py)
-        stale = (TASK_SERVER, TASK_ROUTER) if (remove or sys.platform == "win32") else (TASK_SERVER,)
-        if tasks.exists() or wanted:
-            self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, wanted, remove, stale))
-        if not remove:
-            self.register_logon_task()
-            self.link_extension()
-            print("  The gateway must run, or the plugin reaches no model at all (also not the cloud). "
-                  "The llama-server is not started automatically: use the ForemanKit panel in the VS Code sidebar (reload the window once) or llama/start-llama.cmd. "
-                  "Undo: python install.py --uninstall")
+        if tasks.exists():
+            self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, [], True, (TASK_SERVER, TASK_ROUTER)))
+
+    def install_local_orchestrator(self, py: Path, remove: bool = False, router: bool = False) -> None:
+        """The ForemanKit panel in VS Code. Direct mode stays the default: the router is only set up with `router=True`
+        (or later with the panel's "Router mode" switch), and removed again by `remove` or the panel's "Direct mode"."""
+        if remove:
+            self.disable_router_mode()
+            self.unlink_extension()
+            return
+        self.link_extension()
+        if router:
+            self.enable_router_mode(py)
+        print("  ForemanKit panel installed: reload the VS Code window once and open the helmet icon in the sidebar. "
+              "Claude Code talks straight to Anthropic (direct mode); switch to router mode in the panel to use the local models. "
+              "The llama-server is not started automatically. Undo: python install.py --uninstall")
 
     def remove_agents(self) -> None:
         """Remove the foremankit agents; an agent file the user had before the installation comes back."""
@@ -986,6 +995,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--restore-original", action="store_true",
                     help="put CLAUDE.md, settings.json, the agent files and the VS Code files back byte for byte "
                          "as they were before the first install (later edits are lost)")
+    ap.add_argument("--router", action="store_true",
+                    help="with --local-orchestrator: also switch Claude Code to router mode (local models); default is direct mode")
     ap.add_argument("--with-llama", action="store_true",
                     help="with --local-orchestrator: download llama-server (llama/get_llama.py) when it is missing")
     ap.add_argument("--local-orchestrator", action="store_true",
@@ -1061,7 +1072,7 @@ def run_install(inst: Installer, args: argparse.Namespace) -> None:
         inst.install_hooks(py)
         inst.check_subagent_override()
     if args.local_orchestrator:
-        inst.install_local_orchestrator(py)
+        inst.install_local_orchestrator(py, router=args.router)
         inst.ensure_llama_server(args.with_llama)
     report_keys()
     print(f"\nNext: `{py} -m foremankit.cli status`  (or activate .venv and run `foremankit status`)")

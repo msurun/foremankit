@@ -88,21 +88,6 @@ def test_levels_not_named_keep_their_value(tmp_path: Path, monkeypatch):
     assert panel.parse_levels("low=true")["high"] is True
 
 
-def test_direct_mode_removes_the_router_from_vscode_and_normal_mode_puts_it_back(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
-    write_orchestrator_yaml(tmp_path)
-    settings = tmp_path / "settings.json"
-    settings.write_text(json.dumps({"editor.fontSize": 14}), encoding="utf-8")
-    monkeypatch.setattr(panel, "vscode_settings_path", lambda: settings)
-    stopped: list[str] = []
-    monkeypatch.setattr(panel, "run_quick", lambda action: stopped.append(action) or "ok")
-    assert panel.set_direct_mode(False).endswith("RELOAD THE VS CODE WINDOW to apply.")
-    assert not panel.direct_mode()
-    assert panel.set_direct_mode(True).startswith("direct mode")
-    assert panel.direct_mode() and stopped == ["start-router", "stop-router"]
-    assert json.loads(settings.read_text(encoding="utf-8"))["editor.fontSize"] == 14
-
-
 def test_orchestrator_role_keeps_delegated_tasks_off_this_machine(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
     assert panel.set_role("orchestrator") == "local server role: orchestrator"
@@ -173,20 +158,6 @@ def test_out_of_range_or_unknown_manual_parameter_is_rejected(tmp_path: Path, mo
     sandbox_profiles(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
         panel.set_profile("a.gguf", fields)
-
-
-def test_direct_mode_leaves_a_flag_that_keeps_the_scheduled_task_from_reviving_the_router(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
-    write_orchestrator_yaml(tmp_path)
-    settings = tmp_path / "settings.json"
-    settings.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(panel, "vscode_settings_path", lambda: settings)
-    monkeypatch.setattr(panel, "run_quick", lambda action: "ok")
-    panel.set_direct_mode(True)
-    assert (tmp_path / panel.ROUTER_OFF_FLAG).exists()
-    panel.set_direct_mode(False)
-    assert not (tmp_path / panel.ROUTER_OFF_FLAG).exists()
 
 
 def test_a_running_process_without_an_answer_is_reported_as_starting(monkeypatch):
@@ -316,3 +287,38 @@ def test_delegations_with_no_log_are_empty(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
     result = panel.delegations()
     assert result["today"]["calls"] == 0 and result["recent"] == [] and result["week_cost"] == 0
+
+
+def sandboxed_installer(tmp_path: Path, monkeypatch) -> Path:
+    """Point the installer module used by the panel at a temporary VS Code user folder."""
+    install = panel.load_installer()
+    vscode = tmp_path / "vscode"
+    vscode.mkdir()
+    monkeypatch.setattr(install.Installer, "vscode_user_dir", staticmethod(lambda: vscode))
+    monkeypatch.setattr(install, "STATE_DIR", tmp_path / "install-state")
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    write_orchestrator_yaml(tmp_path)
+    monkeypatch.setattr(panel, "run_quick", lambda action, *a: "ok")
+    return vscode
+
+
+def test_direct_mode_is_the_default_when_nothing_is_configured(tmp_path: Path, monkeypatch):
+    sandboxed_installer(tmp_path, monkeypatch)
+    assert panel.direct_mode() is True
+
+
+def test_router_mode_adds_the_entries_and_direct_mode_removes_every_trace(tmp_path: Path, monkeypatch):
+    vscode = sandboxed_installer(tmp_path, monkeypatch)
+    (vscode / "settings.json").write_text(json.dumps({"editor.fontSize": 14}), encoding="utf-8")
+    install = panel.load_installer()
+    assert panel.set_direct_mode(False).endswith("RELOAD THE VS CODE WINDOW to apply.")
+    assert not panel.direct_mode() and install._fake_scheduler["registered"] is True
+    assert panel.set_direct_mode(True).startswith("direct mode")
+    settings = json.loads((vscode / "settings.json").read_text(encoding="utf-8"))
+    assert panel.direct_mode() and settings == {"editor.fontSize": 14} and install._fake_scheduler["registered"] is False
+
+
+def test_direct_mode_creates_no_vscode_files_that_were_not_there(tmp_path: Path, monkeypatch):
+    vscode = sandboxed_installer(tmp_path, monkeypatch)
+    panel.set_direct_mode(True)
+    assert list(vscode.iterdir()) == []
