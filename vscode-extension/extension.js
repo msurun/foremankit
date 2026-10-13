@@ -235,6 +235,15 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .code{font-size:20px;letter-spacing:.15em;font-weight:bold;margin:4px 0;user-select:all}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
+<h3>Delegation</h3>
+<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on Claude)</label>
+<div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
+<div id="delegOff" class="err" style="display:none">Delegation is OFF: Claude does every task itself, nothing goes to cheaper models.</div>
+<div id="delegSummary" class="info">no delegated calls yet</div>
+<div id="delegDays" class="days"></div>
+<div id="delegToday" class="info"></div>
+<div id="delegClaude" class="info"></div>
+<div id="delegRecent"></div>
 <h3>Status</h3>
 <div class="row"><span class="dot" id="routerDot"></span><span id="routerText">router</span></div>
 <div class="row"><span class="dot" id="serverDot"></span><span id="serverText">llama-server</span></div>
@@ -243,19 +252,11 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="error" class="err"></div>
 <div id="routerWarn" class="err" style="display:none">Router stopped: Claude Code in VS Code cannot reach any model, also not Anthropic. Start it, or use direct mode and reload the window.</div>
 <div id="directInfo" class="info" style="display:none">Direct mode: Claude Code talks straight to Anthropic; local models are unavailable.</div>
-<h3>Router</h3>
-<div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
-<div class="info">Start and stop change the VS Code settings and reload this window (you are asked first).</div>
 <div id="llamaMissing" class="err" style="display:none">llama-server is not installed. <button id="downloadLlama">Download llama.cpp</button></div>
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
 <label class="info"><input type="checkbox" id="shareLab"> Share with the lab (-Share: other PCs can use this server; needs FOREMANKIT_PEER_KEY)</label>
-<div class="info">Role of this server:</div>
-<div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
-<label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
-<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only (default); both does both.</div>
-<div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
 <div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
 <details><summary class="info">Advanced parameters of the selected model</summary>
 <div class="grid">
@@ -271,8 +272,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info">Empty field = launcher default. Applies at the next server start. Tuning overwrites ctx, ncmoe and threads.</div>
 </details>
 <h3>Extra workers</h3>
-<div class="info">Orchestrator for Claude Code runs on:</div>
-<div id="orchChoice"></div>
 <div id="workers"></div>
 <div class="row"><button class="secondary" id="workerAddToggle">Add worker...</button></div>
 <div id="workerForm" style="display:none"><div class="grid">
@@ -287,15 +286,17 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
 <div id="pairBox" class="info"></div>
 <div id="pairFound"></div>
-<h3>Delegation</h3>
-<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on Claude)</label>
-<div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
-<div id="delegOff" class="err" style="display:none">Delegation is OFF: Claude does every task itself, nothing goes to cheaper models.</div>
-<div id="delegSummary" class="info">no delegated calls yet</div>
-<div id="delegDays" class="days"></div>
-<div id="delegToday" class="info"></div>
-<div id="delegClaude" class="info"></div>
-<div id="delegRecent"></div>
+<h3>Router</h3>
+<div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
+<div class="info">Start and stop change the VS Code settings and reload this window (you are asked first).</div>
+<h3>Local orchestrator</h3>
+<div class="info">Role of this server:</div>
+<div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
+<label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
+<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only (default); both does both.</div>
+<div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
+<div class="info">Orchestrator for Claude Code runs on:</div>
+<div id="orchChoice"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
