@@ -6,7 +6,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     status                  router up?, llama-server up (model, context size), context fill reported by the gateway
     models                  every .gguf next to llama/start-llama.ps1 with its tuned profile (speed, context, offload)
     command <action> ...    the PowerShell line the extension runs in a visible terminal (long jobs: start, tune, sweep)
-    start-router | stop-router | stop-server | router-direct | router-normal
+    start-router | stop-router | start-server --model F | stop-server | router-direct | router-normal
     role <orchestrator|worker|both>    what the local server is for
     profile-set --model F --fields '{"ctx": 65536, "temp": 0.6}'    hand-picked launch parameters
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -45,6 +46,8 @@ PROFILE_FIELDS = ("ctx", "tg_tok_s", "ncmoe", "threads", "kv_cache", "reasoning"
 MANUAL_RANGES = {"ctx": (int, 2048, 262144), "ncmoe": (int, 0, 99), "threads": (int, 1, 64),
                  "think_budget": (int, 0, 32768), "temp": (float, 0.0, 2.0)}
 MANUAL_CHOICES = {"kv_cache": ("f16", "q8_0", "q4_0"), "reasoning": ("off", "on")}
+ROUTER_OFF_FLAG = "router_off"      # state dir: while it exists, Start-Router.ps1 does not start the router (direct mode)
+SERVER_LOG = "llama-server.log"   # in the temp folder: output of the server started from the panel
 ROLES = {"orchestrator": "off", "worker": "on", "both": "auto"}   # role -> router toggle `llm:self` (delegated tasks)
 WORKER_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")   # Claude Code's effort slider, lowest first
@@ -149,7 +152,6 @@ def command_for(action: str, model: str = "") -> str:
     tune = f"{py} '{LLAMA / 'tune_llama.py'}' --model '{model}'{dense}"
     sweep = f"{py} '{LLAMA / 'sweep_ctx.py'}' '{model}'"
     commands = {
-        "start-server": f"& '{LLAMA / 'start-llama.ps1'}' -Model '{model}' -NoMenu -Replace",
         "tune": f"{stop}; {tune}; {sweep}",
         "download-llama": f"{py} '{LLAMA / 'get_llama.py'}'",
     }
@@ -292,6 +294,11 @@ def set_direct_mode(direct: bool) -> str:
         install.Installer(dry=False).write_json(
             vscode_settings_path(),
             lambda data: install.Installer.merged_vscode_settings(data, base_url, model_id, remove=direct))
+    flag = state_dir() / ROUTER_OFF_FLAG
+    if direct:
+        flag.write_text("direct mode", encoding="utf-8")
+    else:
+        flag.unlink(missing_ok=True)
     run_quick("stop-router" if direct else "start-router")
     mode = ("direct mode: Claude Code will talk straight to Anthropic" if direct
             else "router mode: Claude Code goes through the router again")
@@ -324,8 +331,26 @@ def parse_levels(text: str) -> dict[str, bool]:
     return levels
 
 
-def run_quick(action: str) -> str:
+def start_server(model: str) -> str:
+    """Start llama-server detached from VS Code: a terminal child dies when the window reloads (the router switch does that).
+
+    The output goes to llama-server.log in the temp folder; -Replace swaps a server that is already running."""
+    if not model:
+        raise ValueError("choose a model first")
+    log = Path(tempfile.gettempdir()) / SERVER_LOG
+    script = LLAMA / "start-llama.ps1"
+    # redirect at process level: PowerShell 5.1's `*>` turns the server's stderr lines into errors and stops the script
+    arguments = f"'-NoProfile','-ExecutionPolicy','Bypass','-File','\"{script}\"','-Model','{model}','-NoMenu','-Replace'"
+    subprocess.run(["powershell", "-NoProfile", "-Command",
+                    f"Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList {arguments} "
+                    f"-RedirectStandardOutput '{log}' -RedirectStandardError '{log}.err'"], check=False)
+    return f"starting {model} (log: {log}); loading takes about a minute"
+
+
+def run_quick(action: str, model: str = "") -> str:
     """Execute a quick action and return one line saying what happened."""
+    if action == "start-server":
+        return start_server(model)
     if action in ("router-direct", "router-normal"):
         return set_direct_mode(action == "router-direct")
     if action == "stop-server":
@@ -355,7 +380,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "profile-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "profile-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -378,7 +403,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.what == "thinking":
         print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))
     else:
-        print(json.dumps({"message": run_quick(args.what)}))
+        print(json.dumps({"message": run_quick(args.what, args.model)}))
 
 
 if __name__ == "__main__":

@@ -73,7 +73,7 @@ class Panel {
     if (message.type === 'config') { await this.runConfig(message); return; }
     if (message.type === 'open' && FILES[message.file]) { await vscode.window.showTextDocument(vscode.Uri.file(FILES[message.file])); return; }
     if (message.type === 'thinking') { await this.quickAnswer(['thinking', '--levels', message.levels]); return; }
-    if (message.type === 'quick') await this.runQuick(message.action);
+    if (message.type === 'quick') await this.runQuick(message.action, message.model);
     if (message.type === 'terminal') await this.runLong(message);
   }
 
@@ -87,10 +87,10 @@ class Panel {
     return answer;
   }
 
-  async runQuick(action) {
+  async runQuick(action, model) {
     const needsReload = NEEDS_RELOAD.includes(action);
     if (CONFIRM_QUICK[action] && !(await this.confirm(CONFIRM_QUICK[action], RELOAD_BUTTON))) return;
-    const answer = await this.quickAnswer([action]);
+    const answer = await this.quickAnswer(model ? [action, '--model', model] : [action]);
     const text = 'ForemanKit: ' + (answer.message || answer.error);
     vscode.window.setStatusBarMessage(text, 6000);
     if (needsReload && !answer.error) vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -266,7 +266,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('workerSave').onclick = () => { send({ type: 'config', action: 'workerAdd', name: $('w_name').value.trim(), url: $('w_url').value.trim(),
   accept: $('w_accept').value, priority: Number($('w_priority').value) || 10 }); $('workerForm').style.display = 'none'; };
  $('models').onchange = showInfo;
- $('startServer').onclick = () => send({ type: 'terminal', action: 'start-server', model: $('models').value });
+ $('startServer').onclick = () => send({ type: 'quick', action: 'start-server', model: $('models').value });
  $('tune').onclick = () => send({ type: 'terminal', action: 'tune', model: $('models').value });
  $('routerStart').onclick = () => send({ type: 'quick', action: 'router-normal' });
  $('routerDirect').onclick = () => send({ type: 'quick', action: 'router-direct' });

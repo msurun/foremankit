@@ -24,9 +24,14 @@ def test_untuned_dense_model_is_listed_without_profile_fields(tmp_path: Path):
     assert not entry["tuned"] and not entry["moe"] and "ctx" not in entry
 
 
-def test_start_command_picks_the_chosen_model_without_the_menu():
-    start = panel.command_for("start-server", "a.gguf")
-    assert "start-llama.ps1" in start and "-Model 'a.gguf'" in start and "-NoMenu" in start
+def test_server_start_is_detached_and_needs_a_model(monkeypatch):
+    calls = []
+    monkeypatch.setattr(panel.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    message = panel.start_server("a.gguf")
+    command = " ".join(calls[0])
+    assert "Start-Process" in command and "'-Model','a.gguf'" in command and "'-NoMenu'" in command and "a.gguf" in message
+    with pytest.raises(ValueError):
+        panel.start_server("")
 
 
 def test_tune_runs_the_tuner_and_then_the_context_sweep_as_one_job():
@@ -159,3 +164,17 @@ def test_out_of_range_or_unknown_manual_parameter_is_rejected(tmp_path: Path, mo
     sandbox_profiles(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
         panel.set_profile("a.gguf", fields)
+
+
+def test_direct_mode_leaves_a_flag_that_keeps_the_scheduled_task_from_reviving_the_router(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    write_orchestrator_yaml(tmp_path)
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(panel, "vscode_settings_path", lambda: settings)
+    monkeypatch.setattr(panel, "run_quick", lambda action: "ok")
+    panel.set_direct_mode(True)
+    assert (tmp_path / panel.ROUTER_OFF_FLAG).exists()
+    panel.set_direct_mode(False)
+    assert not (tmp_path / panel.ROUTER_OFF_FLAG).exists()
