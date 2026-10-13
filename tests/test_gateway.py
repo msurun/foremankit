@@ -401,7 +401,7 @@ def test_shape_local_sets_enable_thinking_per_request(tmp_path, monkeypatch):
 
 def test_worker_role_refuses_claude_code_requests_but_orchestrator_and_both_pass(tmp_path, monkeypatch):
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
-    assert gateway.refusal() is None
+    assert gateway.local_role() == "worker" and gateway.refusal() is not None   # the default
     for role, refused in (("worker", True), ("orchestrator", False), ("both", False)):
         (tmp_path / gateway.LOCAL_ROLE_FILE).write_text(role, encoding="utf-8")
         assert (gateway.refusal() is not None) is refused

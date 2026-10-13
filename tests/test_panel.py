@@ -55,7 +55,7 @@ def test_status_reports_router_server_and_role(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(panel, "probe", lambda url: {"model_alias": "m", "default_generation_settings": {"n_ctx": 4096}})
     result = panel.status()
     assert result["router"]["up"] and result["server"] == {"up": True, "model": "m", "n_ctx": 4096}
-    assert result["role"] == "both" and json.dumps(result)
+    assert result["role"] == "worker" and json.dumps(result)
 
 
 def write_orchestrator_yaml(folder: Path) -> Path:
@@ -233,3 +233,54 @@ def test_worker_can_be_disabled_for_the_router_without_deleting_it(tmp_path: Pat
     assert panel.list_workers()[0]["enabled"] is False and panel.StateStore().load()["toggles"]["llm:garage"] == "off"
     panel.set_worker_enabled("garage", True)
     assert panel.list_workers()[0]["enabled"] is True
+
+
+def serve_fake_llama(status_after_health: int = 200):
+    """A tiny llama-server stand-in on a free local port: /health and /v1/chat/completions."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(status_after_health)
+            self.end_headers()
+            self.wfile.write(json.dumps({"usage": {"completion_tokens": 3}}).encode())
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_worker_test_reports_a_working_server(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch)
+    server = serve_fake_llama()
+    try:
+        panel.add_worker("fake", f"http://127.0.0.1:{server.server_port}")
+        assert panel.test_worker("fake").startswith("fake: OK") and "3 tokens" in panel.test_worker("fake")
+    finally:
+        server.shutdown()
+
+
+def test_worker_test_points_at_the_lab_key_when_generation_is_refused(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch)
+    server = serve_fake_llama(401)
+    try:
+        panel.add_worker("fake", f"http://127.0.0.1:{server.server_port}")
+        assert "FOREMANKIT_PEER_KEY" in panel.test_worker("fake")
+    finally:
+        server.shutdown()
+
+
+def test_worker_test_says_so_when_nothing_answers(tmp_path: Path, monkeypatch):
+    lab_with_worker(tmp_path, monkeypatch)
+    panel.add_worker("dead", "http://127.0.0.1:9")
+    assert "no connection" in panel.test_worker("dead")

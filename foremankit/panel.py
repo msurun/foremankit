@@ -10,6 +10,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     role <orchestrator|worker|both>    what the local server is for
     profile-set --model F --fields '{"ctx": 65536, "temp": 0.6}'    hand-picked launch parameters
     orchestrator --name <worker|this>    serve Claude Code from another machine of the lab
+    worker-test --name N    reachability, lab key and a short generation
     worker-enable true|false --name N    let the router use a worker or not
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -216,6 +218,51 @@ def list_workers() -> list[dict[str, Any]]:
                          "priority": (entry or {}).get("priority"), "editable": name in extra,
                          "enabled": worker_enabled(name), "orchestrator": name == chosen, **worker_status(url)})
     return rows
+
+
+def find_worker_url(name: str) -> str:
+    """Address of a worker of the pool (nodes.yaml or added in the panel) without probing it."""
+    entry = (load_nodes().get("nodes") or {}).get(name)
+    if entry is None:
+        raise ValueError(f"{name} is not a known worker")
+    return worker_url(name, entry)
+
+
+def timed_get(url: str, key: str | None) -> tuple[float, int]:
+    """(seconds, HTTP status) of a GET with the lab key; an HTTP error answer is a result, a network failure is raised."""
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"} if key else {})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=5) as answer:
+            status = answer.status
+    except urllib.error.HTTPError as problem:
+        status = problem.code
+    return time.monotonic() - started, status
+
+
+def test_worker(name: str) -> str:
+    """Check a worker end to end: it answers, the lab key is accepted and a short generation works; one line of result."""
+    url = find_worker_url(name).rstrip("/")
+    key = os.getenv("FOREMANKIT_PEER_KEY") or None
+    try:
+        seconds, status = timed_get(url + "/health", key)
+    except OSError as problem:
+        return f"{name}: no connection to {url} ({problem}). Is its llama-server running with -Share, and the firewall open?"
+    if status != 200:
+        return f"{name}: reachable in {seconds * 1000:.0f} ms but answered HTTP {status}"
+    body = json.dumps({"messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16}).encode()
+    request = urllib.request.Request(url + "/v1/chat/completions", body, {
+        "Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as answer:
+            used = json.load(answer).get("usage", {}).get("completion_tokens", 0)
+    except urllib.error.HTTPError as problem:
+        hint = " (the lab key FOREMANKIT_PEER_KEY differs from the server's)" if problem.code in (401, 403) else ""
+        return f"{name}: reachable in {seconds * 1000:.0f} ms, but generation failed with HTTP {problem.code}{hint}"
+    except OSError as problem:
+        return f"{name}: reachable, but generation failed ({problem})"
+    return f"{name}: OK. Reachable in {seconds * 1000:.0f} ms, generated {used} tokens in {time.monotonic() - started:.1f} s"
 
 
 def set_worker_enabled(name: str, enabled: bool) -> str:
@@ -419,6 +466,8 @@ def run_config_action(args: argparse.Namespace) -> str:
     try:
         if args.what == "role":
             return set_role(args.action or "")
+        if args.what == "worker-test":
+            return test_worker(args.name)
         if args.what == "orchestrator":
             return set_orchestrator(args.name)
         if args.what == "worker-enable":
@@ -435,7 +484,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print JSON for status/models/command, run the quick actions."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "orchestrator", "profile-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -453,7 +502,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps({"command": command_for(args.action, args.model)}))
     elif args.what == "workers":
         print(json.dumps(list_workers()))
-    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "orchestrator", "profile-set"):
+    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set"):
         print(json.dumps({"message": run_config_action(args)}))
     elif args.what == "thinking":
         print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))

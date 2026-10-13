@@ -100,6 +100,7 @@ class Panel {
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
+      workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
       role: ['role', role],
       workerAdd: ['worker-add', '--name', name, '--url', url, '--accept', accept, '--priority', String(priority || 10)],
@@ -113,7 +114,9 @@ class Panel {
     const args = this.configArgs(message);
     if (!args) return;
     const answer = await backend(args);
-    vscode.window.setStatusBarMessage('ForemanKit: ' + (answer.message || answer.error), 6000);
+    const text = 'ForemanKit: ' + (answer.message || answer.error);
+    if (message.action === 'workerTest') vscode.window.showInformationMessage(text);
+    else vscode.window.setStatusBarMessage(text, 6000);
     await this.pushStatus();
     await this.pushWorkers();
     await this.pushModels();
@@ -172,7 +175,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info">Role of this server:</div>
 <div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
 <label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
-<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only; both = default.</div>
+<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only (default); both does both.</div>
 <div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
 <div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
 <details><summary class="info">Advanced parameters of the selected model</summary>
@@ -262,6 +265,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    const t = document.createElement('span'); t.textContent = w.name + ' ' + w.url + (w.up ? (w.model ? ' ' + w.model : '') : ' (down)') + ' [' + w.accept + ']'; row.appendChild(t);
    const on = document.createElement('input'); on.type = 'checkbox'; on.checked = w.enabled; on.title = 'router may send tasks here';
    on.onchange = () => send({ type: 'config', action: 'workerEnable', name: w.name, enabled: on.checked }); row.insertBefore(on, row.firstChild);
+   const ts = document.createElement('button'); ts.className = 'secondary'; ts.textContent = 'Test';
+   ts.onclick = () => send({ type: 'config', action: 'workerTest', name: w.name }); row.appendChild(ts);
    if (w.editable) {
     const ed = document.createElement('button'); ed.className = 'secondary'; ed.textContent = 'Edit';
     ed.onclick = () => { $('w_name').value = w.name; $('w_url').value = w.url; $('w_accept').value = w.accept; $('w_priority').value = w.priority || 10; $('workerForm').style.display = 'block'; };

@@ -34,8 +34,9 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
+DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
-LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default both)
+LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default worker)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
 
 client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=1800, write=60, pool=None))
@@ -166,8 +167,8 @@ def local_role() -> str:
     try:
         role = (state_dir() / LOCAL_ROLE_FILE).read_text(encoding="utf-8").strip()
     except OSError:
-        return "both"
-    return role if role in ("orchestrator", "worker", "both") else "both"
+        return DEFAULT_ROLE
+    return role if role in ("orchestrator", "worker", "both") else DEFAULT_ROLE
 
 
 def refusal() -> str | None:
