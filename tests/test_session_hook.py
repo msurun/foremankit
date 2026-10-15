@@ -11,7 +11,8 @@ def run_hook(
     event: dict, tmp_path: Path, now: float | None = None, language: str | None = None
 ) -> tuple[str, int]:
     hook_path = Path(__file__).parent.parent / "hooks" / "session_length_reminder.py"
-    env = {"FOREMANKIT_STATE_DIR": str(tmp_path), "FOREMANKIT_SESSION_REMINDER_MB": "1"}
+    # English unless the test asks otherwise: the developer's machine may have FOREMANKIT_LANG=pl set
+    env = {"FOREMANKIT_STATE_DIR": str(tmp_path), "FOREMANKIT_SESSION_REMINDER_MB": "1", "FOREMANKIT_LANG": "en"}
     if now is not None:
         env["FOREMANKIT_FAKE_NOW"] = str(now)
     if language is not None:

@@ -2,6 +2,7 @@
 // A thin shell: all logic lives in the Python module foremankit.panel; this file runs it, shows its JSON and opens terminals.
 const vscode = require('vscode');
 const cp = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -89,7 +90,7 @@ class Panel {
     this.liveTimer = setInterval(() => this.pushLive(), LIVE_POLL_MS);
     this.delegationsTimer = setInterval(() => this.pushDelegations(), DELEGATIONS_POLL_MS);
     this.pushDelegations();
-    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); });
+    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.pairTimer); });
     this.pushStatus();
     this.pushWorkers();
     this.pushFirewall();
@@ -208,7 +209,7 @@ class Panel {
 }
 
 function html() {
-  const nonce = Math.random().toString(36).slice(2);
+  const nonce = crypto.randomBytes(16).toString('hex');   // CSP nonces must be unpredictable, Math.random() is not
   const csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-" + nonce + "'";
   return PAGE.replace('__CSP__', csp).replace('__NONCE__', nonce);
 }

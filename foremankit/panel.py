@@ -252,6 +252,12 @@ def pair_firewall_open() -> bool | None:
     return "Private" in profiles and "Public" in profiles
 
 
+def ps_quote(text: object) -> str:
+    """Escape text for a single-quoted PowerShell string: a lone apostrophe (a file name like Bob's.gguf, a user
+    profile like O'Brien) would end the string early and break or hijack the command."""
+    return str(text).replace("'", "''")
+
+
 def open_pair_firewall() -> str:
     """Create the firewall rules for pairing on Private and Public networks. Windows asks for administrator consent (UAC)
     once; the script runs elevated and the result is checked afterwards."""
@@ -261,7 +267,7 @@ def open_pair_firewall() -> str:
     programs = ";".join(listening_programs())
     inner = f'-NoProfile -ExecutionPolicy Bypass -File "{script}" -Python "{programs}"'
     subprocess.run(["powershell", "-NoProfile", "-Command",
-                    f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{inner}'"], check=False)
+                    f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{ps_quote(inner)}'"], check=False)
     return ("firewall open for pairing on Private and Public networks (local subnet only)" if pair_firewall_open()
             else "the firewall was not changed (administrator consent refused or the script failed)")
 
@@ -623,10 +629,11 @@ def start_server(model: str, share: bool = False) -> str:
     script = LLAMA / "start-llama.ps1"
     # redirect at process level: PowerShell 5.1's `*>` turns the server's stderr lines into errors and stops the script
     share_flag = ",'-Share'" if share else ""
-    arguments = f"'-NoProfile','-ExecutionPolicy','Bypass','-File','\"{script}\"','-Model','{model}','-NoMenu','-Replace'{share_flag}"
+    arguments = (f"'-NoProfile','-ExecutionPolicy','Bypass','-File','\"{ps_quote(script)}\"','-Model','{ps_quote(model)}',"
+                 f"'-NoMenu','-Replace'{share_flag}")
     subprocess.run(["powershell", "-NoProfile", "-Command",
                     f"Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList {arguments} "
-                    f"-RedirectStandardOutput '{log}' -RedirectStandardError '{log}.err'"], check=False)
+                    f"-RedirectStandardOutput '{ps_quote(log)}' -RedirectStandardError '{ps_quote(log)}.err'"], check=False)
     shared = " shared with the lab (-Share)" if share else ""
     return f"starting {model}{shared} (log: {log}); loading takes about a minute"
 
