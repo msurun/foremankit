@@ -27,7 +27,7 @@ def test_routing_uses_first_provider_and_writes_file(monkeypatch, make_router, m
     assert len(res["preview"]) <= 601  # never the whole answer
     assert (tmp_path / ".agent-out" / ".gitignore").read_text() == "*\n"
     assert "x" * 2000 not in format_result(res)
-    log = read_log(tmp_path)
+    log = [row for row in read_log(tmp_path) if row["event"] == "call"]
     assert log[-1]["success"] and "prompt" not in log[-1]  # prompts not logged by default
 
 

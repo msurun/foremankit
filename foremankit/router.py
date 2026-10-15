@@ -16,6 +16,7 @@ from .chain import ChainRun
 from .config import check_config, load_config, load_env
 from .nodes import Node, build_nodes
 from .outputs import resolve_out_dir
+from .outcomes import build_outcome
 from .postcheck import ReviewStage, VerifyRun, make_verify_spec
 from .probing import Prober
 from .providers import NodeProbe, Provider, normalize_toggle
@@ -108,6 +109,8 @@ class Router:
             VerifyRun(self, result, spec).execute()
         if request.review:
             self.reviewer.run(result, request, spec)
+        if not result.get("dry_run"):
+            self.log.write(build_outcome(result, request.kind))
         return {key: value for key, value in result.items() if not key.startswith("_")}
 
     def run_chain(self, request: TaskRequest, exclude: tuple[str, ...] = ()) -> dict[str, Any]:

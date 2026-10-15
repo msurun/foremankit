@@ -11,6 +11,7 @@ import httpx
 
 from . import budget, netguard, quota
 from .config import is_dry_run
+from .outcomes import summarize_outcomes
 from .nodes import Node, lab_key, load_nodes, self_name
 from .providers import (
     ChatRequest,
@@ -212,6 +213,7 @@ class Reporter:
                                    + row.get("tokens_out", 0) * price["output"]) / 1e6
         return {"by_provider": {name: dict(counts) for name, counts in by_provider.items()},
                 "by_kind": {name: dict(counts) for name, counts in by_kind.items()},
+                "outcomes": summarize_outcomes(self.router.log.read(), cutoff),
                 "cost_usd": total_cost, "reference_usd": reference_cost, "saved_usd": reference_cost - total_cost,
                 "reference": reference.get("name", "sonnet")}
 

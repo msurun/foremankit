@@ -196,6 +196,15 @@ def cmd_models(router: Router, args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_outcomes(outcomes: dict[str, dict[str, Any]]) -> None:
+    """Accepted results and cost per accepted result for each model (delegations that ran a check or review)."""
+    print("accepted results per model:")
+    for name, entry in sorted(outcomes.items()):
+        per = entry["cost_per_accepted"]
+        print(f"  {name:<34} accepted={int(entry['accepted'])}/{int(entry['delegations'])} "
+              f"cost/accepted={'n/a' if per is None else f'${per:.4f}'}")
+
+
 def cmd_stats(router: Router, args: argparse.Namespace) -> int:
     """Calls, tokens and cost per provider and per kind, and the saving against the reference model."""
     stats = router.stats(args.days)
@@ -204,6 +213,7 @@ def cmd_stats(router: Router, args: argparse.Namespace) -> int:
         for name, counts in sorted(stats[key].items()):
             print(f"  {name:<14} calls={int(counts['calls']):>4} ok={int(counts['ok']):>4} "
                   f"in={int(counts['tokens_in']):>9} out={int(counts['tokens_out']):>8} ${counts['cost_usd']:.4f}")
+    _print_outcomes(stats["outcomes"])
     print(f"total cost ${stats['cost_usd']:.4f}; same tokens at {stats['reference']} API prices "
           f"~${stats['reference_usd']:.4f} -> saved ~${stats['saved_usd']:.4f} (rough: output quality/lengths differ)")
     return 0
