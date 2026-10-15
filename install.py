@@ -52,12 +52,13 @@ SCHEDULER_OFF_ENV = "FOREMANKIT_NO_SCHEDULER"   # tests set it: Task Scheduler c
 _fake_scheduler = {"registered": False}
 REVIVE_MINUTES = 5                        # a stopped gateway cuts Claude Code off from Anthropic: bring it back quickly
 LOGON_DELAY = "PT30S"                     # give OneDrive and the network time to come up
+REFERENCE_NAME = "foremankit-reference.md"   # long rules read on demand; the CLAUDE.md block only points to it
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 # STATE_DIR holds the "before" picture of every file the installer touches, so --uninstall can put the
 # user's files back exactly as they were. TRACKED lists those files, relative to CLAUDE_HOME; the
 # forward slashes are part of the snapshot keys and of the copied layout under STATE_DIR/"files".
 STATE_DIR = Path.home() / ".config" / "foremankit" / "install-state"
-TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/delegator.md")
+TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/delegator.md", REFERENCE_NAME)
 # Runtime leftovers of the gateway: its context counter sits next to the install snapshot, its logs in the temp
 # folder (llama/Start-Router.ps1 writes router.log and router.err there). --purge deletes them; TEMP_DIR is a
 # constant so that tests never touch the real temp folder.
@@ -775,10 +776,23 @@ class Installer:
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         block = None if remove else (ROOT / "claude" / "CLAUDE.global.md").read_text(encoding="utf-8")
         new = self.merged_claude_md(current, block)
+        self.install_reference(remove)
         if new.strip() == current.strip():
             self.say(f"unchanged {target}")
             return
         self.write(target, new)
+
+    def install_reference(self, remove: bool) -> None:
+        """Write (or, on uninstall, remove and restore) ~/.claude/foremankit-reference.md, the on-demand long rules."""
+        path = CLAUDE_HOME / REFERENCE_NAME
+        if not remove:
+            self.write(path, (ROOT / "claude" / REFERENCE_NAME).read_text(encoding="utf-8"))
+        elif path.exists():
+            self.backup(path)
+            self.say(f"remove {path}")
+            if not self.dry:
+                path.unlink()
+            self.restore_tracked(REFERENCE_NAME)
 
     def mcp_command(self, py: Path) -> Path:
         """Console script, not `python -m`: -m puts the cwd on sys.path, and a project folder

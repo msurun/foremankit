@@ -5,7 +5,7 @@ Registered by install.py for two events:
 
 * PostToolUse (Write | Edit | Bash): counts the lines this session has written itself since its last delegation (Write
   content, Edit replacements, and shell scripts written through a heredoc, which is how most code gets written in
-  practice) by reading the transcript incrementally. When the count passes FOREMANKIT_NUDGE_LINES (default 150) it adds a
+  practice) by reading the transcript incrementally. When the count passes FOREMANKIT_NUDGE_LINES (default 80) it adds a
   reminder to the model's context and a one-line message for the user, then waits for another such amount before it
   repeats. A call to the `delegate` tool or to an agent resets the count.
 * UserPromptSubmit: while ALL delegation categories are off (panel switch or `foremankit delegation all off`) it tells
@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_THRESHOLD = 150                     # lines written without delegating before the first reminder
+DEFAULT_THRESHOLD = 80                      # lines written without delegating before the first reminder
 DELEGATION_TOOLS = {"mcp__foremankit__delegate", "Agent", "Task"}
 CATEGORIES = ("paid", "free", "local")      # the delegation categories of foremankit/delegation.py
 SHELL_WRITE_MARKERS = ("<<", "cat >", "tee ")   # a shell command that writes a file or a script
