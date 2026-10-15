@@ -40,7 +40,11 @@ providers:
         low: {thinking: {type: disabled}}
         medium: {thinking: {type: disabled}}
         high: {thinking: {type: disabled}}
-      headroom: {minimal: 0, low: 0, medium: 0, high: 0}
+      # Extra max_tokens on top of the requested answer size: with thinking off the headroom is only a ceiling
+      # (billing is per generated token), and a long escalated review was cut off mid-sentence at exactly 3500 tokens
+      # (2026-10-14, two hard_code calls, $0.06). It is also counted in the worst-case cost estimate.
+      headroom: {minimal: 0, low: 0, medium: 1500, high: 3000}
+      default_level: low           # used when a kind has no reasoning level: thinking stays disabled, never the API default
     default_model: flash
     models:
       flash:

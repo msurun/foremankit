@@ -181,7 +181,8 @@ class Caller:
         path = write_answer(self.router.out_dir(), candidate, ctx, answer)
         record = {**log_fields, "success": True, "tokens_in": answer.usage["prompt_tokens"],
                   "tokens_out": answer.usage["completion_tokens"], "cache_hit": answer.usage["cache_hit"],
-                  "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2), "path": path}
+                  "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2), "path": path,
+                  "truncated": answer.finish_reason == "length"}
         if self.settings.get("log_prompts"):
             record["prompt"] = ctx.messages
         self.router.log.write(record)

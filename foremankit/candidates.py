@@ -44,9 +44,10 @@ class CandidateBuilder:
         """Thinking models spend max_tokens on hidden reasoning: send the effort level and add headroom so the answer
         is not cut or empty (the headroom is also counted in the worst-case cost estimate)."""
         thinking = provider.cfg.get("thinking") or {}
-        if not (thinking and ctx.reasoning):
+        reasoning = ctx.reasoning or thinking.get("default_level")   # fail closed: an unset kind must not think
+        if not (thinking and reasoning):
             return None, ctx.max_out
-        level = (thinking.get("level_map") or {}).get(ctx.reasoning, ctx.reasoning)   # e.g. Gemini has no "minimal"
+        level = (thinking.get("level_map") or {}).get(reasoning, reasoning)   # e.g. Gemini has no "minimal"
         extra = {thinking["param"]: level} if thinking.get("param") else None
         by_level = (thinking.get("extra_by_level") or {}).get(level)
         if by_level:   # per-level request fields: local Qwen enable_thinking=false (142 s -> 23 s), DeepSeek thinking on/off

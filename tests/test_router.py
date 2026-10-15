@@ -582,10 +582,10 @@ def test_deepseek_thinking_follows_the_reasoning_level(monkeypatch, make_router,
     router.delegate("t", kind="data_script")       # medium -> still off: paid models never think (2026-10-11)
     body = mock.bodies[-1]
     assert body["thinking"] == {"type": "disabled"} and "reasoning_effort" not in body
-    assert body["max_tokens"] == 4000 and body["model"] == "deepseek-flash"
+    assert body["max_tokens"] == 5500 and body["model"] == "deepseek-flash"   # +1500 ceiling, billed per generated token
     router.delegate("t", kind="hard_code")         # high -> off as well, on the Pro model
     body = mock.bodies[-1]
-    assert body["thinking"] == {"type": "disabled"} and body["model"] == "deepseek-v4-pro" and body["max_tokens"] == 4000
+    assert body["thinking"] == {"type": "disabled"} and body["model"] == "deepseek-v4-pro" and body["max_tokens"] == 7000   # +3000
 
 
 def test_local_llm_gets_thinking_off_except_for_high_level(monkeypatch, make_router, mock):
