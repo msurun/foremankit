@@ -112,11 +112,16 @@ context_guard:
   # Non-private calls: data files above this many lines are refused (send schema + sample rows instead)
   max_data_lines_non_private: 60
 
+# Smallest max_tokens per kind: the caller's guess is raised to this (a ceiling, billing is per generated token), because
+# cut-off answers cost money and need a continuation round. Review has its own cap under `review:`.
+output_floor: {hard_code: 4000, data_script: 2500, bulk_code: 2500, long_context: 2000}
+
 calls:
   max_retries: 1        # per provider, only on timeout/5xx/connection error; 429 -> cooldown + next provider
   preview_chars: 600
   warn_output_tokens: 8000   # a requested answer bigger than this gets a "split the task" note in the result
   abort_waste_usd: 0.02      # a paid call that wasted more than this (empty or cut-off answer) stops the chain: no second paid try
+  max_continuations: 2       # a cut-off answer (finish_reason length) is continued by the same model up to this many times
   log_prompts: false    # never log prompt/response bodies unless explicitly enabled
   cooldown_429_s: [30, 120, 600, 1800]   # backoff steps for consecutive 429s (Retry-After wins if larger)
   cooldown_5xx_s: 30
@@ -159,6 +164,6 @@ conventions:
 # Preliminary code review by a second model (delegate review=true, or `foremankit review <files>`). Findings the reviewer
 # cannot back with a quote that really appears in the code are reported as unverified and never acted on.
 review:
-  max_output_tokens: 1500
+  max_output_tokens: 2500
   fix_severities: [blocker]    # findings of these severities (and grounded) go back to the author
   fix_rounds: 1                # 0 = report only

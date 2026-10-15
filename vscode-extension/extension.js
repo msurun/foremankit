@@ -46,9 +46,21 @@ function readLive() {
   } catch (e) { return null; }
 }
 
+// The llama-server demands the shared key while it is lent to the LAN (-Share): same key as the peers use, from the
+// environment or the repository's .env. Without one the request goes out bare, as before.
+function peerKey() {
+  if (process.env.FOREMANKIT_PEER_KEY) return process.env.FOREMANKIT_PEER_KEY;
+  try {
+    const line = fs.readFileSync(path.join(ROOT, '.env'), 'utf8').split(/\r?\n/).find((row) => row.startsWith('FOREMANKIT_PEER_KEY='));
+    return line ? line.slice('FOREMANKIT_PEER_KEY='.length).trim() : '';
+  } catch (e) { return ''; }
+}
+
 function readSlots() {
   return new Promise((resolve) => {
-    const request = http.get({ host: '127.0.0.1', port: 8080, path: '/slots', timeout: 800 }, (answer) => {
+    const key = peerKey();
+    const headers = key ? { Authorization: 'Bearer ' + key } : {};
+    const request = http.get({ host: '127.0.0.1', port: 8080, path: '/slots', headers, timeout: 800 }, (answer) => {
       let text = '';
       answer.on('data', (chunk) => { text += chunk; });
       answer.on('end', () => {

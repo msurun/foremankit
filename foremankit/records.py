@@ -125,3 +125,4 @@ class Answer:
     cost_usd: float = 0.0
     latency_s: float = 0.0
     timings: dict[str, Any] = field(default_factory=dict)   # llama-server's exact speed report, when present
+    continuations: int = 0   # how many extra requests finished an answer that stopped at its token limit

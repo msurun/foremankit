@@ -9,9 +9,11 @@ import httpx
 from . import budget, quota
 from . import speed as speed_module
 from .config import is_dry_run
+from .continuation import complete_if_cut
 from .outputs import write_answer
 from .providers import ChatRequest, ProviderError, chat_completion
 from .records import Answer, CallContext, Candidate, TaskTooLarge
+from .stitch import open_fence
 
 if TYPE_CHECKING:
     from .router import Router
@@ -28,9 +30,8 @@ HTTP_SERVER_ERROR = 500          # first 5xx code: the provider failed on its ow
 
 
 def cut_off_in_code(answer: Answer) -> bool:
-    """True when the model stopped at its token limit with a code block still open (an odd number of ``` fences)."""
-    fences = sum(1 for line in answer.text.splitlines() if line.lstrip().startswith("```"))
-    return answer.finish_reason == "length" and fences % 2 == 1
+    """True when the model stopped at its token limit with a code block still open (``` or ~~~, any fence length)."""
+    return answer.finish_reason == "length" and open_fence(answer.text) is not None
 
 
 class Caller:
@@ -55,10 +56,22 @@ class Caller:
         answer = self._to_answer(reply, candidate, ctx, time.perf_counter() - start)
         if not is_dry_run():
             self._record_usage(candidate, answer)
+            answer = complete_if_cut(self, candidate, ctx, answer)
             problem = self._unusable_reason(candidate, ctx, answer, log_fields)
             if problem:
                 return problem
         return self._success(candidate, ctx, answer, log_fields)
+
+    def request_once(self, candidate: Candidate, ctx: CallContext) -> Answer | None:
+        """One more request to the same candidate (a continuation round): usage is recorded; None when it failed."""
+        start = time.perf_counter()
+        try:
+            reply = self._send(candidate, ctx)
+        except ProviderError:
+            return None
+        answer = self._to_answer(reply, candidate, ctx, time.perf_counter() - start)
+        self._record_usage(candidate, answer)
+        return answer
 
     @staticmethod
     def _log_fields(candidate: Candidate, ctx: CallContext) -> dict[str, Any]:
@@ -182,7 +195,7 @@ class Caller:
         record = {**log_fields, "success": True, "tokens_in": answer.usage["prompt_tokens"],
                   "tokens_out": answer.usage["completion_tokens"], "cache_hit": answer.usage["cache_hit"],
                   "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2), "path": path,
-                  "truncated": answer.finish_reason == "length"}
+                  "truncated": answer.finish_reason == "length", "continuations": answer.continuations}
         if self.settings.get("log_prompts"):
             record["prompt"] = ctx.messages
         self.router.log.write(record)

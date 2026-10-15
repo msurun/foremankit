@@ -252,8 +252,8 @@ $argv = @(
 if ($NCpuMoe -ge 0) { $argv += @('--n-cpu-moe', $NCpuMoe) }          # otherwise --fit (default on) decides the offload
 if ($Threads -gt 0) { $argv += @('-t', $Threads, '-tb', $Threads) }
 if ($CpuMask)       { $argv += @('-C', $CpuMask, '--cpu-strict', 1) }
-if ($prof -and $prof.kv_cache) { $argv += @('-ctk', $prof.kv_cache, '-ctv', $prof.kv_cache) }   # e.g. Gemma needs q8_0 KV to fit 4 GB at 32k
-if ($KvCache)       { $argv += @('-ctk', $KvCache, '-ctv', $KvCache) }
+if ($KvCache)       { $argv += @('-ctk', $KvCache, '-ctv', $KvCache) }   # explicit wins; passing both made llama-server warn about duplicates
+elseif ($prof -and $prof.kv_cache) { $argv += @('-ctk', $prof.kv_cache, '-ctv', $prof.kv_cache) }   # e.g. Gemma needs q8_0 KV to fit 4 GB at 32k
 if ($NoKvOffload)   { $argv += '--no-kv-offload' }
 if ($prof -and $prof.ubatch)  { $argv += @('-ub', $prof.ubatch) }
 if ($NoThink -and $ThinkBudget -gt 0) { throw '-NoThink and -ThinkBudget exclude each other.' }

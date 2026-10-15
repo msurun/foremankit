@@ -36,7 +36,7 @@ TEST_MAX_TOKENS = 8
 TEST_MIN_TIMEOUT_S = 30.0
 TEST_REPLY_CHARS = 40
 TEST_ERROR_CHARS = 120
-STATS_COUNTERS = ("tokens_in", "tokens_out", "cost_usd")
+STATS_COUNTERS = ("tokens_in", "tokens_out", "cost_usd", "truncated", "continuations")
 
 
 class Reporter:
@@ -207,8 +207,8 @@ class Reporter:
             if row.get("event") != "call" or row.get("dry_run") or row.get("ts", 0) < cutoff:
                 continue
             self._count_row(row, by_provider[row.get("provider", "?")], by_kind[row.get("kind", "?")])
+            total_cost += row.get("cost_usd", 0.0)   # rejected (cut-off, empty) calls were paid for too
             if row.get("success"):
-                total_cost += row.get("cost_usd", 0.0)
                 reference_cost += (row.get("tokens_in", 0) * price["input"]
                                    + row.get("tokens_out", 0) * price["output"]) / 1e6
         return {"by_provider": {name: dict(counts) for name, counts in by_provider.items()},

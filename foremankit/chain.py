@@ -55,7 +55,8 @@ def prepare_context(router: Router, request: TaskRequest) -> tuple[CallContext, 
     if request.kind not in chains:
         raise RouterError(f"unknown kind {request.kind!r}; use one of {sorted(chains)}")
     sensitivity = "private" if request.kind == "private" else request.sensitivity
-    max_out = max(MIN_OUTPUT_TOKENS, min(int(request.max_output_tokens), MAX_OUTPUT_CAP))
+    floor = int((router.routing.get("output_floor") or {}).get(request.kind, MIN_OUTPUT_TOKENS))
+    max_out = max(MIN_OUTPUT_TOKENS, floor, min(int(request.max_output_tokens), MAX_OUTPUT_CAP))   # callers guess low
     level = reasoning.reasoning_level(router.routing, request.kind, sensitivity, request.escalate)
     files = prompting.read_context_files(router.routing, request.context_files or [], sensitivity != "normal")
     messages = prompting.build_messages(router.routing, request, files)

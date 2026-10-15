@@ -132,8 +132,8 @@ def test_hidden_thinking_tokens_are_billed_and_get_headroom(monkeypatch, make_ro
     assert res["tokens_out"] == 60
     price = router.providers["gemini"].cfg["models"]["flash"]["price"]
     assert res["cost_usd"] == pytest.approx((8 * price["input_miss"] + 60 * price["output"]) / 1e6)
-    # long_context -> reasoning "low": headroom 1024 so reasoning cannot eat the answer
-    assert mock.bodies[-1]["max_tokens"] == 64 + 1024 and mock.bodies[-1]["reasoning_effort"] == "low"
+    # long_context -> reasoning "low": headroom 1024 so reasoning cannot eat the answer; routing.yaml output_floor lifts 64 to 2000
+    assert mock.bodies[-1]["max_tokens"] == 2000 + 1024 and mock.bodies[-1]["reasoning_effort"] == "low"
 
 
 @pytest.mark.parametrize("kind,sens,escalate,expected", [

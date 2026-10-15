@@ -213,7 +213,8 @@ def cmd_stats(router: Router, args: argparse.Namespace) -> int:
         print(f"{title}:")
         for name, counts in sorted(stats[key].items()):
             print(f"  {name:<14} calls={int(counts['calls']):>4} ok={int(counts['ok']):>4} "
-                  f"in={int(counts['tokens_in']):>9} out={int(counts['tokens_out']):>8} ${counts['cost_usd']:.4f}")
+                  f"in={int(counts['tokens_in']):>9} out={int(counts['tokens_out']):>8} ${counts['cost_usd']:.4f} "
+                  f"cut={int(counts['truncated'])} cont={int(counts['continuations'])}")
     _print_outcomes(stats["outcomes"])
     print(f"total cost ${stats['cost_usd']:.4f}; same tokens at {stats['reference']} API prices "
           f"~${stats['reference_usd']:.4f} -> saved ~${stats['saved_usd']:.4f} (rough: output quality/lengths differ)")
