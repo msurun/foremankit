@@ -14,6 +14,7 @@ from .formatting import format_result, format_review, format_status
 from .netguard import PrivacyError
 from .records import DEFAULT_MAX_OUTPUT_TOKENS, ReviewJob
 from .router import Router, RouterError
+from .transcripts import find_transcripts, summarize_many
 
 SENSITIVITY_CHOICES = ["normal", "internal", "private"]
 MODELS_SHOWN_WITHOUT_ALL = 40
@@ -219,6 +220,20 @@ def cmd_stats(router: Router, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sessions(router: Router, args: argparse.Namespace) -> int:
+    """Claude tokens, delegations per 100 requests and reads of .agent-out per session (from ~/.claude transcripts)."""
+    summaries = summarize_many(find_transcripts(args.days))
+    print(f"{'started':<17} {'requests':>8} {'tokens':>9} {'cache read':>11} {'deleg':>5} {'/100':>5} {'agents':>6} {'reads':>5}")
+    for item in sorted(summaries, key=lambda row: row.started):
+        print(f"{item.started[:16]:<17} {item.requests:>8} {item.total_tokens():>9} {item.cache_read_tokens:>11} "
+              f"{item.delegations:>5} {item.delegations_per_100_requests():>5.1f} {item.agent_calls:>6} {item.agent_out_reads:>5}")
+    delegations = sum(item.delegations for item in summaries)
+    reads = sum(item.agent_out_reads for item in summaries)
+    print(f"{len(summaries)} sessions, {delegations} delegations, {reads} reads of .agent-out results "
+          "(tokens = input + cache creation + output; cache reads are listed apart)")
+    return 0
+
+
 def cmd_profile(router: Router, args: argparse.Namespace) -> int:
     """Show the current profile, or switch to the named one."""
     if not args.name:
@@ -258,7 +273,8 @@ def cmd_delegation(router: Router, args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
-            "check": cmd_check, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate}
+            "check": cmd_check, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
+            "sessions": cmd_sessions}
 
 
 # ---------------------------------------------------------------- argument parser
@@ -270,6 +286,8 @@ def _add_basic_parsers(sub: Any) -> None:
     models.add_argument("--all", action="store_true")
     stats = sub.add_parser("stats", help="cost/calls per provider and kind, savings vs Sonnet")
     stats.add_argument("--days", type=int)
+    sessions = sub.add_parser("sessions", help="Claude tokens per session from the transcripts, delegations and result reads")
+    sessions.add_argument("--days", type=int, default=7)
     profile = sub.add_parser("profile", help="switch profile (home|work|...)")
     profile.add_argument("name", nargs="?")
 

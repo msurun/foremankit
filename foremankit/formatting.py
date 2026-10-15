@@ -21,8 +21,17 @@ def format_result(result: dict[str, Any]) -> str:
         lines += format_review(result["review"])
     if result.get("skipped"):
         lines.append("not used (tried first): " + "; ".join(result["skipped"]))
-    lines.append("preview:\n" + result["preview"])
+    lines.append(_preview_or_hint(result))
     return "\n".join(lines)
+
+
+def _preview_or_hint(result: dict[str, Any]) -> str:
+    """The preview, or when the check passed a pointer that the file already holds the code: the caller then has no
+    reason to open .agent-out (measured with `foremankit sessions`: ~0.8 result reads per delegation before this)."""
+    verify = result.get("verify")
+    if verify and verify["passed"]:
+        return f"no need to read the .agent-out file: the checked code is in {verify['target']} (diff it if you must)"
+    return "preview:\n" + result["preview"]
 
 
 def _result_header(result: dict[str, Any]) -> str:
