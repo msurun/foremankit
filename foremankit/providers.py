@@ -134,7 +134,7 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 
 def normalize_usage(usage: dict[str, Any] | None) -> dict[str, int]:
-    """Token counts of any OpenAI-compatible server as {prompt_tokens, completion_tokens, cache_hit}."""
+    """Token counts of any OpenAI-compatible server as {prompt_tokens, completion_tokens, cache_hit, reasoning_tokens}."""
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
@@ -142,12 +142,24 @@ def normalize_usage(usage: dict[str, Any] | None) -> dict[str, int]:
     if hit is None:
         hit = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")  # OpenAI-style
     hit = int(hit or 0)
+    reasoning = _reasoning_tokens(usage, prompt, completion)
     # Thinking models (Gemini 3.x) bill hidden reasoning tokens as output but leave them out of
     # completion_tokens; total_tokens includes them, so derive the billable output from it.
     total = int(usage.get("total_tokens") or 0)
     if total:
         completion = max(completion, total - prompt)
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "cache_hit": min(hit, prompt)}
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "cache_hit": min(hit, prompt),
+            "reasoning_tokens": reasoning}
+
+
+def _reasoning_tokens(usage: dict[str, Any], prompt: int, completion: int) -> int:
+    """Hidden reasoning tokens: the server's own count when it sends one (OpenAI-style, DeepSeek), else the
+    gap between total_tokens and the reported output (Gemini hides them there), else 0."""
+    details = usage.get("completion_tokens_details") or {}
+    if details.get("reasoning_tokens") is not None:
+        return int(details["reasoning_tokens"])
+    total = int(usage.get("total_tokens") or 0)
+    return max(0, total - prompt - completion) if total else 0
 
 
 @dataclass(frozen=True)

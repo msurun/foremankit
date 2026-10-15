@@ -87,13 +87,14 @@ class Caller:
         return {"event": "call", "id": ctx.call_id, "kind": ctx.kind, "sensitivity": ctx.sensitivity,
                 "provider": candidate.provider.name, "node": candidate.node or None, "model": candidate.model_id,
                 "endpoint": candidate.endpoint, "escalate": ctx.escalate, "dry_run": is_dry_run(),
-                "reasoning": (candidate.extra or {}).get("reasoning_effort")}
+                "reasoning": (candidate.extra or {}).get("reasoning_effort"), "extra": candidate.extra}
 
     def _send(self, candidate: Candidate, ctx: CallContext) -> dict[str, Any]:
         if is_dry_run():
             return {"text": f"[DRY RUN] would call {candidate.provider.name}/{candidate.model_id} "
                             f"(~{ctx.est_in} input tokens, max_output={ctx.max_out}). No network call made.",
-                    "usage": {"prompt_tokens": ctx.est_in, "completion_tokens": 0, "cache_hit": 0},
+                    "usage": {"prompt_tokens": ctx.est_in, "completion_tokens": 0, "cache_hit": 0,
+                              "reasoning_tokens": 0},
                     "finish_reason": "dry_run"}
         with self.router.http_client() as client:
             return self._chat_with_retries(client, candidate, ctx)
@@ -190,6 +191,7 @@ class Caller:
 
     def _log_rejected(self, log_fields: dict[str, Any], answer: Answer, error: str, path: str | None = None) -> None:
         record = {**log_fields, "success": False, "error": error, "tokens_out": answer.usage["completion_tokens"],
+                  "reasoning_tokens": answer.usage.get("reasoning_tokens", 0),
                   "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2)}
         if path:
             record["path"] = path
@@ -203,6 +205,7 @@ class Caller:
         path = write_answer(self.router.out_dir(), candidate, ctx, answer)
         record = {**log_fields, "success": True, "tokens_in": answer.usage["prompt_tokens"],
                   "tokens_out": answer.usage["completion_tokens"], "cache_hit": answer.usage["cache_hit"],
+                  "reasoning_tokens": answer.usage.get("reasoning_tokens", 0),
                   "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2), "path": path,
                   "truncated": answer.finish_reason == "length", "continuations": answer.continuations}
         if self.settings.get("log_prompts"):

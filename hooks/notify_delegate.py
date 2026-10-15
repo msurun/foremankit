@@ -9,10 +9,11 @@ import sys
 
 
 def flatten(value) -> str:
+    """Turn a tool response (string, list, dict or other value) into plain text."""
     if isinstance(value, str):
         return value
     if isinstance(value, list):
-        return "\n".join(flatten(v) for v in value)
+        return "\n".join(flatten(item) for item in value)
     if isinstance(value, dict):
         for key in ("text", "content", "result"):
             if key in value:
@@ -22,6 +23,7 @@ def flatten(value) -> str:
 
 
 def main() -> int:
+    """Read the hook event from stdin and print the one-line systemMessage notice."""
     try:
         event = json.loads(sys.stdin.read().lstrip("﻿"))
     except ValueError:

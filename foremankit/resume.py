@@ -26,7 +26,7 @@ class Resume:
 
     def seed(self) -> Answer:
         """The partial answer as the starting point of `complete_if_cut` (no tokens are billed for it again)."""
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit": 0}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "cache_hit": 0, "reasoning_tokens": 0}
         return Answer(self.partial, "length", usage, continuations=self.continuations)
 
 

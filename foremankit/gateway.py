@@ -242,21 +242,18 @@ def target_url(request: Request, cfg: dict[str, Any], local: bool) -> str:
     return base + request.url.path + (f"?{request.url.query}" if request.url.query else "")
 
 
-async def handle(request: Request) -> Response:
-    """Forward one request to the local llama-server or the cloud and stream the answer back."""
-    body, cfg = await request.body(), settings()
-    data = parse_body(body)
-    model = data.get("model") if data else None
-    call = Call(request.url.path, model, model in cfg["local_models"], time.time())
-    reason = refusal() if call.local else None
-    if reason:
-        call.log(503)
-        return switched_off(reason)
+def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict[str, Any]) -> bytes:
+    """Body for the upstream call: side requests go to the cloud, local main-loop requests are shaped, rest unchanged."""
     if call.local and cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
-        body = send_to_cloud(call, data, cfg)
-    elif call.local and data is not None:
-        data, call.note = shape_local(data, cfg)
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        return send_to_cloud(call, data, cfg)
+    if call.local and data is not None:
+        shaped, call.note = shape_local(data, cfg)
+        return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
+    return body
+
+
+async def relay(request: Request, call: Call, cfg: dict[str, Any], body: bytes) -> Response:
+    """Send the prepared request upstream and stream the answer back to the plugin."""
     try:
         upstream = await client.send(client.build_request(
             request.method, target_url(request, cfg, call.local), headers=upstream_headers(request, call.local),
@@ -270,6 +267,20 @@ async def handle(request: Request) -> Response:
     body_stream = metered(upstream.aiter_raw()) if streamed else upstream.aiter_raw()
     return StreamingResponse(body_stream, status_code=upstream.status_code, headers=headers,
                              background=BackgroundTask(upstream.aclose))
+
+
+async def handle(request: Request) -> Response:
+    """Forward one request to the local llama-server or the cloud and stream the answer back."""
+    body, cfg = await request.body(), settings()
+    data = parse_body(body)
+    model = data.get("model") if data else None
+    call = Call(request.url.path, model, model in cfg["local_models"], time.time())
+    reason = refusal() if call.local else None
+    if reason:
+        call.log(503)
+        return switched_off(reason)
+    body = prepare_body(call, data, body, cfg)
+    return await relay(request, call, cfg, body)
 
 
 app = Starlette(routes=[Route("/{path:path}", handle,

@@ -40,7 +40,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
@@ -152,8 +153,8 @@ def model_entry(path: Path, profiles: dict[str, Any], machine: str) -> dict[str,
 def list_models() -> list[dict[str, Any]]:
     """Every .gguf in llama/ (and $FOREMANKIT_MODELS_DIR), vision projectors skipped, sorted by name."""
     folders = [LLAMA] + ([Path(os.environ["FOREMANKIT_MODELS_DIR"])] if os.getenv("FOREMANKIT_MODELS_DIR") else [])
-    files = sorted((p for folder in folders if folder.is_dir() for p in folder.glob("*.gguf") if "mmproj" not in p.name),
-                   key=lambda p: p.name.lower())
+    files = sorted((path for folder in folders if folder.is_dir() for path in folder.glob("*.gguf") if "mmproj" not in path.name),
+                   key=lambda path: path.name.lower())
     try:
         profiles, machine = load_profiles()
     except (OSError, ValueError, RuntimeError):
@@ -202,31 +203,51 @@ def delegations(now: float | None = None) -> dict[str, Any]:
     today = datetime.date.fromtimestamp(now)
     calls = [call for call in call_log().read() if call.get("event") == "call" and not call.get("dry_run")]
     per_day: dict[str, float] = collections.defaultdict(float)
-    claude_today = {name: 0.0 for name in CLAUDE_PRICES}
-    claude_week = {name: 0.0 for name in CLAUDE_PRICES}
-    week_start = today - datetime.timedelta(days=HISTORY_DAYS - 1)
-    today_by_target: dict[str, dict[str, float]] = collections.defaultdict(lambda: {"calls": 0, "cost": 0.0})
     for call in calls:
-        day = datetime.date.fromtimestamp(call["ts"])
-        per_day[day.isoformat()] += call.get("cost_usd") or 0.0
-        for name, (price_in, price_out) in CLAUDE_PRICES.items():
-            worth = ((call.get("tokens_in") or 0) * price_in + (call.get("tokens_out") or 0) * price_out) / 1_000_000
-            claude_week[name] += worth if day >= week_start else 0.0
-            claude_today[name] += worth if day == today else 0.0
-        if day == today:
-            row = today_by_target[call_target(call)]
+        per_day[datetime.date.fromtimestamp(call["ts"]).isoformat()] += call.get("cost_usd") or 0.0
+    days = [(today - datetime.timedelta(days=back)).isoformat() for back in range(HISTORY_DAYS - 1, -1, -1)]
+    week_start = today - datetime.timedelta(days=HISTORY_DAYS - 1)
+    by_target = today_by_target(calls, today)
+    return {"today": {"calls": sum(row["calls"] for row in by_target.values()), "cost": per_day.get(today.isoformat(), 0.0),
+                      "by_target": by_target},
+            "claude_equivalent": claude_equivalent(calls, today, week_start),
+            "days": [{"day": day, "cost": round(per_day.get(day, 0.0), 6)} for day in days],
+            "week_cost": round(sum(per_day.get(day, 0.0) for day in days), 6),
+            "recent": [recent_entry(call) for call in reversed(calls[-RECENT_CALLS:])]}
+
+
+def today_by_target(calls: list[dict[str, Any]], today: datetime.date) -> dict[str, dict[str, float]]:
+    """Calls and cost logged on `today`, per target (provider, node and model)."""
+    totals: dict[str, dict[str, float]] = collections.defaultdict(lambda: {"calls": 0, "cost": 0.0})
+    for call in calls:
+        if datetime.date.fromtimestamp(call["ts"]) == today:
+            row = totals[call_target(call)]
             row["calls"] += 1
             row["cost"] += call.get("cost_usd") or 0.0
-    days = [(today - datetime.timedelta(days=back)).isoformat() for back in range(HISTORY_DAYS - 1, -1, -1)]
-    recent = [{"ts": call["ts"], "kind": call.get("kind"), "target": call_target(call), "ok": bool(call.get("success")),
-               "tokens": (call.get("tokens_in") or 0) + (call.get("tokens_out") or 0), "cost": call.get("cost_usd") or 0.0,
-               "seconds": call.get("latency_s"), "escalated": bool(call.get("escalate"))} for call in calls[-RECENT_CALLS:]]
-    return {"today": {"calls": sum(row["calls"] for row in today_by_target.values()), "cost": per_day.get(today.isoformat(), 0.0),
-                      "by_target": dict(today_by_target)},
-            "claude_equivalent": {"today": {k: round(v, 6) for k, v in claude_today.items()},
-                                  "week": {k: round(v, 6) for k, v in claude_week.items()}},
-            "days": [{"day": day, "cost": round(per_day.get(day, 0.0), 6)} for day in days],
-            "week_cost": round(sum(per_day.get(day, 0.0) for day in days), 6), "recent": list(reversed(recent))}
+    return dict(totals)
+
+
+def claude_equivalent(calls: list[dict[str, Any]], today: datetime.date, week_start: datetime.date) -> dict[str, dict[str, float]]:
+    """What the same tokens would have cost at each Claude model's list price, today and since `week_start`."""
+    today_cost = {name: 0.0 for name in CLAUDE_PRICES}
+    week_cost = {name: 0.0 for name in CLAUDE_PRICES}
+    for call in calls:
+        day = datetime.date.fromtimestamp(call["ts"])
+        tokens_in = call.get("tokens_in") or 0
+        tokens_out = call.get("tokens_out") or 0
+        for name, (price_in, price_out) in CLAUDE_PRICES.items():
+            worth = (tokens_in * price_in + tokens_out * price_out) / 1_000_000
+            week_cost[name] += worth if day >= week_start else 0.0
+            today_cost[name] += worth if day == today else 0.0
+    return {"today": {name: round(total, 6) for name, total in today_cost.items()},
+            "week": {name: round(total, 6) for name, total in week_cost.items()}}
+
+
+def recent_entry(call: dict[str, Any]) -> dict[str, Any]:
+    """One row of the recent-calls list: when, what, where, whether it worked, its tokens, cost and time."""
+    return {"ts": call["ts"], "kind": call.get("kind"), "target": call_target(call), "ok": bool(call.get("success")),
+            "tokens": (call.get("tokens_in") or 0) + (call.get("tokens_out") or 0), "cost": call.get("cost_usd") or 0.0,
+            "seconds": call.get("latency_s"), "escalated": bool(call.get("escalate"))}
 
 
 def call_log() -> Any:
@@ -444,6 +465,11 @@ def test_worker(name: str) -> str:
         return f"{name}: no connection to {url} ({problem}). Is its llama-server running with -Share, and the firewall open?"
     if status != 200:
         return f"{name}: reachable in {seconds * 1000:.0f} ms but answered HTTP {status}"
+    return check_generation(name, url, key, seconds)
+
+
+def check_generation(name: str, url: str, key: str | None, seconds: float) -> str:
+    """Ask a worker that answered /health for a 16-token reply; one line saying whether generation worked and how long it took."""
     body = json.dumps({"messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16}).encode()
     request = urllib.request.Request(url + "/v1/chat/completions", body, {
         "Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})})
@@ -721,20 +747,25 @@ def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
     }
 
 
+def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]]) -> dict[str, Any]:
+    """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
+    if args.what in answers:
+        return answers[args.what]()
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegation-set"):
+        return {"message": run_config_action(args)}
+    if args.what == "thinking":
+        return {"message": set_thinking(parse_levels(args.levels))}
+    return {"message": run_quick(args.what, args.model, args.share)}
+
+
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print the JSON answer of a read-only action, or carry out a change or a quick action."""
     args = build_parser().parse_args(argv)
     answers = info_answers(args)
     if args.what == "pair-serve":
         serve_pairing(os.environ["FOREMANKIT_PAIR_CODE"])
-    elif args.what in answers:
-        print(json.dumps(answers[args.what]()))
-    elif args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegation-set"):
-        print(json.dumps({"message": run_config_action(args)}))
-    elif args.what == "thinking":
-        print(json.dumps({"message": set_thinking(parse_levels(args.levels))}))
     else:
-        print(json.dumps({"message": run_quick(args.what, args.model, args.share)}))
+        print(json.dumps(action_output(args, answers)))
 
 
 if __name__ == "__main__":

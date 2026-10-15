@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from . import budget
 from .config import is_dry_run
 from .records import Answer, CallContext, Candidate
-from .stitch import continuation_request, stitch
+from .stitch import continuation_request, seam_is_broken, stitch
 
 if TYPE_CHECKING:
     from .caller import Caller
@@ -34,7 +34,9 @@ def complete_if_cut(caller: Caller, candidate: Candidate, ctx: CallContext, answ
         more = caller.request_once(candidate, _continuation_context(ctx, answer))
         if more is None:
             break
-        answer = _joined(answer, more)
+        previous, answer = answer, _joined(answer, more)
+        if more.finish_reason != "length" and seam_is_broken(previous.text, answer.text):
+            answer = replace(answer, finish_reason="length")   # the model says it is done but the join is not: go on
     return answer
 
 

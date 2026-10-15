@@ -9,7 +9,6 @@ import yaml
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_DIR = PACKAGE_DIR.parent
-CONFIG_FILES = ("providers.yaml", "routing.yaml", "profiles.yaml", "nodes.yaml")
 
 
 def state_dir() -> Path:

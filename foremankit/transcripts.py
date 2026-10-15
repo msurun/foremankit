@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 # Folder name used by Claude Code for subagent transcripts; those are not sessions.
 SUBAGENT_FOLDER_NAME = "subagents"

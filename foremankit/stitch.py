@@ -77,6 +77,12 @@ def stitch(partial: str, continuation: str) -> str:
     return partial + continuation   # no whitespace is invented: a cut word and its rest join as they come
 
 
+def seam_is_broken(partial: str, joined: str) -> bool:
+    """The two hard seam faults only: the join leaves a code block open or repeats the seam text twice. The softer
+    prose checks of `seam_problems` are left out here: a finished answer may legitimately end without a full stop."""
+    return open_fence(joined) is not None or _ends_with_repeated_seam(partial, joined)
+
+
 def seam_problems(partial: str, joined: str) -> list[str]:
     """List short English sentences describing problems at the seam.
 

@@ -110,7 +110,7 @@ def select_foremankit_processes(rows: list[tuple[int, str]], root: Path,
         normalised = command.replace("\\", "/").lower()
         if pid == own_pid or TEST_RUNNER_WORD in normalised:
             continue
-        if wanted_root in normalised and any(has_whole_word(normalised, m) for m in markers):
+        if wanted_root in normalised and any(has_whole_word(normalised, marker) for marker in markers):
             kept.append((pid, command))
     return kept
 
@@ -170,7 +170,7 @@ def _tool_entry(command: str) -> dict:
 
 def _without_marked(entries: list, mark: str) -> list:
     """The hook entries that do NOT run a command containing `mark`, i.e. everything that is not ours."""
-    return [e for e in entries if not any(mark in h.get("command", "") for h in e.get("hooks", []))]
+    return [entry for entry in entries if not any(mark in hook.get("command", "") for hook in entry.get("hooks", []))]
 
 
 def _store_event(hooks: dict, event: str, kept: list) -> None:
@@ -244,19 +244,24 @@ def free_backup_path(path: Path) -> Path:
 
 
 class Installer:
+    """Runs the install steps, or only reports them when `dry` is set."""
+
     def __init__(self, dry: bool):
         self.dry = dry
 
     def say(self, msg: str) -> None:
+        """Print one line of progress, marked as a dry run when nothing is changed."""
         print(("[dry-run] " if self.dry else "") + msg)
 
     def run(self, cmd: list[str], check: bool = True) -> subprocess.CompletedProcess | None:
+        """Run an external command and capture its output; skipped (returns None) in dry-run mode."""
         self.say("$ " + subprocess.list2cmdline(cmd))
         if self.dry:
             return None
         return subprocess.run(cmd, check=check, text=True, capture_output=True)
 
     def backup(self, path: Path) -> None:
+        """Copy an existing file to a free backup name before it is overwritten."""
         if path.exists():
             dst = free_backup_path(path)
             self.say(f"backup {path} -> {dst.name}")
@@ -264,6 +269,7 @@ class Installer:
                 shutil.copy2(path, dst)
 
     def write(self, path: Path, text: str) -> None:
+        """Write `text` to `path`, backing up the old file first; skipped when the content is unchanged."""
         if path.exists() and path.read_text(encoding="utf-8") == text:
             self.say(f"unchanged {path}")
             return
@@ -338,7 +344,7 @@ class Installer:
         name = Path(key).name
         parent = self.tracked_path(key).parent
         marks = (self.BACKUP_MARK, LEGACY_BACKUP_MARK)
-        backups = [p for mark in marks for p in parent.glob(f"{name}{mark}*")]
+        backups = [found for mark in marks for found in parent.glob(f"{name}{mark}*")]
         return min(backups) if backups else None
 
     def _restore_one(self, key: str, existed: bool, snapshot_bytes: bytes | None) -> None:
@@ -541,7 +547,7 @@ class Installer:
         """
         port = (yaml_load(ROOT / "config" / "orchestrator.yaml") or {}).get("port", 8081)
         needle = f"127.0.0.1:{port}"
-        found = [t for t in self._leftover_gateway_env(self.vscode_user_dir() / "settings.json")]
+        found = list(self._leftover_gateway_env(self.vscode_user_dir() / "settings.json"))
         env_of_claude = (self._read_json(CLAUDE_HOME / "settings.json") or {}).get("env", {})
         if needle in str(env_of_claude.get("ANTHROPIC_BASE_URL", "")):
             found.append(f"ANTHROPIC_BASE_URL in {CLAUDE_HOME / 'settings.json'} (env)")
@@ -727,10 +733,12 @@ class Installer:
 
     # ------------------------------------------------------------ steps
     def venv_python(self) -> Path:
+        """Path of the project venv's interpreter (Scripts\\python.exe on Windows, bin/python elsewhere)."""
         sub = "Scripts/python.exe" if os.name == "nt" else "bin/python"
         return ROOT / ".venv" / sub
 
     def make_venv(self) -> Path:
+        """Create the project venv if needed and install the package in editable mode; returns its interpreter."""
         py = self.venv_python()
         if py.exists():
             self.say(f"venv exists: {py.parent.parent}")
@@ -748,6 +756,7 @@ class Installer:
         return py
 
     def already_installed(self, py: Path) -> bool:
+        """True when this venv already imports foremankit from this project folder (editable install)."""
         if self.dry or not py.exists():
             return False
         probe = "import foremankit,pathlib;print(pathlib.Path(foremankit.__file__).resolve())"
@@ -755,6 +764,7 @@ class Installer:
         return done.returncode == 0 and Path(done.stdout.strip()).is_relative_to(ROOT)
 
     def install_agents(self) -> None:
+        """Copy the bundled subagent definitions into ~/.claude/agents."""
         for name in AGENTS:
             src = ROOT / "claude" / "agents" / name
             self.write(CLAUDE_HOME / "agents" / name, src.read_text(encoding="utf-8"))
@@ -768,10 +778,11 @@ class Installer:
             head, tail = head.rstrip("\n"), tail.lstrip("\n")
         else:
             head, tail = current.rstrip("\n"), ""
-        parts = [p for p in (head, f"{BEGIN}\n{block.strip()}\n{END}" if block else "", tail) if p]
+        parts = [part for part in (head, f"{BEGIN}\n{block.strip()}\n{END}" if block else "", tail) if part]
         return "\n\n".join(parts) + "\n"
 
     def install_rules(self, remove: bool = False) -> None:
+        """Insert, refresh or (on uninstall) remove the foremankit block in ~/.claude/CLAUDE.md."""
         target = CLAUDE_HOME / "CLAUDE.md"
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         block = None if remove else (ROOT / "claude" / "CLAUDE.global.md").read_text(encoding="utf-8")
@@ -800,6 +811,7 @@ class Installer:
         return py.with_name("foremankit-mcp.exe" if os.name == "nt" else "foremankit-mcp")
 
     def register_mcp(self, py: Path, remove: bool = False) -> None:
+        """Register (or on uninstall remove) the foremankit MCP server with the `claude` CLI."""
         claude = find_claude()
         cmd = self.mcp_command(py)
         if not claude:
@@ -853,10 +865,11 @@ class Installer:
         return Path.home() / ".config" / "Code" / "User"
 
     @staticmethod
+    # codecheck: allow too-many-parameters (the call sites and tests pass these positionally; the VS Code keys stay explicit)
     def merged_vscode_settings(data: dict, base_url: str, model_id: str, remove: bool = False, tasks: bool = False) -> dict:
         """Add (or remove) the three gateway entries in claudeCode.environmentVariables; other entries stay."""
         values = dict(zip(GATEWAY_ENV, (base_url, model_id, PICKER_NAME)))
-        entries = [e for e in data.get("claudeCode.environmentVariables", []) if e.get("name") not in values]
+        entries = [entry for entry in data.get("claudeCode.environmentVariables", []) if entry.get("name") not in values]
         if not remove:
             entries += [{"name": name, "value": value} for name, value in values.items()]
         merged = {**data, "claudeCode.environmentVariables": entries}
@@ -870,7 +883,7 @@ class Installer:
     def merged_vscode_tasks(data: dict, tasks: list[dict], remove: bool = False, drop_labels: tuple = ()) -> dict:
         """Replace the tasks with the same labels (or just remove them); `drop_labels` are removed too. User tasks stay."""
         labels = {task["label"] for task in tasks} | set(drop_labels)
-        kept = [t for t in data.get("tasks", []) if t.get("label") not in labels]
+        kept = [task for task in data.get("tasks", []) if task.get("label") not in labels]
         merged = {"version": "2.0.0", **data, "tasks": kept if remove else kept + tasks}
         return merged
 
@@ -991,9 +1004,9 @@ class Installer:
         wanted = self.autostart_tasks(py)
         if wanted:
             self._record_auto_tasks_marker(folder / "settings.json")   # before the write: afterwards the key always exists
-        self.write_json(folder / "settings.json", lambda d: self.merged_vscode_settings(d, base_url, model_id, False, bool(wanted)))
+        self.write_json(folder / "settings.json", lambda data: self.merged_vscode_settings(data, base_url, model_id, False, bool(wanted)))
         if wanted:
-            self.write_json(folder / "tasks.json", lambda d: self.merged_vscode_tasks(d, wanted, False, (TASK_SERVER,)))
+            self.write_json(folder / "tasks.json", lambda data: self.merged_vscode_tasks(data, wanted, False, (TASK_SERVER,)))
         self.register_logon_task()
 
     def disable_router_mode(self) -> None:
@@ -1008,10 +1021,10 @@ class Installer:
         folder = self.vscode_user_dir()
         settings, tasks = folder / "settings.json", folder / "tasks.json"
         if settings.exists():
-            self.write_json(settings, lambda d: self.merged_vscode_settings(d, base_url, model_id, True))
+            self.write_json(settings, lambda data: self.merged_vscode_settings(data, base_url, model_id, True))
             self.write_json(settings, self._without_auto_tasks)
         if tasks.exists():
-            self.write_json(tasks, lambda d: self.merged_vscode_tasks(d, [], True, (TASK_SERVER, TASK_ROUTER)))
+            self.write_json(tasks, lambda data: self.merged_vscode_tasks(data, [], True, (TASK_SERVER, TASK_ROUTER)))
 
     def router_mode_active(self) -> bool:
         """True when the VS Code user settings still point Claude Code at the local gateway."""
@@ -1051,6 +1064,7 @@ class Installer:
 
     @staticmethod
     def check_subagent_override() -> None:
+        """Warn when CLAUDE_CODE_SUBAGENT_MODEL is set (in the environment or Claude settings), since it overrides subagent `model:`."""
         found = bool(os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL"))
         settings = CLAUDE_HOME / "settings.json"
         if settings.exists():
@@ -1072,6 +1086,7 @@ def yaml_load(path: Path) -> dict:
 
 
 def report_keys() -> None:
+    """Print each API key or URL the tools read, and whether it is set in the environment."""
     print("\nKeys / URLs (set in env or in .env / ~/.config/foremankit/.env):")
     for key in KEYS:
         print(f"  {key:<26} {'set' if os.environ.get(key) else 'NOT SET'}")
@@ -1080,6 +1095,13 @@ def report_keys() -> None:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the installer: install, uninstall, restore, check."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    _add_mode_flags(ap)
+    _add_install_flags(ap)
+    return ap
+
+
+def _add_mode_flags(ap: argparse.ArgumentParser) -> None:
+    """Flags that choose what the run does: dry run, uninstall, check or restore."""
     ap.add_argument("--dry-run", action="store_true", help="show actions only")
     ap.add_argument("--uninstall", action="store_true",
                     help="remove only what foremankit added; keeps later edits of your files")
@@ -1092,6 +1114,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--restore-original", action="store_true",
                     help="put CLAUDE.md, settings.json, the agent files and the VS Code files back byte for byte "
                          "as they were before the first install (later edits are lost)")
+
+
+def _add_install_flags(ap: argparse.ArgumentParser) -> None:
+    """Flags that choose which parts of the install run: router mode, llama-server, VS Code panel, Claude Code."""
     ap.add_argument("--router", action="store_true",
                     help="with --local-orchestrator: also switch Claude Code to router mode (local models); default is direct mode")
     ap.add_argument("--with-llama", action="store_true",
@@ -1101,7 +1127,6 @@ def build_parser() -> argparse.ArgumentParser:
                          "(the panel itself is installed by default; Claude Code stays in direct mode unless --router)")
     ap.add_argument("--no-panel", action="store_true", help="do not install the VS Code panel (ForemanKit sidebar)")
     ap.add_argument("--skip-claude", action="store_true", help="only venv + package, do not touch ~/.claude")
-    return ap
 
 
 def report_leftovers(inst: Installer) -> int:
@@ -1132,9 +1157,8 @@ def stop_services_safely(inst: Installer, args: argparse.Namespace) -> None:
         print("No running foremankit gateway or llama-server of this folder.")
 
 
-def run_uninstall(inst: Installer, args: argparse.Namespace) -> int:
-    """Undo everything the installer did: services, agents, rules, MCP, hooks, VS Code, empty files."""
-    py = inst.venv_python()
+def _remove_installed_parts(inst: Installer, py: Path) -> None:
+    """Undo the Claude Code and VS Code parts of the install, the same steps as the install, each one reversed."""
     inst.migrate_legacy()   # an install made under the old name "agentkit" is cleaned up as well
     inst.remove_agents()
     inst.install_rules(remove=True)
@@ -1142,6 +1166,12 @@ def run_uninstall(inst: Installer, args: argparse.Namespace) -> int:
     inst.install_hooks(py, remove=True)
     inst.install_local_orchestrator(py, remove=True)
     inst.remove_empty_created_files()
+
+
+def run_uninstall(inst: Installer, args: argparse.Namespace) -> int:
+    """Undo everything the installer did: services, agents, rules, MCP, hooks, VS Code, empty files."""
+    py = inst.venv_python()
+    _remove_installed_parts(inst, py)
     stop_services_safely(inst, args)
     if args.purge:
         inst.purge_state()
