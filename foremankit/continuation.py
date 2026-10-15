@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from .caller import Caller
 
 DEFAULT_MAX_CONTINUATIONS = 2
+DEFAULT_CONTINUATIONS_CAP = 6      # most extra rounds one call may ask for (ctx.max_continuations)
+DEFAULT_TOTAL_CONTINUATIONS = 8    # most rounds one answer gets over all its resumes: a runaway task stops here
 CHARS_PER_TOKEN = 3        # rough size of the partial answer when it is sent back as input
 
 
@@ -24,15 +26,24 @@ def complete_if_cut(caller: Caller, candidate: Candidate, ctx: CallContext, answ
 
     Every round is a separate call (its usage is recorded by `request_once`); the returned Answer is the joined text
     with the summed tokens, cost and time. It still says `finish_reason == "length"` when the limit was not enough."""
-    rounds = int(caller.settings.get("max_continuations", DEFAULT_MAX_CONTINUATIONS))
+    rounds = _rounds_allowed(caller, ctx)
+    total_limit = int(caller.settings.get("max_total_continuations", DEFAULT_TOTAL_CONTINUATIONS))
     for _ in range(rounds):
-        if not _worth_continuing(caller, candidate, ctx, answer):
+        if answer.continuations >= total_limit or not _worth_continuing(caller, candidate, ctx, answer):
             break
         more = caller.request_once(candidate, _continuation_context(ctx, answer))
         if more is None:
             break
         answer = _joined(answer, more)
     return answer
+
+
+def _rounds_allowed(caller: Caller, ctx: CallContext) -> int:
+    """Rounds for this call: the configured default, or what the caller asked for, never above the configured cap."""
+    settings = caller.settings
+    if not ctx.max_continuations:
+        return int(settings.get("max_continuations", DEFAULT_MAX_CONTINUATIONS))
+    return min(ctx.max_continuations, int(settings.get("max_continuations_cap", DEFAULT_CONTINUATIONS_CAP)))
 
 
 def _worth_continuing(caller: Caller, candidate: Candidate, ctx: CallContext, answer: Answer) -> bool:

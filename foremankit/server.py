@@ -61,22 +61,27 @@ async def _run_guarded(tool_name: str, work: Callable[[], str]) -> str:
         return f"ERROR in {tool_name}: {type(error).__name__}: {error} (traceback: {log_path})"
 
 
-# The 11 parameters mirror the MCP tool schema, so the 4-parameter limit does not apply here.
+# The 13 parameters mirror the MCP tool schema, so the 4-parameter limit does not apply here.
 @mcp.tool(**TOOL)
 # codecheck: allow too-many-parameters (every option is a field of the MCP tool schema that clients fill in)
 async def delegate(task: str, kind: str, sensitivity: str = "normal", context_files: list[str] | None = None,
                    system_hint: str = "", max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS, escalate: bool = False,
-                   allow_cost: bool = False, verify: str = "", verify_target: str = "", review: bool = False) -> str:
+                   allow_cost: bool = False, verify: str = "", verify_target: str = "", review: bool = False,
+                   continue_from: str = "", max_continuations: int = 0) -> str:
     """Run task on a cheap model. kind: bulk_code|data_script|hard_code|long_context|quick|summarize.
     sensitivity: normal | internal (process data: paid no-train Gemini or the local LLM) | private (local LLM only).
     Result saved to .agent-out/; returns path + preview. Keep the answer under ~4000 tokens (one file/part per call).
     verify + verify_target: write the answer into that file and run the check (e.g. "python -m pytest tests/x.py -q");
     failures go back to the same model; the file stays changed only if the check passes.
     allow_cost: accept a paid call above the per-call cost cap.
-    review: a different model (own local LLM or a paid one) reviews the finished code; grounded blockers go back to the author once."""
+    review: a different model (own local LLM or a paid one) reviews the finished code; grounded blockers go back to the author once.
+    A cut-off answer is continued automatically (up to calls.max_continuations rounds). If the result says INCOMPLETE, send the
+    SAME task, kind, sensitivity, system_hint and context_files again with continue_from=<id of that result> to finish it on the
+    same model; max_continuations raises the rounds for one call (capped by routing.yaml)."""
     fn = partial(router().delegate, task, kind, sensitivity, context_files=context_files or [],
                  system_hint=system_hint, max_output_tokens=max_output_tokens, escalate=escalate,
-                 allow_cost=allow_cost, verify=verify, verify_target=verify_target, review=review)
+                 allow_cost=allow_cost, verify=verify, verify_target=verify_target, review=review,
+                 continue_from=continue_from, max_continuations=max_continuations)
     return await _run_guarded("delegate", lambda: format_result(fn()))
 
 

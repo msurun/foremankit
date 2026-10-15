@@ -55,6 +55,8 @@ class TaskRequest:
     verify: str = ""
     verify_target: str = ""
     review: bool = False
+    continue_from: str = ""       # id of a cut-off answer in .agent-out to finish (same task, same model)
+    max_continuations: int = 0    # extra continuation rounds for this call (0 = routing.yaml calls.max_continuations)
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,8 @@ class CallContext:
     messages: list[dict[str, str]] = field(default_factory=list)
     reasoning: str | None = None
     allow_cost: bool = False
+    prompt_sha: str = ""           # fingerprint of the whole prompt, so a resume can prove it is the same task
+    max_continuations: int = 0     # per-call override of calls.max_continuations (0 = use the configuration)
 
 
 @dataclass

@@ -13,8 +13,9 @@ def format_result(result: dict[str, Any]) -> str:
     """Render one delegation result: header, file, warnings, verify/review outcome and a preview."""
     lines = [_result_header(result), f"file: {result['path']}"]
     if result.get("truncated"):
-        lines.append("INCOMPLETE: the answer is still cut off at max_output_tokens after the automatic continuations; "
-                     "split the task or raise max_output_tokens")
+        lines.append("INCOMPLETE: the answer is still cut off at max_output_tokens after the automatic continuations. "
+                     f"Finish it: send the same task again with continue_from=\"{result['id']}\" "
+                     "(same kind, sensitivity, system_hint and context_files), or split the task")
     lines += ["NOTE: " + note for note in result.get("notes") or []]
     if result.get("verify"):
         lines.append(_verify_line(result["verify"]))

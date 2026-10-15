@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ from .records import (
     RouterError,
     TaskRequest,
 )
+from .resume import Resume, load_resume, prompt_fingerprint, resumed_id
 from .selection import estimate_seconds, unsuited_reason
 
 if TYPE_CHECKING:
@@ -64,7 +66,8 @@ def prepare_context(router: Router, request: TaskRequest) -> tuple[CallContext, 
         call_id=f"{datetime.now():%Y%m%d-%H%M%S}-{request.kind}-{secrets.token_hex(2)}", kind=request.kind,
         sensitivity=sensitivity, escalate=request.escalate,
         est_in=prompting.estimate_input_tokens(router.routing, messages), max_out=max_out, messages=messages,
-        reasoning=reasoning.cap_for_large_output(router.routing, level, max_out), allow_cost=request.allow_cost)
+        reasoning=reasoning.cap_for_large_output(router.routing, level, max_out), allow_cost=request.allow_cost,
+        prompt_sha=prompt_fingerprint(messages), max_continuations=request.max_continuations)
     return ctx, reasoning.size_notes(router.routing, max_out)
 
 
@@ -75,10 +78,31 @@ class ChainRun:
         self.router = router
         self.exclude = exclude
         self.ctx, self.notes = prepare_context(router, request)
-        self.chain = build_chain(router.routing, self.ctx.kind, self.ctx.sensitivity, self.ctx.escalate)
+        self.resume = self._load_resume(request)
+        self.chain = ([self.resume.chain_entry] if self.resume
+                      else build_chain(router.routing, self.ctx.kind, self.ctx.sensitivity, self.ctx.escalate))
+        self.attempts = 0
         self.nodes = {node.name: node for node in router.nodes()}
         self.skipped: list[str] = []
         self.deferred: list[str] = []
+
+    def _load_resume(self, request: TaskRequest) -> Resume | None:
+        """The saved cut-off answer named by `continue_from` (it picks the source and the id of the finished file)."""
+        if not request.continue_from:
+            return None
+        out_dir = self.router.out_dir()
+        resume = load_resume(out_dir, request.continue_from, self.ctx)
+        existing = {path.stem for path in out_dir.glob("*.md")}
+        self.ctx = replace(self.ctx, call_id=resumed_id(resume.original_id, existing))
+        return resume
+
+    def _attempt_context(self) -> CallContext:
+        """The context of the next call: every attempt gets its own id, so a later source cannot overwrite the partial
+        answer file an earlier one left behind (<id>, <id>-a2, <id>-a3 ...)."""
+        self.attempts += 1
+        if self.attempts == 1:
+            return self.ctx
+        return replace(self.ctx, call_id=f"{self.ctx.call_id}-a{self.attempts}")
 
     def execute(self) -> dict[str, Any]:
         """The result of the first source that answers; raises when none does."""
@@ -190,7 +214,8 @@ class ChainRun:
             if not acquired:
                 return DEFER, "busy: another request is using it"
         try:
-            result = self.router.caller.call(candidate, self.ctx)
+            result = self.router.caller.call(candidate, self._attempt_context(),
+                                             self.resume.seed() if self.resume else None)
         finally:
             if slot is not None:
                 slot.release()

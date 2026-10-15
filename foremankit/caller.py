@@ -45,9 +45,22 @@ class Caller:
         """routing.yaml `calls`."""
         return self.router.routing.get("calls") or {}
 
-    def call(self, candidate: Candidate, ctx: CallContext) -> dict[str, Any] | str:
-        """Run one provider (max `calls.max_retries` retries on transient errors)."""
+    def call(self, candidate: Candidate, ctx: CallContext, resume: Answer | None = None) -> dict[str, Any] | str:
+        """Run one provider (max `calls.max_retries` retries on transient errors). `resume` = a saved cut-off answer
+        to finish instead of asking the question again (continue_from)."""
         log_fields = self._log_fields(candidate, ctx)
+        answer = resume or self._first_answer(candidate, ctx, log_fields)
+        if isinstance(answer, str):
+            return answer
+        if not is_dry_run():
+            answer = complete_if_cut(self, candidate, ctx, answer)
+            problem = self._unusable_reason(candidate, ctx, answer, log_fields)
+            if problem:
+                return problem
+        return self._success(candidate, ctx, answer, log_fields)
+
+    def _first_answer(self, candidate: Candidate, ctx: CallContext, log_fields: dict[str, Any]) -> Answer | str:
+        """The model's reply to the task (its usage recorded), or the failure reason."""
         start = time.perf_counter()
         try:
             reply = self._send(candidate, ctx)
@@ -56,11 +69,7 @@ class Caller:
         answer = self._to_answer(reply, candidate, ctx, time.perf_counter() - start)
         if not is_dry_run():
             self._record_usage(candidate, answer)
-            answer = complete_if_cut(self, candidate, ctx, answer)
-            problem = self._unusable_reason(candidate, ctx, answer, log_fields)
-            if problem:
-                return problem
-        return self._success(candidate, ctx, answer, log_fields)
+        return answer
 
     def request_once(self, candidate: Candidate, ctx: CallContext) -> Answer | None:
         """One more request to the same candidate (a continuation round): usage is recorded; None when it failed."""
@@ -174,9 +183,9 @@ class Caller:
             partial = write_answer(self.router.out_dir(), candidate, ctx, answer)
             self._log_rejected(log_fields, answer, "answer cut off inside a code block", path=partial)
             self._abort_if_wasteful(answer, f"{name} spent ${answer.cost_usd:.3f} and the answer was cut off inside a "
-                                    f"code block (partial text: {partial}). Split the task or ask for a smaller "
-                                    "answer; not retried on another paid model.")
-            return f"answer cut off inside a code block (partial text: {partial})"
+                                    f"code block (partial text: {partial}). Finish it with continue_from=\"{ctx.call_id}\" "
+                                    "(same task) or split the task; not retried on another paid model.")
+            return f"answer cut off inside a code block (partial text: {partial}; continue_from=\"{ctx.call_id}\")"
         return None
 
     def _log_rejected(self, log_fields: dict[str, Any], answer: Answer, error: str, path: str | None = None) -> None:

@@ -14,6 +14,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 
 from .config import REPO_DIR, _read_yaml, config_dir, state_dir
@@ -159,13 +160,19 @@ def _machine_speed(speed: dict[str, Any] | None) -> dict[str, Any] | None:
     return out
 
 
-def local_endpoints(provider_cfg: dict[str, Any]) -> list[Endpoint]:
-    """The servers on THIS machine (providers.yaml llm.endpoints: llama.cpp first, then Ollama)."""
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+
+
+def local_endpoints(provider_cfg: dict[str, Any], key: str | None = None) -> list[Endpoint]:
+    """The servers on THIS machine (providers.yaml llm.endpoints: llama.cpp first, then Ollama). `key` = the lab key:
+    a server started with -Share demands it from every client, this machine included; it is only sent to a loopback
+    address, so a url_env pointing elsewhere never receives it."""
     out = []
     for ep in provider_cfg.get("endpoints") or []:
         url = (os.environ.get(ep["url_env"]) if ep.get("url_env") else None) or ep.get("url") or ep.get("default_url")
         if url:
-            out.append(Endpoint(ep.get("name", "default"), url.rstrip("/")))
+            loopback = urlsplit(url).hostname in {host.strip("[]") for host in LOOPBACK_HOSTS}
+            out.append(Endpoint(ep.get("name", "default"), url.rstrip("/"), key if loopback else None))
     return out
 
 
@@ -229,7 +236,7 @@ def _this_machine(me: str | None, entry: dict[str, Any], lab: _Lab, provider_cfg
         speed=_machine_speed(entry.get("speed") or lab.default_speed), kinds=entry.get("kinds"),
         learn=bool(reader.get(entry, "learn", True)),
         max_concurrent=int(reader.get(entry, "max_concurrent", provider_cfg.get("max_concurrent", 1))),
-        preferred_models=entry.get("preferred_models"), endpoints=local_endpoints(provider_cfg),
+        preferred_models=entry.get("preferred_models"), endpoints=local_endpoints(provider_cfg, lab.key),
         hostname=str(entry.get("hostname", "")))
 
 

@@ -121,6 +121,8 @@ calls:
   preview_chars: 600
   warn_output_tokens: 8000   # a requested answer bigger than this gets a "split the task" note in the result
   abort_waste_usd: 0.02      # a paid call that wasted more than this (empty or cut-off answer) stops the chain: no second paid try
+  max_continuations_cap: 6   # most extra rounds a single call may ask for (delegate max_continuations)
+  max_total_continuations: 8 # most rounds one answer gets over all its resumes (continue_from); a runaway task stops here
   max_continuations: 2       # a cut-off answer (finish_reason length) is continued by the same model up to this many times
   log_prompts: false    # never log prompt/response bodies unless explicitly enabled
   cooldown_429_s: [30, 120, 600, 1800]   # backoff steps for consecutive 429s (Retry-After wins if larger)
