@@ -139,16 +139,19 @@ def _load_state(state_dir: Path) -> dict:
     """Load session state from disk."""
     state_file = state_dir / "session_checkpoint.json"
     try:
-        return json.loads(state_file.read_text(encoding="utf-8"))
-    except (ValueError, FileNotFoundError):
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _save_state(state_dir: Path, data: dict) -> None:
-    """Persist session state to disk."""
+    """Persist session state to disk through a temp file, so a concurrent reader never sees half a file."""
     state_file = state_dir / "session_checkpoint.json"
     state_dir.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    temp_file = state_file.with_name(f"{state_file.name}.{os.getpid()}.tmp")
+    temp_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp_file, state_file)
 
 
 def _build_compact(kind: str, task: str, response: str, checkpoints: list) -> str:

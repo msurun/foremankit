@@ -53,6 +53,13 @@ def load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def write_json_atomic(path: Path, data: dict) -> None:
+    """Write `data` as JSON through a temp file in the same folder, so a concurrent reader never sees half a file."""
+    temp_file = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp_file.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(temp_file, path)
+
+
 def delegation_off(folder: Path) -> bool:
     """True when every delegation category is switched off in the router state (`toggles` of state.json)."""
     toggles = load_json(folder / "state.json").get("toggles", {})
@@ -125,7 +132,7 @@ def remember(state: dict, state_file: Path) -> None:
     """Write the per-session counters, keeping only the most recently used sessions."""
     for key, _ in sorted(state.items(), key=lambda item: item[1].get("time", 0))[:-MAX_SESSIONS]:
         del state[key]
-    state_file.write_text(json.dumps(state), encoding="utf-8")
+    write_json_atomic(state_file, state)
 
 
 def emit(additional_context: str, event: str, system_message: str = "") -> None:

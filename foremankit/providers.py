@@ -187,6 +187,8 @@ def _post_chat(client: httpx.Client, request: ChatRequest) -> httpx.Response:
         raise ProviderTimeout(f"timeout after {request.timeout:.0f}s", transient=True) from error
     except httpx.HTTPError as error:
         raise ProviderError(f"connection error: {error.__class__.__name__}", transient=True) from error
+    except (TypeError, ValueError) as error:
+        raise ProviderError(f"bad request payload for {request.base_url}: {error}") from error
 
 
 def _raise_for_status(response: httpx.Response) -> None:

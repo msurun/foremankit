@@ -108,14 +108,27 @@ def fenced_blocks(answer: str) -> list[tuple[int, str]]:
     return blocks
 
 
+def names_target(answer: str, block: tuple[int, str], name: str) -> bool:
+    """Whether a fenced block says which file it holds: the name is in its info string (```python x.py), in its
+    first line (a comment such as `# file: x.py`) or in a markdown heading directly above it (`### x.py`).
+    Other prose before the block does not count, because a model may name one file in a sentence and then
+    answer with another block."""
+    offset, content = block
+    info_string = answer[offset:].split("\n", 1)[0]
+    first_line = content.lstrip().split("\n", 1)[0]
+    line_above = answer[:offset].rstrip("\n").rsplit("\n", 1)[-1].strip()
+    heading_above = line_above if line_above.startswith("#") else ""
+    return any(name in label for label in (info_string, first_line, heading_above))
+
+
 def extract_code(answer: str, target: str) -> str | None:
-    """The file content inside the model's answer: the fenced block under a heading that names the target file,
+    """The file content inside the model's answer: the fenced block that names the target file (see names_target),
     else the longest fenced block. None when the answer has no code block."""
     blocks = fenced_blocks(answer)
     if not blocks:
         return None
     name = Path(target).name
-    named = [candidate for candidate in blocks if name in answer[max(0, candidate[0] - 200):candidate[0]]]
+    named = [candidate for candidate in blocks if names_target(answer, candidate, name)]
     return max(named or blocks, key=lambda block: len(block[1]))[1].rstrip() + "\n"
 
 

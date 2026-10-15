@@ -86,6 +86,13 @@ def load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def write_json_atomic(path: Path, data: dict) -> None:
+    """Write `data` as JSON through a temp file in the same folder, so a concurrent reader never sees half a file."""
+    temp_file = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp_file.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(temp_file, path)
+
+
 def uses_local_model(transcript_path: str) -> bool:
     """True when the last answer in this session's transcript came from a local model.
 
@@ -143,7 +150,7 @@ def remember(state: dict, state_file: Path) -> None:
     if len(state) > 50:
         for key, _ in sorted(state.items(), key=lambda item: item[1].get("time", 0))[:-50]:
             del state[key]
-    state_file.write_text(json.dumps(state), encoding="utf-8")
+    write_json_atomic(state_file, state)
 
 
 def read_event() -> dict:

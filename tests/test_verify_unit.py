@@ -93,6 +93,20 @@ print("Hello, World!")
     assert verify.extract_code(answer, str(target)) == 'print("Hello, World!")\n'
 
 
+def test_extract_code_ignores_a_file_name_only_mentioned_in_prose(tmp_path):
+    target = tmp_path / "file.txt"
+    answer = """I will write file.txt first, but here is a wrong draft:
+```python
+print("wrong")
+```
+The real content of file.txt follows:
+```python
+# file.txt
+print("right and longer")
+```"""
+    assert verify.extract_code(answer, str(target)) == '# file.txt\nprint("right and longer")\n'
+
+
 def test_extract_code_falls_back_to_longest_block(tmp_path):
     target = tmp_path / "file.txt"
     answer = """```python

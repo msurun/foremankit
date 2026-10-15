@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -74,18 +75,31 @@ VSCODE_TRACKED = ("vscode/settings.json", "vscode/tasks.json")
 # Matched against the whole command line, lower-cased, so a process of another tool is not killed.
 FOREMANKIT_PROCESS_MARKERS = ("gateway", "llama-server", "start-orchestrator",
                             "Start-Router", "orchestrator")
+# A marker counts only as a whole word of the command line: the text before and after it must be a
+# space, quote, slash, dot, hyphen or the end of the line. "gateway" then matches "foremankit-gateway"
+# but not "gatewayx" or "test_gateway.py" (underscore is not an edge, so that name is not a gateway).
+WORD_EDGE = r"""[\s"'/.\-]"""
+# Test runs are never foremankit processes, even when they point at a file under this repository.
+TEST_RUNNER_WORD = "pytest"
 
 # Marker file recording that the installer ADDED task.allowAutomaticTasks (rather than the user).
 AUTO_TASKS_KEY = "task.allowAutomaticTasks"
 AUTO_TASKS_MARKER = "vscode-added.json"
 
 
+def has_whole_word(normalised: str, word: str) -> bool:
+    """True when `word` occurs in `normalised` with a WORD_EDGE character (or line end) on both sides."""
+    pattern = rf"(?:^|(?<={WORD_EDGE})){re.escape(word)}(?={WORD_EDGE}|$)"
+    return re.search(pattern, normalised) is not None
+
+
 def select_foremankit_processes(rows: list[tuple[int, str]], root: Path,
                               own_pid: int) -> list[tuple[int, str]]:
-    """Return the (pid, command line) rows started from `root`, excluding own_pid.
+    """Return the (pid, command line) rows started from `root`, excluding own_pid and test runs.
 
     A row matches when its command line, with backslashes normalised to forward slashes and
-    lower-cased, contains `root` (same normalisation) AND one of FOREMANKIT_PROCESS_MARKERS.
+    lower-cased, contains `root` (same normalisation) AND one of FOREMANKIT_PROCESS_MARKERS as a
+    whole word (see WORD_EDGE). A line that mentions pytest is a test run and never matches.
     Pure: no process is touched, so it is easy to test.
     """
     wanted_root = str(root).replace("\\", "/").lower()
@@ -93,9 +107,9 @@ def select_foremankit_processes(rows: list[tuple[int, str]], root: Path,
     kept = []
     for pid, command in rows:
         normalised = command.replace("\\", "/").lower()
-        if pid == own_pid:
+        if pid == own_pid or TEST_RUNNER_WORD in normalised:
             continue
-        if wanted_root in normalised and any(m in normalised for m in markers):
+        if wanted_root in normalised and any(has_whole_word(normalised, m) for m in markers):
             kept.append((pid, command))
     return kept
 
@@ -213,6 +227,21 @@ def _apply_hooks(hooks: dict, py: Path, remove: bool, only: str | None) -> None:
             apply(hooks, py, remove)
 
 
+def free_backup_path(path: Path) -> Path:
+    """Return a backup name next to `path` that no file uses yet.
+
+    STAMP is fixed for the whole run, so a second backup of the same file would reuse the first
+    name. Such a name gets `-2`, `-3`... appended, which keeps every earlier copy intact.
+    """
+    base = f"{path.name}.bak-foremankit-{STAMP}"
+    candidate = path.with_name(base)
+    number = 2
+    while candidate.exists():
+        candidate = path.with_name(f"{base}-{number}")
+        number += 1
+    return candidate
+
+
 class Installer:
     def __init__(self, dry: bool):
         self.dry = dry
@@ -228,7 +257,7 @@ class Installer:
 
     def backup(self, path: Path) -> None:
         if path.exists():
-            dst = path.with_name(f"{path.name}.bak-foremankit-{STAMP}")
+            dst = free_backup_path(path)
             self.say(f"backup {path} -> {dst.name}")
             if not self.dry:
                 shutil.copy2(path, dst)

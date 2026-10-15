@@ -265,6 +265,36 @@ def test_select_foremankit_processes_keeps_this_folder_gateway_and_drops_the_res
     assert result == [(11, f"{root}/.venv/bin/foremankit-gateway")]
 
 
+def test_pytest_run_under_this_folder_is_not_selected_as_a_gateway() -> None:
+    """A pytest command line that names a test file of this repository is never a gateway to stop."""
+    root = Path("/home/dev/foremankit")
+    rows = [(21, f"{root}/.venv/bin/python -m pytest {root}/tests/test_gateway.py -q")]
+
+    assert INSTALL.select_foremankit_processes(rows, root, own_pid=4242) == []
+
+
+def test_gateway_module_command_line_of_this_folder_is_still_selected() -> None:
+    """`python -m foremankit.gateway` from this folder is a real gateway: the dot is a word edge."""
+    root = Path("/home/dev/foremankit")
+    row = (22, f"{root}/.venv/bin/python -m foremankit.gateway --port 8081")
+
+    assert INSTALL.select_foremankit_processes([row], root, own_pid=4242) == [row]
+
+
+def test_backup_twice_in_one_run_keeps_both_copies(sandbox: Sandbox) -> None:
+    """Two backups of one file in the same run get different names and neither copy is overwritten."""
+    target = write_file(sandbox.claude / CLAUDE_MD, b"first\n")
+    installer = INSTALL.Installer(dry=False)
+    installer.backup(target)
+    write_file(target, b"second\n")
+
+    installer.backup(target)
+
+    backups = sorted(sandbox.claude.glob(f"{CLAUDE_MD}.bak-foremankit-*"))
+    assert len(backups) == 2
+    assert {backup.read_bytes() for backup in backups} == {b"first\n", b"second\n"}
+
+
 def test_purge_state_removes_the_state_folder_and_leaves_a_sibling_folder(sandbox: Sandbox) -> None:
     """purge_state deletes STATE_DIR with its contents and touches no other folder."""
     write_file(sandbox.state / "snapshot.json", b"{}\n")
