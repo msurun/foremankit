@@ -176,14 +176,14 @@ def command_for(action: str, model: str = "") -> str:
 
     `tune` stops the server, tunes the offload and threads, then finds the largest fast context (one job). Models whose
     name carries no active-parameter suffix (-A3B, -A4B) are treated as dense: they have no experts to offload."""
-    py = f"& '{python_exe()}'"
+    py = f"& '{ps_quote(python_exe())}'"
     dense = "" if MOE_NAME.search(model) else " --dense"
     stop = f"{py} -m foremankit.panel stop-server"
-    tune = f"{py} '{LLAMA / 'tune_llama.py'}' --model '{model}'{dense}"
-    sweep = f"{py} '{LLAMA / 'sweep_ctx.py'}' '{model}'"
+    tune = f"{py} '{ps_quote(LLAMA / 'tune_llama.py')}' --model '{ps_quote(model)}'{dense}"
+    sweep = f"{py} '{ps_quote(LLAMA / 'sweep_ctx.py')}' '{ps_quote(model)}'"
     commands = {
         "tune": f"{stop}; {tune}; {sweep}",
-        "download-llama": f"{py} '{LLAMA / 'get_llama.py'}'",
+        "download-llama": f"{py} '{ps_quote(LLAMA / 'get_llama.py')}'",
     }
     return commands[action]
 

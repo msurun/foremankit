@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .config import ConfigError
 from .delegation import CATEGORIES, describe, set_switch
 from .formatting import format_result, format_review, format_status
 from .netguard import PrivacyError
@@ -320,10 +321,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    router = Router()
     try:
-        return COMMANDS[args.cmd](router, args)
-    except (RouterError, PrivacyError) as error:
+        return COMMANDS[args.cmd](Router(), args)
+    except (RouterError, PrivacyError, ConfigError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

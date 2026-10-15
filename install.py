@@ -844,7 +844,7 @@ class Installer:
         if sys.platform != "win32":
             print("! no autostart here: start the gateway with `foremankit-gateway` or let VS Code run the task")
             return
-        script = ROOT / "llama" / "Start-Router.ps1"
+        script = str(ROOT / "llama" / "Start-Router.ps1").replace("'", "''")  # sits inside a single-quoted PowerShell string
         # conhost --headless: no console window flashes every few minutes; the repeating trigger restarts a dead gateway
         command = (f"$a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless powershell.exe -NoProfile "
                    f"-ExecutionPolicy Bypass -File \"{script}\"'; "
