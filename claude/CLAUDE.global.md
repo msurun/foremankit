@@ -14,4 +14,4 @@ Secondary (rare):
 - `allow_cost=true` only after the user agreed to the amount.
 - Code standard: clean code after R. Martin - functions <=20 lines / 4 params / 3 nesting, docstring on every module/class/public function, 2-4 line header on every file, specific exceptions, no duplication; check python with `foremankit check <file>`; do not reformat code you were not asked to touch. Full text in the reference.
 - Start a local LLM server ONLY through `llama/start-llama.cmd` (check `-List` first).
-- Long session at a natural breakpoint: suggest a NEW session once, with state saved to memory/repo.
+- Long session at a natural breakpoint: suggest a NEW session once. Before suggesting it, update the handoff yourself (memory/WORKLOG/repo notes), unasked: rewrite it to the current state and delete outdated or finished points instead of appending; the suggestion's line says the handoff is already current.
