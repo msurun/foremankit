@@ -46,7 +46,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import pairing
+from foremankit import pairing, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -127,7 +127,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -501,6 +501,23 @@ def orchestrator_status() -> dict[str, Any]:
     return {"name": target.get("name", "?"), "url": target["url"], **worker_status(target["url"])}
 
 
+def orchestrator_mode_status() -> dict[str, Any]:
+    """Who orchestrates Claude Code: {"mode", "modes"}; modes = claude, local and every upstream of orchestrator.yaml."""
+    upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
+    return {"mode": upstream.active_mode(), "modes": [*upstream.BUILTIN_MODES, *upstreams]}
+
+
+def set_orchestrator_mode(name: str, cwd: str = "") -> str:
+    """Switch Claude Code's orchestrator to claude, local or an external upstream; refused when the key is missing or
+    the folder `cwd` (the VS Code workspace) is more sensitive than the provider may see. The gateway re-reads the file."""
+    settings = {**GATEWAY_DEFAULTS, **_read_yaml(config_dir() / "orchestrator.yaml")}
+    problem = upstream.check_switch(settings, name, Path(cwd or os.getcwd()))
+    if problem:
+        raise ValueError(problem)
+    upstream.set_mode(name)
+    return f"orchestrator mode: {name}" + ("" if name in upstream.BUILTIN_MODES else " (router must be running; restart the Claude Code chat)")
+
+
 def set_orchestrator(name: str) -> str:
     """Serve Claude Code from `name` (a worker of the pool, which must run its llama-server with -Share) or from this PC.
 
@@ -699,6 +716,8 @@ def run_config_action(args: argparse.Namespace) -> str:
             return test_worker(args.name)
         if args.what == "orchestrator":
             return set_orchestrator(args.name)
+        if args.what == "orchestrator-mode":
+            return set_orchestrator_mode(args.name, args.cwd)
         if args.what == "worker-enable":
             return set_worker_enabled(args.name, args.action == "true")
         if args.what == "profile-set":
@@ -713,7 +732,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -723,6 +742,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--code", default="")
     parser.add_argument("--replace", action="store_true", help="pair-join: replace a different lab key")
     parser.add_argument("--name", default="")
+    parser.add_argument("--cwd", default="", help="orchestrator-mode: the workspace folder whose sensitivity is checked")
     parser.add_argument("--url", default="")
     parser.add_argument("--accept", default="internal")
     parser.add_argument("--priority", type=int, default=10)
@@ -751,7 +771,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "profile-set", "delegation-set"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "profile-set", "delegation-set"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}

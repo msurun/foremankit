@@ -75,6 +75,11 @@ function readSlots() {
   });
 }
 
+function workspaceDir() {
+  const folders = vscode.workspace.workspaceFolders;
+  return folders && folders.length ? folders[0].uri.fsPath : '';
+}
+
 function backend(args) {
   return new Promise((resolve) => {
     cp.execFile(PYTHON, ['-m', 'foremankit.panel', ...args], { cwd: ROOT, timeout: 60000 }, (error, stdout, stderr) => {
@@ -150,6 +155,7 @@ class Panel {
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
+      orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
       workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
@@ -310,6 +316,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
 <div class="info">Orchestrator for Claude Code runs on:</div>
 <div id="orchChoice"></div>
+<h3>Who orchestrates Claude Code</h3>
+<div class="info">Claude (your subscription), the local model, or an external API (DeepSeek, Gemini) when the Claude limit is spent. External modes need the router running and the API key in .env; a folder above the provider's sensitivity ceiling (.foremankit/sensitivity, missing = private) is refused.</div>
+<div id="modeChoice"></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
@@ -409,7 +418,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
   $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
-  showLevels(s.thinking); showRole(s.role); showDelegationSwitches(s.delegation);
+  showLevels(s.thinking); showOrchestratorMode(s.orchestrator_mode); showRole(s.role); showDelegationSwitches(s.delegation);
   $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   const waiting = !s.server.up && (s.server.starting || Date.now() < startingUntil);
@@ -459,6 +468,15 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  }
  $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
  $('roleStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
+ function showOrchestratorMode(info) {
+  const box = $('modeChoice'); if (!info || box.contains(document.activeElement)) return; box.innerHTML = '';
+  for (const name of info.modes) {
+   const l = document.createElement('label'); l.className = 'info'; l.style.marginRight = '10px';
+   const r = document.createElement('input'); r.type = 'radio'; r.name = 'mode'; r.checked = name === info.mode;
+   r.onchange = () => send({ type: 'config', action: 'orchestratorMode', name });
+   l.appendChild(r); l.appendChild(document.createTextNode(' ' + name)); box.appendChild(l);
+  }
+ }
  function showOrchestratorChoice(list) {
   const box = $('orchChoice'); box.innerHTML = '';
   const options = [{ name: 'this', label: 'This PC', checked: !list.some((w) => w.orchestrator) }]

@@ -376,3 +376,20 @@ def test_no_firewall_step_is_offered_off_windows(monkeypatch):
 def test_the_firewall_script_names_both_profiles_and_limits_the_remote_scope():
     script = (panel.LLAMA / "pair-firewall.ps1").read_text(encoding="utf-8")
     assert "'Private', 'Public'" in script and "-RemoteAddress LocalSubnet" in script and "8766" in script and "8767" in script
+
+
+def test_orchestrator_mode_lists_upstreams_and_refuses_a_too_sensitive_folder(monkeypatch, tmp_path: Path):
+    """The panel lists claude, local and the upstreams; switching to DeepSeek is refused for a private folder."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TEST_PANEL_KEY", "k")
+    (tmp_path / "orchestrator.yaml").write_text(
+        "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n",
+        encoding="utf-8")
+    assert panel.orchestrator_mode_status() == {"mode": "claude", "modes": ["claude", "local", "deepseek"]}
+    with pytest.raises(ValueError, match="private"):
+        panel.set_orchestrator_mode("deepseek", str(tmp_path))
+    (tmp_path / ".foremankit").mkdir()
+    (tmp_path / ".foremankit" / "sensitivity").write_text("normal", encoding="utf-8")
+    assert "deepseek" in panel.set_orchestrator_mode("deepseek", str(tmp_path))
+    assert panel.orchestrator_mode_status()["mode"] == "deepseek"
