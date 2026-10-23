@@ -298,3 +298,12 @@ def test_claude_only_blocks_become_text_and_tool_search_flags_are_dropped(gatewa
     inner = first[2]["content"]
     assert inner[0]["type"] == "tool_reference" and inner[1]["type"] == "text"
     assert shaped["messages"][1]["content"] == "plain string" and "defer_loading" not in shaped["tools"][0]
+
+
+def test_a_normal_claude_model_still_goes_to_anthropic_in_an_external_mode(gateway_dirs: Path, fake_upstream: list):
+    """Only the ForemanKit picker entry follows the mode: Sonnet chosen in the picker is sent to the cloud, key untouched."""
+    use_mode("deepseek")
+    post("/v1/messages", {**tooled_request(), "model": "claude-sonnet-5-5"})
+    sent = fake_upstream[-1]
+    assert str(sent.url).startswith("https://api.anthropic.com/v1/messages")
+    assert sent_model(sent) == "claude-sonnet-5-5" and sent_headers(sent)["x-api-key"] == "user-key"

@@ -286,6 +286,13 @@ def external_mode(cfg: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return mode, declared.get(mode) or {}
 
 
+def serves_picker_entry(body: bytes, cfg: dict[str, Any]) -> bool:
+    """True when the request is for the plugin's ForemanKit picker entry (a model of `local_models`). Only that entry
+    follows the orchestrator mode; a normal Claude model chosen in the picker still goes to Anthropic."""
+    data = parse_body(body)
+    return bool(data) and data.get("model") in cfg["local_models"]
+
+
 def external_refusal(mode: str, up: dict[str, Any]) -> str | None:
     """Why a request for the external orchestrator `mode` must be refused (undeclared mode, missing key), or None."""
     if not up.get("url") or not up.get("models"):
@@ -367,7 +374,7 @@ async def handle(request: Request) -> Response:
     """Forward one request to the local llama-server or the cloud and stream the answer back."""
     body, cfg = await request.body(), settings()
     external = external_mode(cfg)
-    if external:
+    if external and serves_picker_entry(body, cfg):
         return await handle_external(request, body, cfg, *external)
     data = parse_body(body)
     model = data.get("model") if data else None
