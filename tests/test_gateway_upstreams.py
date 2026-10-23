@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 from foremankit import gateway
 from foremankit import upstream
+from foremankit.state import CallLog, StateStore
 
 DEEPSEEK_URL = "http://deepseek.test/anthropic"
 PROVIDER_KEY = "provider-secret"
@@ -339,3 +340,40 @@ def test_a_provider_error_is_returned_unchanged_and_recorded(gateway_dirs: Path,
     assert len(saved) == 1
     record = json.loads(saved[0].read_text(encoding="utf-8"))
     assert record["answer"] == '{"error": "Invalid schema"}' and record["request"]["model"] == "ds-pro"
+
+
+def test_an_external_answer_is_counted_in_the_budget_and_call_log(gateway_dirs: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                   tmp_path: Path):
+    """Token usage of a streamed DeepSeek answer is priced and recorded like any delegated call (spend counter)."""
+    (tmp_path / "config" / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    models:\n      pro:\n        id: ds-pro\n"
+        "        price: {input_miss: 1.32, input_hit: 0.044, output: 3.96}\n", encoding="utf-8")
+
+    class SseResponse(FakeUpstreamResponse):
+        headers = {"content-type": "text/event-stream"}
+
+        async def aiter_raw(self):
+            yield (b'event: message_start\ndata: {"type":"message_start","message":{"usage":'
+                   b'{"input_tokens":1000,"cache_read_input_tokens":500,"output_tokens":1}}}\n\n')
+            yield b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":200}}\n\n'
+
+    async def fake_send(request, stream=True):
+        return SseResponse()
+
+    monkeypatch.setattr(gateway.client, "send", fake_send)
+
+    async def drain(response):
+        async for _ in response.body_iterator:
+            pass
+
+    use_mode("deepseek")
+    asyncio.run(drain(post("/v1/messages", tooled_request())))
+    state = StateStore(tmp_path / "state" / "state.json").load()
+    assert state["spend"]["day_usd"] == pytest.approx(0.001474, abs=1e-9)
+    rows = CallLog(tmp_path / "state" / "calls.jsonl").read()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "orchestrator" and row["provider"] == "deepseek" and row["model"] == "ds-pro"
+    assert row["tokens_in"] == 1000 and row["tokens_out"] == 200 and row["cache_hit"] == 500
+    assert row["cost_usd"] == pytest.approx(0.001474, abs=1e-9)
+
