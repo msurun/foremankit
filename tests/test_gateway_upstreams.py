@@ -282,3 +282,19 @@ def test_a_missing_key_env_answers_503_and_sends_nothing(
     assert response.status_code == 503
     assert KEY_ENV in json.loads(response.body)["error"]["message"]
     assert fake_upstream == []
+
+
+def test_claude_only_blocks_become_text_and_tool_search_flags_are_dropped(gateway_dirs: Path):
+    """A tool_definition block (tool search) must not reach a third-party API; standard blocks and tool_reference stay."""
+    request = {"model": "claude-sonnet-5", "tools": [{"name": "X", "defer_loading": True, "description": "d"}],
+               "messages": [{"role": "user", "content": [
+                   {"type": "tool_definition", "name": "Y"}, {"type": "text", "text": "hi"},
+                   {"type": "tool_result", "tool_use_id": "1", "content": [{"type": "tool_reference", "tool_name": "Y"},
+                                                                          {"type": "tool_definition", "name": "Z"}]}]},
+                   {"role": "assistant", "content": "plain string"}]}
+    shaped = gateway.plain_request(request)
+    first = shaped["messages"][0]["content"]
+    assert first[0]["type"] == "text" and "tool_definition" in first[0]["text"] and first[1] == {"type": "text", "text": "hi"}
+    inner = first[2]["content"]
+    assert inner[0]["type"] == "tool_reference" and inner[1]["type"] == "text"
+    assert shaped["messages"][1]["content"] == "plain string" and "defer_loading" not in shaped["tools"][0]

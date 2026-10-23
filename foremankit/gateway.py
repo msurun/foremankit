@@ -300,11 +300,41 @@ def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]
     and, for the main loop, the extra rules prompt; returns it with a log note."""
     side = is_toolless_message("/v1/messages", data)
     data = {**data, "model": upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))}
+    data = plain_request(data)
     if side or not is_main_loop(data, cfg["main_loop_tools"]):
         return data, f" (-> {data['model']}{' side request' if side else ''})"
     prompt_cfg = {**cfg, "prompt_file": up.get("prompt_file", "orchestrator.external.md")}
     trim = {"enabled": False, "system": "append", **(up.get("trim") or {})}
     return shape_request(data, read_prompt(prompt_cfg), trim), f" (-> {data['model']}, main loop)"
+
+
+STANDARD_BLOCKS = {"text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking", "document", "tool_reference"}
+TOOL_FIELDS_DROPPED = ("defer_loading",)    # Claude Code's tool-search flags: third-party APIs reject unknown fields
+
+
+def plain_block(block: dict[str, Any]) -> dict[str, Any]:
+    """A content block of a type only Claude knows (tool_definition from tool search...) becomes plain text, so a
+    third-party Anthropic-compatible API does not answer 422 'unknown variant'; standard blocks pass through."""
+    if not isinstance(block, dict) or block.get("type") in STANDARD_BLOCKS:
+        return block
+    return {"type": "text", "text": json.dumps(block, ensure_ascii=False)}
+
+
+def plain_content(content: Any) -> Any:
+    """`plain_block` over a message content list, also inside tool_result blocks; strings pass through."""
+    if not isinstance(content, list):
+        return content
+    blocks = [plain_block(block) for block in content]
+    return [{**block, "content": plain_content(block["content"])} if block.get("type") == "tool_result" and "content" in block
+            else block for block in blocks]
+
+
+def plain_request(data: dict[str, Any]) -> dict[str, Any]:
+    """The request without the Claude-only parts: unknown content block types as text, tool-search flags removed."""
+    messages = [{**message, "content": plain_content(message.get("content"))} for message in data.get("messages") or []]
+    tools = [{key: value for key, value in tool.items() if key not in TOOL_FIELDS_DROPPED} for tool in data.get("tools") or []]
+    shaped = {**data, "messages": messages}
+    return {**shaped, "tools": tools} if tools else shaped
 
 
 def external_headers(request: Request, up: dict[str, Any]) -> dict[str, str]:
@@ -327,6 +357,8 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any], mo
     if data is not None and request.url.path == "/v1/messages":
         shaped, call.note = shape_external(data, up, cfg)
         body = json.dumps(shaped, ensure_ascii=False).encode("utf-8")
+        if os.getenv(DUMP_ENV):
+            Path(os.environ[DUMP_ENV]).write_text(json.dumps(shaped, ensure_ascii=False, indent=1), encoding="utf-8")
     url = up["url"].rstrip("/") + request.url.path + (f"?{request.url.query}" if request.url.query else "")
     return await relay(request, call, cfg, body, (url, external_headers(request, up)))
 
