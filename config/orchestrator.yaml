@@ -1,6 +1,6 @@
 # Local orchestrator: the Claude Code plugin talks to the gateway (foremankit-gateway, port 8081), which sends requests
 # for `local_models` to the local llama-server and everything else unchanged to the Anthropic cloud.
-local_models: [claude-sonnet-5]        # model ids routed locally (the plugin picker entry "Local LLM (foremankit)")
+local_models: [claude-sonnet-5]        # model ids routed locally (the plugin picker entry "ForemanKit (local / DeepSeek / Gemini)"; the active orchestrator mode decides where it goes)
 local_url: http://127.0.0.1:8080
 local_target: local-llm                  # model name sent to llama-server (it serves one model, whatever it is called)
 cloud_url: https://api.anthropic.com
