@@ -554,6 +554,34 @@ def plan_preset(name: str, cwd: str = "") -> dict[str, Any]:
     return presets.preset_plan(name, preset_state())
 
 
+MODEL_BACKUP_FILE = "claude_model_backup.json"   # state dir: the user's own `model` of ~/.claude/settings.json while ours is set
+
+
+def claude_settings_path() -> Path:
+    """Claude Code's user settings (FOREMANKIT_CLAUDE_SETTINGS overrides it in tests)."""
+    return Path(os.environ.get("FOREMANKIT_CLAUDE_SETTINGS") or Path.home() / ".claude" / "settings.json")
+
+
+def sync_default_model(name: str) -> str:
+    """Make new Claude Code conversations start on the model that fits the preset: the ForemanKit picker entry for
+    local / DeepSeek / Gemini, the user's own choice again for claude. The user's value is kept in the state dir and
+    restored; other keys of settings.json stay as they are. A conversation that is already open keeps its model."""
+    path, backup = claude_settings_path(), state_dir() / MODEL_BACKUP_FILE
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    ours = ((_read_yaml(config_dir() / "orchestrator.yaml").get("local_models")) or GATEWAY_DEFAULTS["local_models"])[0]
+    if name != "claude" and data.get("model") != ours:
+        backup.write_text(json.dumps({"model": data.get("model")}), encoding="utf-8")
+        data["model"] = ours
+    elif name == "claude" and backup.exists():
+        original = json.loads(backup.read_text(encoding="utf-8")).get("model")
+        data.pop("model", None) if original is None else data.__setitem__("model", original)
+        backup.unlink()
+    else:
+        return ""
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return f"new chats start on {data.get('model', 'the default model')}"
+
+
 def apply_preset(name: str, cwd: str = "") -> dict[str, Any]:
     """Carry out preset `name`: everything is validated first (no change on a refusal), `direct` is applied last because
     it makes VS Code reload. Returns {"message", "reload", "needs_server"}."""
@@ -566,7 +594,9 @@ def apply_preset(name: str, cwd: str = "") -> dict[str, Any]:
             done.append(set_role(step["value"]))
         else:
             done.append(set_direct_mode(step["value"]))
-    return {"message": "; ".join(done) or "already active", "reload": plan["reload"], "needs_server": plan["needs_server"]}
+    if plan["steps"]:
+        done.append(sync_default_model(name))
+    return {"message": "; ".join(part for part in done if part) or "already active", "reload": plan["reload"], "needs_server": plan["needs_server"]}
 
 
 def set_orchestrator_mode(name: str, cwd: str = "") -> str:

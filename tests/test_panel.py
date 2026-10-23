@@ -434,3 +434,19 @@ def test_sensitivity_refusal_names_the_level_the_user_could_declare_and_marking_
     assert "error" not in panel.guarded(panel.plan_preset, "deepseek", str(tmp_path))
     with pytest.raises(ValueError):
         panel.mark_folder("secret", str(tmp_path))
+
+
+def test_default_model_follows_the_preset_and_the_users_own_choice_comes_back(monkeypatch, tmp_path: Path):
+    """A non-claude preset sets `model` to the ForemanKit picker entry, keeps other keys, and claude restores the old value."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"model": "sonnet", "theme": "dark"}), encoding="utf-8")
+    monkeypatch.setenv("FOREMANKIT_CLAUDE_SETTINGS", str(settings))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "orchestrator.yaml").write_text("local_models: [claude-sonnet-5]\n", encoding="utf-8")
+    assert "claude-sonnet-5" in panel.sync_default_model("deepseek")
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "claude-sonnet-5", "theme": "dark"}
+    assert panel.sync_default_model("gemini") == ""            # already ours: the backup of the user's value must survive
+    panel.sync_default_model("claude")
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "sonnet", "theme": "dark"}
+    assert panel.sync_default_model("claude") == ""
