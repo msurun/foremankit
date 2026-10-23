@@ -374,7 +374,10 @@ def record_orchestrator_spend(model: str, usage: dict[str, int], mode: str, ceil
     counter and the hard daily/monthly limit include Gemini/DeepSeek running Claude Code, not only the router's calls."""
     if not model:
         return
-    usd = budget.cost_usd(price_for_model(model), usage)
+    price = price_for_model(model)
+    if price is None:
+        print(f"   no price for model={model} in providers.yaml: the answer is not counted in the budget", flush=True)
+    usd = budget.cost_usd(price, usage)
     if usd > 0:
         StateStore().update(lambda state: budget.record(state, time.time(), usd))
     if usage["prompt_tokens"] or usage["completion_tokens"]:

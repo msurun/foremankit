@@ -75,7 +75,8 @@ upstreams:
     context: 1000000
     tools_keep: *keep_tools
     schema: {}
-    models: {opus: gemini-pro, sonnet: gemini-pro, haiku: gemini-flash}
+    # Ids must match a model in providers.yaml, otherwise the answer costs 0 in the spend counter.
+    models: {opus: gemini-3.1-pro-preview, sonnet: gemini-3.1-pro-preview, haiku: gemini-3.8-flash}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
 # (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:
