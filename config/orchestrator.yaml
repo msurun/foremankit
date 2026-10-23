@@ -65,12 +65,16 @@ upstreams:
     key_env: DEEPSEEK_API_KEY
     ceiling: normal
     context: 128000
+    tools_keep: &keep_tools [Read, Write, Edit, Glob, Grep, Bash, PowerShell, Agent, WebFetch, "mcp__foremankit__*", "mcp__claude-vscode__*"]
+    schema: {}                       # overrides of the built-in profile (foremankit/provider_schema.py): drop_keywords, describe_keywords, ...
     models: {opus: deepseek-v4-pro, sonnet: deepseek-v4-pro, haiku: deepseek-flash}
   gemini:
     url: http://127.0.0.1:4000
     key_env: LITELLM_MASTER_KEY
     ceiling: internal
     context: 1000000
+    tools_keep: *keep_tools
+    schema: {}
     models: {opus: gemini-pro, sonnet: gemini-pro, haiku: gemini-flash}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator

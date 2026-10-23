@@ -307,3 +307,35 @@ def test_a_normal_claude_model_still_goes_to_anthropic_in_an_external_mode(gatew
     sent = fake_upstream[-1]
     assert str(sent.url).startswith("https://api.anthropic.com/v1/messages")
     assert sent_model(sent) == "claude-sonnet-5-5" and sent_headers(sent)["x-api-key"] == "user-key"
+
+
+def test_tools_outside_tools_keep_are_removed_and_schemas_made_acceptable():
+    """Artifact is no use to an external model and its schema pattern is refused by DeepSeek: it is cut, the rest is cleaned."""
+    request = {"model": "claude-sonnet-5", "context_management": {"x": 1}, "messages": [], "tools": [
+        {"name": "Artifact", "input_schema": {"type": "object", "properties": {"p": {"type": "string", "pattern": "^[^\0]*$"}}}},
+        {"name": "Read", "defer_loading": True, "input_schema": {"type": "object", "properties": {
+            "file_path": {"type": "string", "format": "path"}}}}]}
+    shaped = gateway.adapt_for_provider(request, {"name": "deepseek", "tools_keep": ["Read", "mcp__foremankit__*"]})
+    assert [tool["name"] for tool in shaped["tools"]] == ["Read"] and "context_management" not in shaped
+    text = json.dumps(shaped)
+    assert '"format"' not in text and "defer_loading" not in text and "format: " in text
+
+
+def test_a_provider_error_is_returned_unchanged_and_recorded(gateway_dirs: Path, monkeypatch: pytest.MonkeyPatch,
+                                                              tmp_path: Path):
+    """A 4xx from the external provider reaches the plugin as it is and request + answer are saved for diagnosis."""
+    class Refused(FakeUpstreamResponse):
+        status_code = 400
+        async def aread(self):
+            return b'{"error": "Invalid schema"}'
+
+    async def fake_send(request, stream=True):
+        return Refused()
+
+    monkeypatch.setattr(gateway.client, "send", fake_send)
+    response = post("/v1/messages", tooled_request())
+    assert response.status_code == 400 and response.body == b'{"error": "Invalid schema"}'
+    saved = list((tmp_path / "state" / gateway.ERRORS_DIR).glob("*-400.json"))
+    assert len(saved) == 1
+    record = json.loads(saved[0].read_text(encoding="utf-8"))
+    assert record["answer"] == '{"error": "Invalid schema"}' and record["request"]["model"] == "ds-pro"

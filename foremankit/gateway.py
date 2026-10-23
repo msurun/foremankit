@@ -23,10 +23,10 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
-from foremankit import upstream
+from foremankit import provider_schema, upstream
 from foremankit.live import LiveMeter
 from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
-                                     with_thinking)
+                                     trim_tools, with_thinking)
 
 CONFIG_NAME = "orchestrator.yaml"
 DROP_REQUEST = {"host", "content-length", "connection", "keep-alive", "te", "trailer",
@@ -83,6 +83,7 @@ class Call:
     local: bool
     started: float
     note: str = ""
+    sent: bytes = b""    # the body sent to an external orchestrator, kept for the error record
     route: str = ""      # set for an external orchestrator (Gemini, DeepSeek...); empty = local or cloud by `local`
 
     def log(self, status: int) -> None:
@@ -268,10 +269,36 @@ async def relay(request: Request, call: Call, cfg: dict[str, Any], body: bytes,
         return failure(call.local, exc)
     call.log(response.status_code)
     out_headers = {name: value for name, value in response.headers.items() if name.lower() not in DROP_RESPONSE}
+    if call.route and response.status_code >= 400:
+        return await recorded_error(call, response, out_headers)
     streamed = call.local and "text/event-stream" in response.headers.get("content-type", "")
     body_stream = metered(response.aiter_raw()) if streamed else response.aiter_raw()
     return StreamingResponse(body_stream, status_code=response.status_code, headers=out_headers,
                              background=BackgroundTask(response.aclose))
+
+
+ERRORS_DIR = "gateway-errors"      # state dir: what an external provider refused (request + its answer), newest 20 kept
+KEEP_ERRORS = 20
+
+
+async def recorded_error(call: Call, response: httpx.Response, headers: dict[str, str]) -> Response:
+    """Return the provider's error unchanged, after saving request and answer so the cause can be read, not guessed."""
+    answer = await response.aread()
+    await response.aclose()
+    try:
+        folder = state_dir() / ERRORS_DIR
+        folder.mkdir(exist_ok=True)
+        text = answer.decode("utf-8", "replace")
+        record = {"route": call.route, "path": call.path, "status": response.status_code, "answer": text,
+                  "request": parse_body(call.sent)}
+        (folder / f"{time.strftime('%Y%m%d-%H%M%S')}-{response.status_code}.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+        for old in sorted(folder.glob("*.json"))[:-KEEP_ERRORS]:
+            old.unlink(missing_ok=True)
+        print(f"   provider answer: {text[:300]}", flush=True)
+    except OSError:
+        pass   # a missing record must never hide the error from the plugin
+    return Response(answer, status_code=response.status_code, headers=headers)
 
 
 def external_mode(cfg: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -307,12 +334,21 @@ def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]
     and, for the main loop, the extra rules prompt; returns it with a log note."""
     side = is_toolless_message("/v1/messages", data)
     data = {**data, "model": upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))}
-    data = plain_request(data)
+    data = adapt_for_provider(data, up)
     if side or not is_main_loop(data, cfg["main_loop_tools"]):
         return data, f" (-> {data['model']}{' side request' if side else ''})"
     prompt_cfg = {**cfg, "prompt_file": up.get("prompt_file", "orchestrator.external.md")}
     trim = {"enabled": False, "system": "append", **(up.get("trim") or {})}
     return shape_request(data, read_prompt(prompt_cfg), trim), f" (-> {data['model']}, main loop)"
+
+
+def adapt_for_provider(data: dict[str, Any], up: dict[str, Any]) -> dict[str, Any]:
+    """Make a request acceptable to the provider: Claude-only blocks as text, only the tools in `tools_keep` (the
+    others, e.g. Artifact, are no use to an external model), then the schema profile of the upstream (`schema:`)."""
+    data = plain_request(data)
+    if up.get("tools_keep") and data.get("tools"):
+        data = {**data, "tools": trim_tools(data["tools"], up["tools_keep"], 0)}
+    return provider_schema.sanitize_for_provider(data, provider_schema.profile_for(str(up.get("name", "")), up.get("schema")))
 
 
 STANDARD_BLOCKS = {"text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking", "document", "tool_reference"}
@@ -362,11 +398,12 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any], mo
         call.log(503)
         return switched_off(reason)
     if data is not None and request.url.path == "/v1/messages":
-        shaped, call.note = shape_external(data, up, cfg)
+        shaped, call.note = shape_external(data, {**up, "name": mode}, cfg)
         body = json.dumps(shaped, ensure_ascii=False).encode("utf-8")
         if os.getenv(DUMP_ENV):
             Path(os.environ[DUMP_ENV]).write_text(json.dumps(shaped, ensure_ascii=False, indent=1), encoding="utf-8")
     url = up["url"].rstrip("/") + request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    call.sent = body
     return await relay(request, call, cfg, body, (url, external_headers(request, up)))
 
 
