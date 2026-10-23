@@ -393,3 +393,26 @@ def test_orchestrator_mode_lists_upstreams_and_refuses_a_too_sensitive_folder(mo
     (tmp_path / ".foremankit" / "sensitivity").write_text("normal", encoding="utf-8")
     assert "deepseek" in panel.set_orchestrator_mode("deepseek", str(tmp_path))
     assert panel.orchestrator_mode_status()["mode"] == "deepseek"
+
+
+def test_apply_preset_changes_nothing_when_it_is_refused_and_puts_direct_last(monkeypatch, tmp_path: Path):
+    """A refused preset (private folder) touches no setting; an accepted one applies mode, role and direct in that order."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TEST_PANEL_KEY", "k")
+    (tmp_path / "orchestrator.yaml").write_text(
+        "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n", encoding="utf-8")
+    calls: list[tuple] = []
+    monkeypatch.setattr(panel, "direct_mode", lambda: True)
+    monkeypatch.setattr(panel, "server_status", lambda: {"up": False})
+    monkeypatch.setattr(panel, "port_open", lambda port: False)
+    monkeypatch.setattr(panel, "set_role", lambda role: calls.append(("role", role)) or role)
+    monkeypatch.setattr(panel, "set_direct_mode", lambda direct: calls.append(("direct", direct)) or "direct")
+    with pytest.raises(ValueError, match="private"):
+        panel.apply_preset("deepseek", str(tmp_path))
+    assert calls == [] and panel.upstream.active_mode() == "claude"
+    (tmp_path / ".foremankit").mkdir()
+    (tmp_path / ".foremankit" / "sensitivity").write_text("normal", encoding="utf-8")
+    result = panel.apply_preset("deepseek", str(tmp_path))
+    assert calls == [("direct", False)] and result["reload"] is True
+    assert panel.upstream.active_mode() == "deepseek"

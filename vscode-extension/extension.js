@@ -115,7 +115,7 @@ class Panel {
   }
 
   post(message) { if (this.view) this.view.webview.postMessage(message); }
-  async pushStatus() { if (this.view && this.view.visible) this.post({ type: 'status', data: await backend(['status']) }); }
+  async pushStatus() { if (this.view && this.view.visible && !this.busy) this.post({ type: 'status', data: await backend(['status']) }); }
   async pushDelegations() { if (this.view && this.view.visible) this.post({ type: 'delegations', data: await backend(['delegations']) }); }
   async pushFirewall() { this.post({ type: 'firewall', data: await backend(['pair-firewall-status']) }); }
   async pushLive() { if (this.view && this.view.visible) this.post({ type: 'live', data: { gateway: readLive(), slot: await readSlots() } }); }
@@ -125,6 +125,7 @@ class Panel {
   async handle(message) {
     if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); await this.pushDelegations(); return; }
     if (message.type === 'config') { await this.runConfig(message); return; }
+    if (message.type === 'preset') { await this.runPreset(message.name); return; }
     if (message.type === 'pair') { await this.runPair(message); return; }
     if (message.type === 'open' && FILES[message.file]) { await vscode.window.showTextDocument(vscode.Uri.file(FILES[message.file])); return; }
     if (message.type === 'thinking') { await this.quickAnswer(['thinking', '--levels', message.levels]); return; }
@@ -150,6 +151,28 @@ class Panel {
     vscode.window.setStatusBarMessage(text, 6000);
     if (needsReload && !answer.error) vscode.commands.executeCommand('workbench.action.reloadWindow');
     if (needsReload && answer.error) vscode.window.showErrorMessage(text);
+  }
+
+  async runPreset(name) {
+    if (this.busy) return;
+    this.busy = true; this.post({ type: 'busy', value: true });
+    try { await this.applyPreset(name); } finally {
+      this.busy = false; this.post({ type: 'busy', value: false }); await this.pushStatus();
+    }
+  }
+
+  async applyPreset(name) {
+    const cwd = workspaceDir();
+    const plan = await backend(['preset-plan', '--name', name, '--cwd', cwd]);
+    if (plan.error) { vscode.window.showErrorMessage('ForemanKit: ' + plan.error); return; }
+    if (!plan.steps.length) { vscode.window.setStatusBarMessage('ForemanKit: already active', 6000); return; }
+    const note = plan.needs_server ? ' The local model server is not running: start it afterwards.' : '';
+    const ask = plan.summary.join('. ') + '.' + (plan.reload ? RELOAD_WARNING : '') + note;
+    if (plan.reload && !(await this.confirm(ask, RELOAD_BUTTON))) return;
+    const answer = await backend(['apply-preset', '--name', name, '--cwd', cwd]);
+    if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
+    vscode.window.setStatusBarMessage('ForemanKit: ' + answer.message + (answer.reload ? '' : ' - restart the Claude Code chat'), 8000);
+    if (answer.reload) vscode.commands.executeCommand('workbench.action.reloadWindow');
   }
 
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
@@ -254,30 +277,33 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .code{font-size:20px;letter-spacing:.15em;font-weight:bold;margin:4px 0;user-select:all}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
 </style></head><body>
-<h3>Delegation</h3>
-<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on Claude)</label>
+<div class="row head"><span class="dot" id="headDot"></span><b id="headText">ForemanKit</b></div>
+<div id="liveLine" class="info" style="display:none"></div>
+<div id="ctxWrap" style="display:none"><div class="bar"><div class="fill" id="ctxFill"></div></div><div class="info" id="ctxText"></div></div>
+<div id="error" class="err"></div>
+<div id="issues"></div>
+<h3>Who orchestrates Claude Code</h3>
+<div id="presetChoice"></div>
+<div class="info">Claude = your subscription. Local = the model on this PC. DeepSeek / Gemini = an external API for when the Claude limit is spent (needs the API key in .env; a folder above the provider's sensitivity ceiling is refused). The panel sets router, role and direct mode for you.</div>
+<h3>Helpers (delegation)</h3>
+<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
+<details><summary class="info">Which helpers</summary>
 <div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
-<div id="delegOff" class="err" style="display:none">Delegation is OFF: Claude does every task itself, nothing goes to cheaper models.</div>
+</details>
+<h3>Local model</h3>
+<select id="models"></select><div class="info" id="modelInfo"></div>
+<div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
+<details><summary class="info">Costs</summary>
 <div id="delegSummary" class="info">no delegated calls yet</div>
 <div id="delegDays" class="days"></div>
 <div id="delegToday" class="info"></div>
 <div id="delegClaude" class="info"></div>
 <div id="delegRecent"></div>
-<h3>Status</h3>
-<div class="row"><span class="dot" id="routerDot"></span><span id="routerText">router</span></div>
-<div class="row"><span class="dot" id="serverDot"></span><span id="serverText">llama-server</span></div>
-<div id="liveLine" class="info" style="display:none"></div>
-<div id="ctxWrap" style="display:none"><div class="bar"><div class="fill" id="ctxFill"></div></div><div class="info" id="ctxText"></div></div>
-<div id="error" class="err"></div>
-<div id="routerWarn" class="err" style="display:none">Router stopped: Claude Code in VS Code cannot reach any model, also not Anthropic. Start it, or use direct mode and reload the window.</div>
-<div id="directInfo" class="info" style="display:none">Direct mode: Claude Code talks straight to Anthropic; local models are unavailable.</div>
-<div id="llamaMissing" class="err" style="display:none">llama-server is not installed. <button id="downloadLlama">Download llama.cpp</button></div>
-<h3>Local model</h3>
-<select id="models"></select><div class="info" id="modelInfo"></div>
-<div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
+</details>
+<details><summary class="info">Advanced</summary>
 <label class="info"><input type="checkbox" id="shareLab"> Share with the lab (-Share: other PCs can use this server; needs FOREMANKIT_PEER_KEY)</label>
 <div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
-<details><summary class="info">Advanced parameters of the selected model</summary>
+<div class="info">Parameters of the selected model:</div>
 <div class="grid">
 <label>context <input id="p_ctx" type="number" min="2048" max="262144" step="1024"></label>
 <label>experts on CPU (ncmoe) <input id="p_ncmoe" type="number" min="0" max="99"></label>
@@ -289,8 +315,10 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 </div>
 <div class="row"><button class="secondary" id="saveProfile">Save to profile</button></div>
 <div class="info">Empty field = launcher default. Applies at the next server start. Tuning overwrites ctx, ncmoe and threads.</div>
-</details>
-<h3>Extra workers</h3>
+<h3>Thinking by effort level</h3>
+<div class="levels" id="levels"></div>
+<div class="info">Ticked levels make the local model think; the others answer directly.</div>
+<h3>Computers of the lab</h3>
 <div id="workers"></div>
 <div class="row"><button class="secondary" id="workerAddToggle">Add worker...</button></div>
 <div id="workerForm" style="display:none"><div class="grid">
@@ -299,35 +327,24 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>accepts data up to <select id="w_accept"><option>normal</option><option selected>internal</option><option>private</option></select></label>
 <label>priority (lower = first) <input id="w_priority" type="number" value="10" min="1" max="99"></label></div>
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
+<div class="info">Local orchestrator runs on:</div>
+<div id="orchChoice"></div>
 <div class="info" style="margin-top:8px">Pair another PC of yours (it gets the lab key without copying files):</div>
 <div id="fwLine" class="info"></div>
 <div class="row"><button class="secondary" id="pairFirewall">Open firewall (Private + Public)</button></div>
 <div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
 <div id="pairBox" class="info"></div>
 <div id="pairFound"></div>
-<h3>Router</h3>
-<div class="row"><button id="routerStart">Start router</button><button class="secondary" id="routerDirect">Stop (direct mode)...</button></div>
-<div class="info">Start and stop change the VS Code settings and reload this window (you are asked first).</div>
-<h3>Local orchestrator</h3>
-<div class="info">Role of this server:</div>
+<h3>Manual controls</h3>
+<div class="info">Normally the choice above does this. Role of the local server:</div>
 <div class="row"><label><input type="radio" name="role" value="orchestrator"> Orchestrator</label>
 <label><input type="radio" name="role" value="worker"> Worker</label><label><input type="radio" name="role" value="both"> Both</label></div>
-<div class="info">Orchestrator answers Claude Code only; worker takes delegated tasks only (default); both does both.</div>
-<div id="roleWarn" class="err" style="display:none">This role serves Claude Code, which reaches the local model only through the router, but the router is not in use. <button id="roleStartRouter">Start router</button></div>
-<div class="info">Orchestrator for Claude Code runs on:</div>
-<div id="orchChoice"></div>
-<h3>Who orchestrates Claude Code</h3>
-<div class="info">Claude (your subscription), the local model, or an external API (DeepSeek, Gemini) when the Claude limit is spent. External modes need the router running and the API key in .env; a folder above the provider's sensitivity ceiling (.foremankit/sensitivity, missing = private) is refused.</div>
-<div id="modeChoice"></div>
-<div id="modeWarn" class="err" style="display:none">This mode reaches the model only through the router, but the router is not in use. <button id="modeStartRouter">Start router</button></div>
-<h3>Thinking by effort level</h3>
-<div class="levels" id="levels"></div>
-<div class="info">Ticked levels make the local model think; the others answer directly.</div>
-<h3>Files</h3>
+<div class="row"><button id="routerStart">Router on (reloads window)</button><button class="secondary" id="routerDirect">Router off, direct (reloads window)</button></div>
 <div class="info"><a data-open="profiles">profiles.json</a> &middot; <a data-open="orchestrator">orchestrator.yaml</a> &middot; <a data-open="routerlog">router.log</a></div>
+</details>
 <div class="row"><button class="secondary" id="refresh">Refresh</button></div>
 <script nonce="__NONCE__">
- const vscode = acquireVsCodeApi(); let models = []; let startingUntil = 0; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+ const vscode = acquireVsCodeApi(); let models = []; let startingUntil = 0; let lastStatus = null; let headCost = ''; let busy = false; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
  const $ = (id) => document.getElementById(id);
  const send = (m) => vscode.postMessage(m);
  const current = () => models.find((m) => m.file === $('models').value);
@@ -356,6 +373,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  const money = (v) => '$' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2));
  function showDelegations(d) {
   if (d.error) return;
+  headCost = 'today ' + money(d.today.cost); renderHead();
   $('delegSummary').textContent = 'today: ' + d.today.calls + ' delegated calls, ' + money(d.today.cost) + ' | last 7 days: ' + money(d.week_cost);
   const max = Math.max(...d.days.map((x) => x.cost), 0.000001); const bars = $('delegDays'); bars.innerHTML = '';
   for (const x of d.days) { const b = document.createElement('div'); b.style.height = Math.max(2, Math.round(34 * x.cost / max)) + 'px'; b.title = x.day + ': ' + money(x.cost); bars.appendChild(b); }
@@ -404,7 +422,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   const any = d.paid || d.free || d.local;
   for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
-  $('delegOff').style.display = any ? 'none' : 'block';
  }
  function showFirewall(f) {
   const open = f && f.open;
@@ -412,23 +429,12 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    : 'Firewall: not open yet. Other computers cannot reach pairing until you open it (Windows asks for administrator consent once).';
   $('pairFirewall').style.display = f && f.open === null ? 'none' : (open ? 'none' : 'inline-block');
  }
- function showWaiting() { $('serverDot').className = 'dot wait'; $('serverText').textContent = 'llama-server starting, loading the model (about a minute)...'; }
+ function showWaiting() { renderHead(); }
  function showStatus(s) {
   $('error').textContent = s.error || '';
   if (s.error) return;
-  $('routerWarn').style.display = !s.router.up && !s.direct_mode ? 'block' : 'none';
-  $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
-  $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
-  showLevels(s.thinking); showOrchestratorMode(s.orchestrator_mode); showRole(s.role); showDelegationSwitches(s.delegation);
-  const external = s.orchestrator_mode && s.orchestrator_mode.mode !== 'claude';
-  $('modeWarn').style.display = external && (!s.router.up || s.direct_mode) ? 'block' : 'none';
-  $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
-  dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
-  const waiting = !s.server.up && (s.server.starting || Date.now() < startingUntil);
-  if (s.server.up) startingUntil = 0;
-  $('serverDot').className = 'dot ' + (s.server.up ? 'up' : waiting ? 'wait' : 'down');
-  $('serverText').textContent = s.server.up ? s.server.model + ' (ctx ' + s.server.n_ctx + ')'
-   : waiting ? 'llama-server starting, loading the model (about a minute)...' : 'llama-server stopped';
+  lastStatus = s; if (s.server.up) startingUntil = 0;
+  showLevels(s.thinking); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -469,17 +475,34 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    box.appendChild(row);
   }
  }
- $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
- $('roleStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
- $('modeStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
- function showOrchestratorMode(info) {
-  const box = $('modeChoice'); if (!info || box.contains(document.activeElement)) return; box.innerHTML = '';
-  for (const name of info.modes) {
+ function showPresets(info) {
+  const box = $('presetChoice'); if (!info || box.contains(document.activeElement)) return; box.innerHTML = '';
+  for (const name of info.names.concat(info.current === 'custom' ? ['custom'] : [])) {
    const l = document.createElement('label'); l.className = 'info'; l.style.marginRight = '10px';
-   const r = document.createElement('input'); r.type = 'radio'; r.name = 'mode'; r.checked = name === info.mode;
-   r.onchange = () => send({ type: 'config', action: 'orchestratorMode', name });
-   l.appendChild(r); l.appendChild(document.createTextNode(' ' + name)); box.appendChild(l);
+   const r = document.createElement('input'); r.type = 'radio'; r.name = 'preset'; r.checked = name === info.current; r.disabled = busy || name === 'custom';
+   r.onchange = () => send({ type: 'preset', name });
+   l.appendChild(r); l.appendChild(document.createTextNode(' ' + (name === 'custom' ? 'custom (set by hand below)' : name))); box.appendChild(l);
   }
+ }
+ function showIssues(list) {
+  const box = $('issues'); box.innerHTML = '';
+  for (const issue of list || []) {
+   const row = document.createElement('div'); row.className = 'err'; row.textContent = issue.text + ' ';
+   if (issue.fix) { const b = document.createElement('button'); b.textContent = 'Fix'; b.onclick = () => runFix(issue.fix); row.appendChild(b); }
+   box.appendChild(row);
+  }
+ }
+ function runFix(fix) {
+  if (fix.startsWith('apply-preset ')) send({ type: 'preset', name: fix.slice('apply-preset '.length) });
+  else if (fix === 'start-server') $('startServer').click();
+  else if (fix === 'download-llama') send({ type: 'terminal', action: 'download-llama', model: '' });
+ }
+ function renderHead() {
+  const s = lastStatus; if (!s) return;
+  const server = s.server.up ? s.server.model + ' ctx ' + s.server.n_ctx : (Date.now() < startingUntil || s.server.starting ? 'server starting...' : 'server off');
+  const bad = (s.preset.issues || []).length > 0;
+  $('headDot').className = 'dot ' + (bad ? 'down' : 'up');
+  $('headText').textContent = s.preset.current + ' | router ' + (s.router.up ? 'on' : 'off') + ' | ' + server + (headCost ? ' | ' + headCost : '');
  }
  function showOrchestratorChoice(list) {
   const box = $('orchChoice'); box.innerHTML = '';
@@ -513,7 +536,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
- window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
+ window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'busy') { busy = e.data.value; if (lastStatus) showPresets(lastStatus.preset); } if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
   if (e.data.type === 'firewall') showFirewall(e.data.data); if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
 </script></body></html>`;
 

@@ -43,10 +43,10 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from foremankit.config import _read_yaml, config_dir, state_dir
+from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import pairing, upstream
+from foremankit import pairing, presets, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -127,7 +127,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -507,6 +507,49 @@ def orchestrator_mode_status() -> dict[str, Any]:
     return {"mode": upstream.active_mode(), "modes": [*upstream.BUILTIN_MODES, *upstreams]}
 
 
+def preset_state(port: int | None = None) -> dict[str, Any]:
+    """The independent settings a preset changes, as the pure functions of foremankit/presets.py expect them."""
+    if port is None:
+        port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
+    return {"direct": direct_mode(), "mode": upstream.active_mode(), "role": local_role(),
+            "server_up": bool(server_status().get("up")), "router_up": port_open(port)}
+
+
+def preset_status() -> dict[str, Any]:
+    """What the panel's single 'who orchestrates Claude Code' choice shows: the preset in force, all presets and issues."""
+    upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
+    state = preset_state()
+    key_env = (upstreams.get(state["mode"]) or {}).get("key_env", "")
+    problems = presets.issues({**state, "llama_installed": llama_installed(),
+                               "key_missing": bool(key_env) and not os.getenv(key_env)})
+    return {"current": presets.current_preset(state, upstreams), "names": presets.preset_names(upstreams),
+            "issues": problems, "state": state}
+
+
+def plan_preset(name: str, cwd: str = "") -> dict[str, Any]:
+    """What choosing preset `name` would change; refused (ValueError) when the key is missing or `cwd` is too sensitive."""
+    settings = {**GATEWAY_DEFAULTS, **_read_yaml(config_dir() / "orchestrator.yaml")}
+    problem = upstream.check_switch(settings, name, Path(cwd or os.getcwd()))
+    if problem:
+        raise ValueError(problem)
+    return presets.preset_plan(name, preset_state())
+
+
+def apply_preset(name: str, cwd: str = "") -> dict[str, Any]:
+    """Carry out preset `name`: everything is validated first (no change on a refusal), `direct` is applied last because
+    it makes VS Code reload. Returns {"message", "reload", "needs_server"}."""
+    plan = plan_preset(name, cwd)
+    done = []
+    for step in plan["steps"]:
+        if step["action"] == "mode":
+            done.append(set_orchestrator_mode(step["value"], cwd))
+        elif step["action"] == "role":
+            done.append(set_role(step["value"]))
+        else:
+            done.append(set_direct_mode(step["value"]))
+    return {"message": "; ".join(done) or "already active", "reload": plan["reload"], "needs_server": plan["needs_server"]}
+
+
 def set_orchestrator_mode(name: str, cwd: str = "") -> str:
     """Switch Claude Code's orchestrator to claude, local or an external upstream; refused when the key is missing or
     the folder `cwd` (the VS Code workspace) is more sensitive than the provider may see. The gateway re-reads the file."""
@@ -732,7 +775,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -750,12 +793,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def guarded(action: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
+    """Run a preset action; a refusal comes back as {"error": text}, not as a crash."""
+    try:
+        return action(*args)
+    except ValueError as problem:
+        return {"error": str(problem)}
+
+
 def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
     """Read-only actions and the function that answers each; the lambdas run only when their action is chosen."""
     return {
         "status": status,
         "models": list_models,
         "command": lambda: {"command": command_for(args.action, args.model)},
+        "preset-plan": lambda: guarded(plan_preset, args.name, args.cwd),
+        "apply-preset": lambda: guarded(apply_preset, args.name, args.cwd),
         "pair-host": start_pairing_host,
         "pair-firewall": lambda: {"message": open_pair_firewall()},
         "pair-firewall-status": lambda: {"open": pair_firewall_open()},
@@ -780,6 +833,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
 
 def main(argv: list[str] | None = None) -> None:
     """Console entry: print the JSON answer of a read-only action, or carry out a change or a quick action."""
+    load_env()   # provider keys from .env: the preset checks that the chosen provider has one
     args = build_parser().parse_args(argv)
     answers = info_answers(args)
     if args.what == "pair-serve":
