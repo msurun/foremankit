@@ -164,7 +164,7 @@ class Panel {
   async applyPreset(name) {
     const cwd = workspaceDir();
     const plan = await backend(['preset-plan', '--name', name, '--cwd', cwd]);
-    if (plan.error) { vscode.window.showErrorMessage('ForemanKit: ' + plan.error); return; }
+    if (plan.error) { await this.explainRefusal(name, plan); return; }
     if (!plan.steps.length) { vscode.window.setStatusBarMessage('ForemanKit: already active', 6000); return; }
     const note = plan.needs_server ? ' The local model server is not running: start it afterwards.' : '';
     const ask = plan.summary.join('. ') + '.' + (plan.reload ? RELOAD_WARNING : '') + note;
@@ -173,6 +173,18 @@ class Panel {
     if (answer.error) { vscode.window.showErrorMessage('ForemanKit: ' + answer.error); return; }
     vscode.window.setStatusBarMessage('ForemanKit: ' + answer.message + (answer.reload ? '' : ' - restart the Claude Code chat'), 8000);
     if (answer.reload) vscode.commands.executeCommand('workbench.action.reloadWindow');
+  }
+
+  // A refusal must be loud: a status-bar line that fades after seconds looks like "nothing happens".
+  async explainRefusal(name, plan) {
+    if (!plan.mark) { vscode.window.showErrorMessage('ForemanKit: ' + plan.error); return; }
+    const button = 'Mark this folder as ' + plan.mark;
+    const ask = plan.error + ' If this folder holds no data above "' + plan.mark + '", you can declare that (writes .foremankit/sensitivity); '
+      + 'the orchestrator then reads files in it. Nothing was changed.';
+    if ((await vscode.window.showWarningMessage(ask, { modal: true }, button)) !== button) return;
+    const done = await backend(['mark-folder', '--name', plan.mark, '--cwd', workspaceDir()]);
+    if (done.error) { vscode.window.showErrorMessage('ForemanKit: ' + done.error); return; }
+    await this.applyPreset(name);
   }
 
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {

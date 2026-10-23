@@ -526,12 +526,31 @@ def preset_status() -> dict[str, Any]:
             "issues": problems, "state": state}
 
 
+class SensitivityRefused(ValueError):
+    """The folder is more sensitive than the provider may see; `ceiling` is the level the user could declare instead."""
+
+    def __init__(self, message: str, ceiling: str) -> None:
+        super().__init__(message)
+        self.ceiling = ceiling
+
+
+def mark_folder(level: str, cwd: str = "") -> str:
+    """Declare how sensitive the data in `cwd` is (writes .foremankit/sensitivity); only the user may decide this."""
+    if level not in upstream.LEVELS:
+        raise ValueError(f"level must be one of {', '.join(upstream.LEVELS)}")
+    folder = Path(cwd or os.getcwd()) / upstream.SENSITIVITY_FILE
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    folder.write_text(level + "\n", encoding="utf-8")
+    return f"folder marked as {level}"
+
+
 def plan_preset(name: str, cwd: str = "") -> dict[str, Any]:
     """What choosing preset `name` would change; refused (ValueError) when the key is missing or `cwd` is too sensitive."""
     settings = {**GATEWAY_DEFAULTS, **_read_yaml(config_dir() / "orchestrator.yaml")}
     problem = upstream.check_switch(settings, name, Path(cwd or os.getcwd()))
     if problem:
-        raise ValueError(problem)
+        ceiling = ((settings.get("upstreams") or {}).get(name) or {}).get("ceiling")
+        raise (SensitivityRefused(problem, ceiling) if ceiling and "sensitivity" in problem else ValueError(problem))
     return presets.preset_plan(name, preset_state())
 
 
@@ -775,7 +794,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -797,6 +816,8 @@ def guarded(action: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]
     """Run a preset action; a refusal comes back as {"error": text}, not as a crash."""
     try:
         return action(*args)
+    except SensitivityRefused as problem:
+        return {"error": str(problem), "mark": problem.ceiling}
     except ValueError as problem:
         return {"error": str(problem)}
 
@@ -809,6 +830,7 @@ def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
         "command": lambda: {"command": command_for(args.action, args.model)},
         "preset-plan": lambda: guarded(plan_preset, args.name, args.cwd),
         "apply-preset": lambda: guarded(apply_preset, args.name, args.cwd),
+        "mark-folder": lambda: guarded(lambda: {"message": mark_folder(args.name, args.cwd)}),
         "pair-host": start_pairing_host,
         "pair-firewall": lambda: {"message": open_pair_firewall()},
         "pair-firewall-status": lambda: {"open": pair_firewall_open()},

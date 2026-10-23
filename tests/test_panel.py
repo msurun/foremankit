@@ -416,3 +416,21 @@ def test_apply_preset_changes_nothing_when_it_is_refused_and_puts_direct_last(mo
     result = panel.apply_preset("deepseek", str(tmp_path))
     assert calls == [("direct", False)] and result["reload"] is True
     assert panel.upstream.active_mode() == "deepseek"
+
+
+def test_sensitivity_refusal_names_the_level_the_user_could_declare_and_marking_unblocks_it(monkeypatch, tmp_path: Path):
+    """The panel answer for a too-sensitive folder carries `mark`; after mark_folder the same preset plans fine."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TEST_PANEL_KEY", "k")
+    (tmp_path / "orchestrator.yaml").write_text(
+        "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n", encoding="utf-8")
+    monkeypatch.setattr(panel, "direct_mode", lambda: True)
+    monkeypatch.setattr(panel, "server_status", lambda: {"up": False})
+    monkeypatch.setattr(panel, "port_open", lambda port: False)
+    refused = panel.guarded(panel.plan_preset, "deepseek", str(tmp_path))
+    assert refused["mark"] == "normal" and "private" in refused["error"]
+    panel.mark_folder("normal", str(tmp_path))
+    assert "error" not in panel.guarded(panel.plan_preset, "deepseek", str(tmp_path))
+    with pytest.raises(ValueError):
+        panel.mark_folder("secret", str(tmp_path))
