@@ -319,6 +319,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <h3>Who orchestrates Claude Code</h3>
 <div class="info">Claude (your subscription), the local model, or an external API (DeepSeek, Gemini) when the Claude limit is spent. External modes need the router running and the API key in .env; a folder above the provider's sensitivity ceiling (.foremankit/sensitivity, missing = private) is refused.</div>
 <div id="modeChoice"></div>
+<div id="modeWarn" class="err" style="display:none">This mode reaches the model only through the router, but the router is not in use. <button id="modeStartRouter">Start router</button></div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
 <div class="info">Ticked levels make the local model think; the others answer directly.</div>
@@ -419,6 +420,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('directInfo').style.display = s.direct_mode ? 'block' : 'none';
   $('llamaMissing').style.display = s.llama_installed ? 'none' : 'block';
   showLevels(s.thinking); showOrchestratorMode(s.orchestrator_mode); showRole(s.role); showDelegationSwitches(s.delegation);
+  const external = s.orchestrator_mode && s.orchestrator_mode.mode !== 'claude';
+  $('modeWarn').style.display = external && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   $('roleWarn').style.display = s.role !== 'worker' && (!s.router.up || s.direct_mode) ? 'block' : 'none';
   dot('routerDot', s.router.up); $('routerText').textContent = 'router :' + s.router.port + (s.router.up ? ' running' : ' stopped');
   const waiting = !s.server.up && (s.server.starting || Date.now() < startingUntil);
@@ -468,6 +471,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  }
  $('downloadLlama').onclick = () => send({ type: 'terminal', action: 'download-llama', model: '' });
  $('roleStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
+ $('modeStartRouter').onclick = () => send({ type: 'quick', action: 'router-normal' });
  function showOrchestratorMode(info) {
   const box = $('modeChoice'); if (!info || box.contains(document.activeElement)) return; box.innerHTML = '';
   for (const name of info.modes) {
