@@ -338,6 +338,14 @@ def serves_picker_entry(body: bytes, cfg: dict[str, Any]) -> bool:
     return bool(data) and data.get("model") in cfg["local_models"]
 
 
+def model_id_for(provider: str, alias: str) -> str:
+    """The provider's own model id for a configured alias. providers.yaml is the single source of truth, so when a
+    provider ships new names you fix them there once (run `foremankit models`) and both this request and its price
+    follow; unknown provider/alias falls back to the alias itself."""
+    models = (_read_yaml(config_dir() / "providers.yaml").get("providers") or {}).get(provider, {}).get("models") or {}
+    return (models.get(alias) or {}).get("id") or alias
+
+
 def price_for_model(model_id: str) -> dict[str, Any] | None:
     """The USD-per-1M-token price of a provider model, found by id in providers.yaml; None when it is unknown."""
     providers = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
@@ -413,7 +421,8 @@ def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]
     """Rewrite a request for an external orchestrator: model by alias (tool-less side requests use the cheap alias)
     and, for the main loop, the extra rules prompt; returns it with a log note."""
     side = is_toolless_message("/v1/messages", data)
-    data = {**data, "model": upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))}
+    alias = upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))
+    data = {**data, "model": model_id_for(up.get("provider", up.get("name", "?")), alias)}
     data = adapt_for_provider(data, up)
     if side or not is_main_loop(data, cfg["main_loop_tools"]):
         return data, f" (-> {data['model']}{' side request' if side else ''})"

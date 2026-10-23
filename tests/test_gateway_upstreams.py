@@ -377,3 +377,13 @@ def test_an_external_answer_is_counted_in_the_budget_and_call_log(gateway_dirs: 
     assert row["tokens_in"] == 1000 and row["tokens_out"] == 200 and row["cache_hit"] == 500
     assert row["cost_usd"] == pytest.approx(0.001474, abs=1e-9)
 
+
+
+def test_the_provider_model_id_comes_from_providers_yaml_so_a_rename_is_fixed_in_one_place(gateway_dirs: Path):
+    """The upstream configures an alias (pro / flash); the id sent and the price both follow providers.yaml."""
+    (gateway_dirs / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    models:\n      pro: {id: deepseek-v5-pro, price: {input_miss: 1, output: 2}}\n",
+        encoding="utf-8")
+    assert gateway.model_id_for("deepseek", "pro") == "deepseek-v5-pro"
+    assert gateway.model_id_for("deepseek", "unknown") == "unknown"      # an unknown alias is sent as written
+    assert gateway.price_for_model("deepseek-v5-pro") == {"input_miss": 1, "output": 2}

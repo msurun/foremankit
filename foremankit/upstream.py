@@ -69,7 +69,7 @@ def alias_of(model: str) -> str:
 
 
 def upstream_model(upstream: dict, model: str) -> str:
-    """Return the upstream model name configured for the alias of `model`."""
+    """Return the provider alias configured for the alias of `model` (the id comes from providers.yaml)."""
     models = upstream["models"]
     alias = alias_of(model)
     if alias in models:
