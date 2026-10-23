@@ -49,3 +49,30 @@ trim:
     - 'deferred tools'
   old_tool_result_max_chars: 1500      # tool results older than the last `keep_recent_messages` messages are cut to this; 0 = off
   keep_recent_messages: 8
+
+# External orchestrators: Gemini Pro / DeepSeek Pro instead of Claude when the weekly Claude limit is spent.
+# Switch with `foremankit orchestrator use deepseek|gemini|claude|local` (state file orchestrator_mode), then restart
+# Claude Code with ANTHROPIC_BASE_URL pointing at this gateway (`foremankit orchestrator env`). The endpoint must speak
+# the Anthropic Messages API: DeepSeek has one; for Gemini run a translating proxy (LiteLLM) and put its URL here.
+# Model ids and URLs below are placeholders to verify against the provider's current docs.
+#   ceiling: the highest repo sensitivity (.foremankit/sensitivity: normal|internal|private; missing = private) this
+#            provider may see. DeepSeek trains on data and sits abroad -> normal only. Never "private".
+#   models:  Claude alias the plugin asks for -> provider model (side requests without tools use the haiku one).
+#   context: window in tokens (the session-length hint uses it). trim: optional gateway_trim overrides (default none).
+upstreams:
+  deepseek:
+    url: https://api.deepseek.com/anthropic
+    key_env: DEEPSEEK_API_KEY
+    ceiling: normal
+    context: 128000
+    models: {opus: deepseek-v4-pro, sonnet: deepseek-v4-pro, haiku: deepseek-flash}
+  gemini:
+    url: http://127.0.0.1:4000
+    key_env: LITELLM_MASTER_KEY
+    ceiling: internal
+    context: 1000000
+    models: {opus: gemini-pro, sonnet: gemini-pro, haiku: gemini-flash}
+
+# Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
+# (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:
+deny_globs: ["*/pi_extract*", "*.pidata*"]

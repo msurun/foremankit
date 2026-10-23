@@ -1,0 +1,284 @@
+"""Tests for the external-orchestrator routing of the gateway (foremankit.gateway).
+
+The gateway forwards Claude Code to a third-party Anthropic-compatible endpoint when the orchestrator mode
+is not a built-in one. Every test runs against the app with a fake httpx upstream, so nothing leaves the
+machine; configuration lives in a temporary config dir and the mode in a temporary state dir.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+from starlette.requests import Request
+
+from foremankit import gateway
+from foremankit import upstream
+
+DEEPSEEK_URL = "http://deepseek.test/anthropic"
+PROVIDER_KEY = "provider-secret"
+KEY_ENV = "TEST_DS_KEY"
+
+# Written to orchestrator.yaml: one declared external orchestrator with aliases for the three model tiers.
+UPSTREAMS_YAML = (
+    "upstreams:\n"
+    "  deepseek:\n"
+    f"    url: {DEEPSEEK_URL}\n"
+    f"    key_env: {KEY_ENV}\n"
+    "    ceiling: normal\n"
+    "    models:\n"
+    "      opus: ds-pro\n"
+    "      sonnet: ds-pro\n"
+    "      haiku: ds-flash\n"
+)
+
+EXTERNAL_PROMPT = "EXTERNAL RULES"
+
+
+# --- fixtures ---------------------------------------------------------------
+
+class FakeUpstreamResponse:
+    """Stands in for an httpx streaming response: a status, headers and a small JSON body."""
+    status_code = 200
+    headers = {"content-type": "application/json"}
+
+    async def aiter_raw(self):
+        yield b"{}"
+
+    async def aclose(self):
+        return None
+
+
+@pytest.fixture
+def fake_upstream(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Replaces the shared httpx client so each forwarded request is recorded instead of sent."""
+    sent: list = []
+
+    async def fake_send(request, stream=True):
+        sent.append(request)
+        return FakeUpstreamResponse()
+
+    monkeypatch.setattr(gateway.client, "send", fake_send)
+    return sent
+
+
+@pytest.fixture
+def gateway_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Config and state dirs in tmp_path, wired via the env vars; the local role is orchestrator."""
+    config = tmp_path / "config"
+    state = tmp_path / "state"
+    config.mkdir()
+    state.mkdir()
+    (config / "orchestrator.yaml").write_text(UPSTREAMS_YAML, encoding="utf-8")
+    (config / "orchestrator.external.md").write_text(EXTERNAL_PROMPT, encoding="utf-8")
+    (state / gateway.LOCAL_ROLE_FILE).write_text("orchestrator", encoding="utf-8")
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(config))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(state))
+    monkeypatch.setenv(KEY_ENV, PROVIDER_KEY)
+    upstream.set_mode("deepseek")      # the default for these tests; a test can switch with use_mode()
+    return config
+
+
+def use_mode(mode: str) -> None:
+    """Switch the orchestrator mode as the panel/CLI would (state dir already holds the mode file)."""
+    upstream.set_mode(mode)
+
+
+def post(path: str, data: dict):
+    """Send one POST with a JSON body through gateway.handle, as Claude Code would; returns the response."""
+    body = json.dumps(data).encode("utf-8")
+    scope = {"type": "http", "method": "POST", "path": path, "query_string": b"",
+             "headers": [(b"content-type", b"application/json"), (b"x-api-key", b"user-key"),
+                         (b"authorization", b"Bearer user-token"), (b"anthropic-beta", b"oauth-2025-04-20")]}
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return asyncio.run(gateway.handle(Request(scope, receive)))
+
+
+def sent_model(request) -> str:
+    """The "model" field of a recorded upstream request body."""
+    return json.loads(request.content)["model"]
+
+
+def sent_headers(request) -> dict:
+    """Lower-cased header names of a recorded upstream request."""
+    return {name.lower(): value for name, value in request.headers.items()}
+
+
+# --- external_mode ----------------------------------------------------------
+
+@pytest.mark.parametrize("builtin", sorted(upstream.BUILTIN_MODES))
+def test_a_builtin_mode_is_not_external(builtin: str, gateway_dirs: Path):
+    use_mode(builtin)
+    assert gateway.external_mode(gateway.settings()) is None
+
+
+def test_a_declared_external_mode_returns_its_name_and_config(gateway_dirs: Path):
+    use_mode("deepseek")
+    external = gateway.external_mode(gateway.settings())
+    assert external is not None
+    name, up = external
+    assert name == "deepseek" and up["url"] == DEEPSEEK_URL
+
+
+def test_an_undeclared_mode_is_external_with_an_empty_config(gateway_dirs: Path):
+    use_mode("not-there")
+    external = gateway.external_mode(gateway.settings())
+    assert external == ("not-there", {})
+
+
+# --- external_refusal -------------------------------------------------------
+
+def test_an_undeclared_mode_is_refused_with_the_reason(gateway_dirs: Path):
+    reason = gateway.external_refusal("not-there", {})
+    assert reason is not None and "not declared" in reason
+
+
+def test_a_declared_mode_without_its_key_env_is_refused(
+        gateway_dirs: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv(KEY_ENV)
+    _, up = gateway.external_mode(gateway.settings())
+    reason = gateway.external_refusal("deepseek", up)
+    assert reason is not None and KEY_ENV in reason
+
+
+def test_a_declared_mode_with_its_key_env_is_allowed(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    assert gateway.external_refusal("deepseek", up) is None
+
+
+# --- shape_external ---------------------------------------------------------
+
+def tooled_request() -> dict:
+    return {"model": "claude-sonnet-5", "system": "# Environment\ncwd=/x",
+            "tools": [{"name": "Read", "description": "read"}],
+            "messages": [{"role": "user", "content": "hi"}]}
+
+
+def toolless_request() -> dict:
+    return {"model": "claude-sonnet-5", "system": "short system",
+            "messages": [{"role": "user", "content": "hi"}]}
+
+
+def main_loop_request() -> dict:
+    return {"model": "claude-sonnet-5", "system": "# Environment\ncwd=/x",
+            "tools": [{"name": "Agent", "description": "spawn"}],
+            "messages": [{"role": "user", "content": "hi"}]}
+
+
+def test_a_tooled_sonnet_request_is_aliased_to_the_provider_model(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    shaped, note = gateway.shape_external(tooled_request(), up, gateway.settings())
+    assert shaped["model"] == "ds-pro" and "ds-pro" in note
+
+
+def test_a_toolless_request_uses_the_cheap_alias(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    shaped, note = gateway.shape_external(toolless_request(), up, gateway.settings())
+    assert shaped["model"] == "ds-flash" and "side request" in note
+
+
+def test_the_main_loop_keeps_its_tools_and_gets_the_external_prompt_appended(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    shaped, note = gateway.shape_external(main_loop_request(), up, gateway.settings())
+    assert [tool["name"] for tool in shaped["tools"]] == ["Agent"]
+    assert shaped["system"][-1] == {"type": "text", "text": EXTERNAL_PROMPT}
+    assert "main loop" in note
+
+
+# --- external_headers -------------------------------------------------------
+
+def asgi_request(headers: list[tuple[bytes, bytes]]) -> Request:
+    """Build a Starlette Request from a minimal ASGI scope carrying the given headers."""
+    scope = {"type": "http", "headers": headers, "method": "POST", "path": "/v1/messages", "query_string": b""}
+    return Request(scope)
+
+
+def test_external_headers_replace_the_client_credentials_with_the_provider_key(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    request = asgi_request([(b"x-api-key", b"user-key"), (b"authorization", b"Bearer user-token")])
+    headers = gateway.external_headers(request, up)
+    assert headers["x-api-key"] == PROVIDER_KEY
+    assert headers["authorization"] == f"Bearer {PROVIDER_KEY}"
+
+
+def test_external_headers_drop_anthropic_beta(gateway_dirs: Path):
+    _, up = gateway.external_mode(gateway.settings())
+    request = asgi_request([(b"anthropic-beta", b"oauth-2025-04-20")])
+    headers = gateway.external_headers(request, up)
+    assert "anthropic-beta" not in {name.lower() for name in headers}
+
+
+# --- handle_external and handle --------------------------------------------
+
+def test_a_tooled_messages_request_goes_to_the_deepseek_url_with_the_provider_key(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    post("/v1/messages", tooled_request())
+    sent = fake_upstream[-1]
+    assert str(sent.url).startswith(f"{DEEPSEEK_URL}/v1/messages")
+    assert sent_headers(sent)["x-api-key"] == PROVIDER_KEY
+    assert sent_headers(sent)["authorization"] == f"Bearer {PROVIDER_KEY}"
+
+
+def test_a_tooled_messages_request_drops_anthropic_beta(gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    post("/v1/messages", tooled_request())
+    assert "anthropic-beta" not in sent_headers(fake_upstream[-1])
+
+
+def test_a_tooled_messages_request_is_sent_with_the_sonnet_alias(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    post("/v1/messages", tooled_request())
+    assert sent_model(fake_upstream[-1]) == "ds-pro"
+
+
+def test_a_toolless_messages_request_is_sent_with_the_cheap_alias(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    post("/v1/messages", toolless_request())
+    assert sent_model(fake_upstream[-1]) == "ds-flash"
+
+
+def test_a_main_loop_request_carries_tools_and_the_external_prompt(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    post("/v1/messages", main_loop_request())
+    body = json.loads(fake_upstream[-1].content)
+    assert [tool["name"] for tool in body["tools"]] == ["Agent"]
+    assert body["system"][-1]["text"] == EXTERNAL_PROMPT
+
+
+def test_a_non_messages_path_is_forwarded_unchanged_with_the_provider_key(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("deepseek")
+    data = {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]}
+    post("/v1/messages/count_tokens", data)
+    sent = fake_upstream[-1]
+    assert str(sent.url).startswith(f"{DEEPSEEK_URL}/v1/messages/count_tokens")
+    assert json.loads(sent.content) == data
+    assert sent_headers(sent)["x-api-key"] == PROVIDER_KEY
+
+
+def test_an_undeclared_mode_answers_503_and_sends_nothing(
+        gateway_dirs: Path, fake_upstream: list):
+    use_mode("not-there")
+    response = post("/v1/messages", tooled_request())
+    assert response.status_code == 503
+    error = json.loads(response.body)["error"]
+    assert error["type"] == "api_error" and "not declared" in error["message"]
+    assert fake_upstream == []
+
+
+def test_a_missing_key_env_answers_503_and_sends_nothing(
+        gateway_dirs: Path, fake_upstream: list, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv(KEY_ENV)
+    use_mode("deepseek")
+    response = post("/v1/messages", tooled_request())
+    assert response.status_code == 503
+    assert KEY_ENV in json.loads(response.body)["error"]["message"]
+    assert fake_upstream == []

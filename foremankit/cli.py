@@ -273,7 +273,26 @@ def cmd_delegation(router: Router, args: argparse.Namespace) -> int:
     return 0
 
 
-COMMANDS = {"delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
+    """Show or switch who orchestrates Claude Code: claude, local, or an external upstream (deepseek, gemini)."""
+    from foremankit import upstream
+    from foremankit.gateway import settings
+    cfg = settings()
+    if args.action == "use":
+        problem = upstream.check_switch(cfg, args.mode, Path.cwd())
+        if problem:
+            print(f"error: {problem}", file=sys.stderr)
+            return 2
+        upstream.set_mode(args.mode)
+    mode = upstream.active_mode()
+    print(f"orchestrator mode: {mode}  (repo sensitivity here: {upstream.repo_sensitivity(Path.cwd())})")
+    if args.action == "env" or (args.action == "use" and mode not in upstream.BUILTIN_MODES):
+        print("start Claude Code with:")
+        print(f"  ANTHROPIC_BASE_URL=http://127.0.0.1:{cfg['port']}  ANTHROPIC_AUTH_TOKEN=foremankit  (gateway: foremankit-gateway)")
+    return 0
+
+
+COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions}
 
@@ -294,6 +313,9 @@ def _add_basic_parsers(sub: Any) -> None:
 
 
 def _add_node_parsers(sub: Any) -> None:
+    orchestrator = sub.add_parser("orchestrator", help="orchestrator [status|env] | orchestrator use <claude|local|deepseek|gemini>: who runs Claude Code")
+    orchestrator.add_argument("action", nargs="?", default="status", choices=["status", "env", "use"])
+    orchestrator.add_argument("mode", nargs="?", default="claude")
     delegation = sub.add_parser("delegation", help="delegation [paid|free|local|all] [on|off|status]: switch a whole source category")
     delegation.add_argument("target", nargs="?", default="all", choices=[*CATEGORIES, "all"])
     delegation.add_argument("action", nargs="?", default="status", choices=["on", "off", "status"])

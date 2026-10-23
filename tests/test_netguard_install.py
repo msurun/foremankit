@@ -81,7 +81,8 @@ def test_notify_hook_merge_is_idempotent_and_keeps_other_settings(tmp_path):
     data = json.loads(raw)
     assert data["theme"] == "dark"
     pre = data["hooks"]["PreToolUse"]
-    assert len(pre) == 2 and pre[0]["matcher"] == "Bash"
+    assert len(pre) == 3 and pre[0]["matcher"] == "Bash"      # the user's own + notify + orchestrator_guard
+    assert sum(inst.GUARD_HOOK_MARK in h["command"] for e in pre for h in e["hooks"]) == 1
     assert sum(inst.HOOK_MARK in h["command"] for e in data["hooks"]["PostToolUse"] for h in e["hooks"]) == 1
     installer.install_hooks(py, remove=True)
     data = json.loads(settings.read_bytes())

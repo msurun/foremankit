@@ -413,3 +413,34 @@ foremankit is an independent project and is not affiliated with or endorsed by A
 ## License
 
 [MIT](LICENSE). Copyright (c) 2026 Marcin Surunowicz.
+
+## External orchestrator (Gemini / DeepSeek instead of Claude)
+
+- When the weekly Claude limit is exhausted, Claude Code can be redirected to the ForemanKit gateway (`ANTHROPIC_BASE_URL=http://127.0.0.1:8081`, `ANTHROPIC_AUTH_TOKEN=foremankit`) and orchestrated by DeepSeek or Gemini while ForemanKit delegation continues to work.  
+- Orchestrator selection commands:  
+  - `foremankit orchestrator use deepseek|gemini|claude|local`  
+  - `foremankit orchestrator status|env` to view current status or environment.  
+- Configuration lives in `config/orchestrator.yaml` under `upstreams`, each entry defining:  
+  - `url` (provider endpoint)  
+  - `key_env` (environment variable holding the provider key)  
+  - `ceiling` (maximum allowed data‑sensitivity)  
+  - `models` mapping aliases (`opus`, `sonnet`, `haiku`) to provider‑specific model IDs and context.  
+- Provider endpoints must implement the Anthropic Messages API:  
+  - DeepSeek: `https://api.deepseek.com/anthropic`  
+  - Gemini: accessed via a LiteLLM proxy URL placed in the YAML.  
+  - Model IDs/URLs are placeholders for verification.  
+- The ForemanKit gateway:  
+  - Replaces incoming client credentials with the provider key from `key_env` in `.env`.  
+  - Strips the `anthropic-beta` header.  
+  - Routes tool‑less side requests (e.g., title extraction, auto‑mode checks) to the `haiku` alias.  
+  - Appends `config/orchestrator.external.md` to the main loop.  
+- Privacy handling:  
+  - The orchestrator can read every file it processes.  
+  - Each repository must contain `.foremankit/sensitivity` set to `normal`, `internal`, or `private` (missing defaults to `private`).  
+  - `orchestrator use` refuses a provider if the repo’s sensitivity exceeds that provider’s `ceiling` (DeepSeek: `normal` only; Gemini paid: `internal`; no external data for `private`).  
+- Guard hook: `hooks/orchestrator_guard.py` (installed by `install.py`) implements a `PreToolUse` check that blocks tool calls on paths above the ceiling or matching `deny_globs`, failing closed.  
+- Outstanding limitations:  
+  - No cost‑metering for orchestrator token usage.  
+  - Session‑length hint not yet adapted.  
+  - Gemini requires a LiteLLM setup.  
+  - Weaker models’ tool‑calling quality still needs smoke‑testing (e.g., 10 edits, a delegate call, router status).

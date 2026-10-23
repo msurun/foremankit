@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
+from foremankit import upstream
 from foremankit.live import LiveMeter
 from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
                                      with_thinking)
@@ -82,10 +83,11 @@ class Call:
     local: bool
     started: float
     note: str = ""
+    route: str = ""      # set for an external orchestrator (Gemini, DeepSeek...); empty = local or cloud by `local`
 
     def log(self, status: int) -> None:
         """Print one line: path, model, route, status, time and the optional size note."""
-        route = "local" if self.local else "cloud"
+        route = self.route or ("local" if self.local else "cloud")
         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {self.path} model={self.model} route={route} "
               f"status={status} {time.time() - self.started:.2f}s{self.note}", flush=True)
 
@@ -252,26 +254,89 @@ def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict
     return body
 
 
-async def relay(request: Request, call: Call, cfg: dict[str, Any], body: bytes) -> Response:
-    """Send the prepared request upstream and stream the answer back to the plugin."""
+async def relay(request: Request, call: Call, cfg: dict[str, Any], body: bytes,
+                route: tuple[str, dict[str, str]] | None = None) -> Response:
+    """Send the prepared request upstream and stream the answer back to the plugin.
+
+    `route` = (url, headers) overrides the local/cloud choice (used for an external orchestrator)."""
+    url, headers = route or (target_url(request, cfg, call.local), upstream_headers(request, call.local))
     try:
-        upstream = await client.send(client.build_request(
-            request.method, target_url(request, cfg, call.local), headers=upstream_headers(request, call.local),
-            content=body or None), stream=True)
+        response = await client.send(client.build_request(request.method, url, headers=headers, content=body or None),
+                                     stream=True)
     except httpx.HTTPError as exc:
         call.log(502)
         return failure(call.local, exc)
-    call.log(upstream.status_code)
-    headers = {name: value for name, value in upstream.headers.items() if name.lower() not in DROP_RESPONSE}
-    streamed = call.local and "text/event-stream" in upstream.headers.get("content-type", "")
-    body_stream = metered(upstream.aiter_raw()) if streamed else upstream.aiter_raw()
-    return StreamingResponse(body_stream, status_code=upstream.status_code, headers=headers,
-                             background=BackgroundTask(upstream.aclose))
+    call.log(response.status_code)
+    out_headers = {name: value for name, value in response.headers.items() if name.lower() not in DROP_RESPONSE}
+    streamed = call.local and "text/event-stream" in response.headers.get("content-type", "")
+    body_stream = metered(response.aiter_raw()) if streamed else response.aiter_raw()
+    return StreamingResponse(body_stream, status_code=response.status_code, headers=out_headers,
+                             background=BackgroundTask(response.aclose))
+
+
+def external_mode(cfg: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """(name, upstream config) when Claude Code is switched to an external orchestrator, else None.
+
+    A mode that is neither built in nor declared in `upstreams` counts as external with an empty config, so that
+    the request is refused instead of silently going to the Anthropic cloud."""
+    mode = upstream.active_mode()
+    if mode in upstream.BUILTIN_MODES:
+        return None
+    declared = cfg.get("upstreams") or {}
+    return mode, declared.get(mode) or {}
+
+
+def external_refusal(mode: str, up: dict[str, Any]) -> str | None:
+    """Why a request for the external orchestrator `mode` must be refused (undeclared mode, missing key), or None."""
+    if not up.get("url") or not up.get("models"):
+        return f"orchestrator mode '{mode}' is not declared in orchestrator.yaml (upstreams); run `foremankit orchestrator use claude`"
+    if not os.getenv(str(up.get("key_env", ""))):
+        return f"orchestrator mode '{mode}': environment variable {up.get('key_env')} is not set"
+    return None
+
+
+def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Rewrite a request for an external orchestrator: model by alias (tool-less side requests use the cheap alias)
+    and, for the main loop, the extra rules prompt; returns it with a log note."""
+    side = is_toolless_message("/v1/messages", data)
+    data = {**data, "model": upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))}
+    if side or not is_main_loop(data, cfg["main_loop_tools"]):
+        return data, f" (-> {data['model']}{' side request' if side else ''})"
+    prompt_cfg = {**cfg, "prompt_file": up.get("prompt_file", "orchestrator.external.md")}
+    trim = {"enabled": False, "system": "append", **(up.get("trim") or {})}
+    return shape_request(data, read_prompt(prompt_cfg), trim), f" (-> {data['model']}, main loop)"
+
+
+def external_headers(request: Request, up: dict[str, Any]) -> dict[str, str]:
+    """Headers for an external orchestrator: the client's credentials are replaced by the provider key, and the
+    headers listed in `drop_headers` (default anthropic-beta, which third-party endpoints reject) are removed."""
+    drop = {name.lower() for name in up.get("drop_headers", ["anthropic-beta"])} | CREDENTIALS
+    headers = {name: value for name, value in upstream_headers(request, False).items() if name.lower() not in drop}
+    key = os.environ[up["key_env"]]
+    return {**headers, "x-api-key": key, "authorization": f"Bearer {key}"}
+
+
+async def handle_external(request: Request, body: bytes, cfg: dict[str, Any], mode: str, up: dict[str, Any]) -> Response:
+    """Forward one request to the external orchestrator `mode` (an Anthropic-compatible endpoint)."""
+    data = parse_body(body)
+    call = Call(request.url.path, data.get("model") if data else None, False, time.time(), route=f"external:{mode}")
+    reason = external_refusal(mode, up)
+    if reason:
+        call.log(503)
+        return switched_off(reason)
+    if data is not None and request.url.path == "/v1/messages":
+        shaped, call.note = shape_external(data, up, cfg)
+        body = json.dumps(shaped, ensure_ascii=False).encode("utf-8")
+    url = up["url"].rstrip("/") + request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return await relay(request, call, cfg, body, (url, external_headers(request, up)))
 
 
 async def handle(request: Request) -> Response:
     """Forward one request to the local llama-server or the cloud and stream the answer back."""
     body, cfg = await request.body(), settings()
+    external = external_mode(cfg)
+    if external:
+        return await handle_external(request, body, cfg, *external)
     data = parse_body(body)
     model = data.get("model") if data else None
     call = Call(request.url.path, model, model in cfg["local_models"], time.time())
