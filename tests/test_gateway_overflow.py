@@ -14,7 +14,7 @@ import pytest
 from foremankit import gateway
 
 WINDOW_TOKENS = 32768            # the pinned context window of the fake llama-server
-BIG_FILL = 120_000               # characters of user text, well above the ~91_748 chars threshold
+BIG_FILL = 100_000               # user text in the 70-90 % band: above the ~91_750 char spill, below the 90 % stop
 SMALL_FILL = 1_000
 
 

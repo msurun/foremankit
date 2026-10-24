@@ -23,12 +23,26 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from foremankit import (
+    budget,
+    context_stop,
+    escalation,
+    pricing,
+    provider_schema,
+    upstream,
+)
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
-from foremankit import budget, escalation, pricing, provider_schema, upstream
-from foremankit.state import CallLog, StateStore
+from foremankit.gateway_trim import (
+    is_main_loop,
+    request_chars,
+    shape_request,
+    system_text,
+    thinking_wanted,
+    trim_tools,
+    with_thinking,
+)
 from foremankit.live import LiveMeter
-from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
-                                     trim_tools, with_thinking)
+from foremankit.state import CallLog, StateStore
 
 CONFIG_NAME = "orchestrator.yaml"
 DROP_REQUEST = {"host", "content-length", "connection", "keep-alive", "te", "trailer",
@@ -40,6 +54,8 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "side_requests_to_cloud": True, "side_request_model": "claude-sonnet-5-5",
             "overflow_to_cloud": True, "overflow_ratio": 0.70,
+            "no_code": True,
+            "context_stop": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
@@ -143,6 +159,32 @@ def overflows(data: dict[str, Any], cfg: dict[str, Any]) -> bool:
     return bool(window) and request_chars(data) // 4 > window * float(cfg.get("overflow_ratio", 0.70))
 
 
+def context_window(up: dict[str, Any], cfg: dict[str, Any]) -> int:
+    """Context window in tokens for an external upstream: its `context`, else the local fallback."""
+    return int(up.get("context") or cfg.get("context_tokens") or 0)
+
+
+def context_stop_response(call: Call, data: dict[str, Any],
+                          where: dict[str, Any], cfg: dict[str, Any]) -> Response | None:
+    """Answer "stopped, handoff written" when the prompt fills `ratio` of the model window, else None to run the turn.
+
+    `where` = {"mode", "model", "window"}: who would have answered and its context window. The handoff is drafted from
+    the request body alone (context_stop.py), so a degraded local model never gets another turn."""
+    window = int(where.get("window") or 0)
+    pol = context_stop.policy(cfg)
+    stop = context_stop.stop_at(data, window, pol)
+    if stop is None:
+        return None
+    call.note = f" (context stop: {stop['tokens']:,} / {stop['window']:,} tokens)"
+    path = context_stop.write_handoff(context_stop.folder(pol, state_dir()),
+                                      context_stop.handoff_markdown(data, stop, where))
+    text = context_stop.reply_text(stop, path, str(cfg.get("language", "English")))
+    model = str(where.get("model", ""))
+    if data.get("stream"):
+        return Response(context_stop.sse_bytes(text, model, stop), media_type="text/event-stream")
+    return JSONResponse(context_stop.message_json(text, model, stop))
+
+
 def describe_side_request(data: dict[str, Any]) -> str:
     """One short line about a request that is not the main loop (tools, streaming, size, first words of the system
     prompt), so the log shows what kind of side request (subagent, auto-mode check, title) reaches the local model."""
@@ -223,6 +265,43 @@ def is_toolless_message(path: str, data: dict[str, Any] | None) -> bool:
     return path == "/v1/messages" and data is not None and not data.get("tools")
 
 
+WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")   # what a cloud model needs to write code itself
+NO_CODE_TEXT = (
+    "foremankit no-code policy: you are the orchestrator and never write or edit files yourself — your Write, Edit and "
+    "NotebookEdit tools are not available. To change a file call mcp__foremankit__delegate, or Agent with model "
+    "'haiku' when the work must stay in this session; do not write files through Bash either. Reading, searching, "
+    "running tests and deciding stay yours.")
+
+
+def add_system_text(data: dict[str, Any], text: str) -> Any:
+    """The `system` field of `data` with `text` appended: after a string, as a new block after a list, or the text alone."""
+    system = data.get("system")
+    if isinstance(system, str):
+        return system + "\n\n" + text
+    if isinstance(system, list):
+        return [*system, {"type": "text", "text": text}]
+    return text
+
+
+def orchestrator_no_code(data: dict[str, Any], cfg: dict[str, Any]) -> bytes | None:
+    """The body for a request the Claude orchestrator (Sonnet/Opus) would run, with the file-writing tools removed so it
+    cannot write code at all; None when the model keeps its tools (a Haiku subagent, the side-request model), when the
+    orchestrator is an external provider or when the policy is off. Haiku subagents send their own `claude-haiku-*` id
+    through the same gateway, so the model id is enough to tell them apart; the extra system line sends the work to
+    `delegate` or to a Haiku agent."""
+    if not cfg.get("no_code", True) or external_mode(cfg) is not None:
+        return None
+    model = str(data.get("model") or "")
+    if not model.startswith("claude-") or "haiku" in model:
+        return None
+    tools = data.get("tools") or []
+    kept = [tool for tool in tools if not isinstance(tool, dict) or tool.get("name") not in WRITE_TOOLS]
+    if len(kept) == len(tools):
+        return None                      # no writing tool to remove: the instruction alone would only cost tokens
+    shaped = {**data, "tools": kept, "system": add_system_text(data, NO_CODE_TEXT)}
+    return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
+
+
 def send_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> bytes:
     """Re-aim a local call at the cloud with a real Claude model; returns the new request body."""
     call.local = False
@@ -230,11 +309,12 @@ def send_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> byte
     return json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
 
 
-def spill_to_cloud(call: Call, data: dict[str, Any]) -> bytes:
-    """Send an untouched local request to the cloud because it does not fit the local window; returns the body."""
+def spill_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> bytes:
+    """Send a local request that does not fit the llama window to the cloud; returns the body, write tools removed when
+    the no-code policy applies to the model it will reach."""
     call.local = False
     call.note = f" (does not fit the local window -> cloud as {data.get('model')})"
-    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+    return orchestrator_no_code(data, cfg) or json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 def local_role() -> str:
@@ -270,15 +350,24 @@ def target_url(request: Request, cfg: dict[str, Any], local: bool) -> str:
     return base + request.url.path + (f"?{request.url.query}" if request.url.query else "")
 
 
-def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict[str, Any]) -> bytes:
-    """Body for the upstream call: side requests to the cloud, local requests shaped, an oversized one spilled there."""
-    if not call.local or data is None:
+def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict[str, Any]) -> bytes | Response:
+    """Body for the upstream call, or a synthetic stop answer: cloud requests lose the write tools when the no-code
+    policy applies, side requests go to the cloud, local requests shaped, a full window answered with a handoff instead
+    of another turn, an oversized one spilled there."""
+    if data is None:
         return body
+    if not call.local:
+        return orchestrator_no_code(data, cfg) or body
     if cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
         return send_to_cloud(call, data, cfg)
     shaped, call.note = shape_local(data, cfg)
+    window = int(server_window(cfg) or cfg.get("context_tokens") or 0)
+    stopped = context_stop_response(call, shaped,
+                                    {"mode": "local", "model": shaped.get("model", ""), "window": window}, cfg)
+    if stopped is not None:
+        return stopped
     if overflows(shaped, cfg):
-        return spill_to_cloud(call, data)
+        return spill_to_cloud(call, data, cfg)
     return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
 
 
@@ -558,6 +647,23 @@ def external_headers(request: Request, up: dict[str, Any]) -> dict[str, str]:
     return {**headers, "x-api-key": key, "authorization": f"Bearer {key}"}
 
 
+def prepare_external(call: Call, data: dict[str, Any], up: dict[str, Any],
+                     cfg: dict[str, Any]) -> bytes | Response:
+    """Body for an external orchestrator, or the synthetic stop answer: shaped for its model, a full window stopped
+    with a handoff (context_stop.py) instead of another turn."""
+    mode = call.route[len("external:"):] if call.route.startswith("external:") else ""
+    shaped, call.note = shape_external(data, up, cfg)
+    call.provider_model = shaped.get("model", "")
+    where = {"mode": mode, "model": shaped.get("model", ""), "window": context_window(up, cfg)}
+    stopped = context_stop_response(call, shaped, where, cfg)
+    if stopped is not None:
+        call.log(200)
+        return stopped
+    if os.getenv(DUMP_ENV):
+        Path(os.environ[DUMP_ENV]).write_text(json.dumps(shaped, ensure_ascii=False, indent=1), encoding="utf-8")
+    return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
+
+
 async def handle_external(request: Request, body: bytes, cfg: dict[str, Any],
                           external: tuple[str, dict[str, Any]]) -> Response:
     """Forward one request to the external orchestrator in `external` = (mode, upstream config)."""
@@ -569,11 +675,10 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any],
         call.log(503)
         return switched_off(reason)
     if data is not None and request.url.path == "/v1/messages":
-        shaped, call.note = shape_external(data, up, cfg)
-        call.provider_model = shaped.get("model", "")
-        body = json.dumps(shaped, ensure_ascii=False).encode("utf-8")
-        if os.getenv(DUMP_ENV):
-            Path(os.environ[DUMP_ENV]).write_text(json.dumps(shaped, ensure_ascii=False, indent=1), encoding="utf-8")
+        prepared = prepare_external(call, data, up, cfg)
+        if isinstance(prepared, Response):
+            return prepared
+        body = prepared
     url = up["url"].rstrip("/") + request.url.path + (f"?{request.url.query}" if request.url.query else "")
     call.sent = body
     return await relay(request, call, cfg, (url, external_headers(request, up)))
@@ -592,8 +697,11 @@ async def handle(request: Request) -> Response:
     if reason:
         call.log(503)
         return switched_off(reason)
-    body = prepare_body(call, data, body, cfg)
-    call.sent = body
+    prepared = prepare_body(call, data, body, cfg)
+    if isinstance(prepared, Response):
+        call.log(200)
+        return prepared
+    call.sent = prepared
     return await relay(request, call, cfg)
 
 

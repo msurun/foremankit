@@ -162,6 +162,10 @@ verify:
     - foremankit check
     - .venv/Scripts/foremankit check
     - .venv/bin/foremankit check
+    # this workspace: the venv lives in the repository, the project folder is its parent (verify paths are project-relative)
+    - ForemanKit/.venv/Scripts/foremankit check
+    - ForemanKit/.venv/Scripts/python -m pytest
+    - ForemanKit/.venv/Scripts/python -m ruff check
 
 # One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the
 # system prompt of these kinds (a project can override it with <project>/.foremankit/conventions.md). `foremankit check <files>`

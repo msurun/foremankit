@@ -11,7 +11,7 @@ language: English                     # the language the orchestrator talks to y
                                        # Polish prompt: prompt_file: orchestrator.pl.md and language: Polish
 
 # Only the plugin's main loop is touched: it is recognised by a tool that spawns subagents. Subagent requests
-# (no such tool) and all cloud requests pass through unchanged.
+# (no such tool) pass through unchanged.
 main_loop_tools: [Agent, Task]
 
 # Requests without any tools (Claude Code's auto-mode safety check, session titles) expect a real Claude model and
@@ -27,6 +27,27 @@ side_request_model: claude-sonnet-5-5
 # false = old behaviour: the request is sent to the local model and fails when the window is exceeded.
 overflow_to_cloud: true
 overflow_ratio: 0.70
+
+# No-code policy for the Claude orchestrator: a cloud request whose model id starts with `claude-` and is not a Haiku
+# (i.e. Sonnet/Opus, the orchestrator itself) reaches Anthropic WITHOUT its Write, Edit, MultiEdit and NotebookEdit
+# tools, plus one system line telling it to use `delegate` or an Agent with model haiku. The model then cannot write
+# code, so those tokens are never spent; reading, searching, Bash and tests stay available. Haiku subagents send their
+# own `claude-haiku-*` id through the same gateway and keep their tools. External orchestrators (deepseek/gemini) and
+# the `local` mode are not affected. false = the orchestrator may write code itself again.
+no_code: true
+
+# HARD context stop: a hook (hooks/session_length_reminder.py) only ASKS the model to hand over at 85 %, and a degraded
+# local model ignores it. At `ratio` of the model window the gateway stops the turn itself: it answers "stopped, handoff
+# written" (a normal tool-less assistant message, no tool_use) and writes a handoff drafted from the request body alone,
+# never asking the model. It is checked BEFORE the 0.70 spill, so a session at >= ratio stops instead of growing on;
+# between overflow_ratio and ratio the spill still keeps it alive on the cloud. Only requests that carry tools are gated
+# (side requests such as session titles never are). Applies to local and to every external orchestrator (its `context`).
+# ratio: 0.90 default, 0.95 also sensible. dir: handoff folder, empty = <state dir>/handoffs.
+context_stop:
+  enabled: true
+  ratio: 0.90
+  chars_per_token: 4        # rough size: request_chars(data) // this
+  dir: ""                   # handoff-YYYYmmdd-HHMMSS.md; empty = state dir /handoffs
 
 # Claude Code's effort slider -> does the local model think? true/false per level (sent to llama-server per request as
 # chat_template_kwargs.enable_thinking, which overrides the server's start-up default). Levels not listed, and requests
