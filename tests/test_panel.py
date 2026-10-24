@@ -486,3 +486,18 @@ def test_refresh_offered_models_strips_the_gemini_models_prefix(monkeypatch, tmp
                         lambda client, url, key, timeout=15: ["models/gemini-3-pro", "models/aqa"])
     assert panel.refresh_offered_models() == {"gemini": ["gemini-3-pro", "aqa"]}
     assert panel.model_issues() == []
+
+
+def test_probe_sends_the_lab_key_so_a_shared_server_is_not_reported_as_starting(monkeypatch, tmp_path: Path):
+    """A -Share server locks its endpoints; probe must attach the lab key or /props answers 401 and looks 'starting'."""
+    import urllib.request
+    monkeypatch.setenv("FOREMANKIT_PEER_KEY", "secret")
+    seen: dict = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["authorization"] = request.get_header("Authorization")
+        raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert panel.probe("http://127.0.0.1:8080/props") is None
+    assert seen["authorization"] == "Bearer secret"

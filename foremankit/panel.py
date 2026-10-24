@@ -80,9 +80,15 @@ MOE_NAME = re.compile(r"-A\d+B", re.IGNORECASE)   # Qwen3.6-35B-A3B, gemma-4-26B
 
 
 def probe(url: str) -> dict[str, Any] | None:
-    """JSON answer of a GET, or None when nothing answers (or the answer is not JSON)."""
+    """JSON answer of a GET, or None when nothing answers (or the answer is not JSON).
+
+    The lab key is attached when this machine has one: a llama-server started with -Share locks its endpoints, so a
+    keyless /props would return 401 and the panel would wrongly show the server as still starting."""
+    key = read_lab_key()
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
     try:
-        with urllib.request.urlopen(url, timeout=PROBE_TIMEOUT_S) as answer:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_S) as answer:
             return json.loads(answer.read())
     except (OSError, ValueError):
         return None
