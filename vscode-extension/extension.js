@@ -285,7 +285,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:5px 10px;cursor:pointer;border-radius:2px}
  button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
  button:hover{filter:brightness(1.1)} select{width:100%;background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:4px}
- .bar{height:6px;background:rgba(128,128,128,.3);border-radius:3px} .fill{height:6px;border-radius:3px;background:var(--vscode-progressBar-background)}
+ .bar{height:6px;background:rgba(128,128,128,.3);border-radius:3px}
+ .limit{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .limit span{min-width:150px}
+ .limit input{width:80px!important;box-sizing:border-box;margin:0} .fill{height:6px;border-radius:3px;background:var(--vscode-progressBar-background)}
  .info,.err{font-size:12px;opacity:.8;margin:4px 0} .err{color:var(--vscode-errorForeground);opacity:1}
  .levels label{margin-right:8px;font-size:12px} .grid{display:grid;grid-template-columns:1fr;gap:4px;font-size:12px;margin:6px 0}
  .grid label{display:flex;flex-direction:column;gap:2px} input[type=number],input:not([type]),select{width:100%;box-sizing:border-box}
@@ -528,28 +530,31 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  const money2 = (v) => '$' + (v >= 1 ? v.toFixed(2) : v.toFixed(3));
  function capText(cap) { return cap === null || cap === undefined ? 'no cap' : money2(cap); }
  function pct(spent, cap) { return cap === null || cap === undefined || cap <= 0 ? 0 : Math.min(100, Math.round(100 * spent / cap)); }
+ function limitRow(category, label, period, spent, cap) {
+  const row = document.createElement('div'); row.className = 'limit';
+  const text = document.createElement('span');
+  const p = pct(spent, cap);
+  text.textContent = (period === 'daily' ? 'daily' : 'monthly') + ': ' + money2(spent) + ' / ' + capText(cap) + (cap === null ? '' : '  ' + p + '%');
+  if (p >= 90) text.className = 'err';
+  row.appendChild(text);
+  const bar = document.createElement('div'); bar.className = 'bar'; bar.style.flex = '1';
+  const fill = document.createElement('div'); fill.className = 'fill'; fill.style.width = p + '%';
+  if (p >= 90) fill.style.background = 'var(--vscode-errorForeground)';
+  bar.appendChild(fill); row.appendChild(bar);
+  const input = document.createElement('input'); input.type = 'number'; input.min = '0'; input.step = '0.25';
+  input.value = cap === null || cap === undefined ? '' : cap; input.placeholder = 'no cap';
+  input.title = 'Limit for ' + label + ' (' + period + '); leave empty and press Enter for no cap';
+  row.appendChild(input);
+  input.onchange = () => send({ type: 'config', action: 'budgetSet', category, period, value: input.value });
+  return row;
+ }
  function budgetLine(category, label, row) {
-  const box = document.createElement('div'); box.className = 'info';
-  const head = document.createElement('b'); head.textContent = label + ': '; box.appendChild(head);
-  for (const period of ['daily', 'monthly']) {
-   const spent = period === 'daily' ? row.day_usd : row.month_usd;
-   const cap = period === 'daily' ? row.daily_cap : row.monthly_cap;
-   const p = pct(spent, cap);
-   const line = document.createElement('div');
-   line.textContent = (period === 'daily' ? 'today ' : 'month ') + money2(spent) + ' / ' + capText(cap) + (cap === null ? '' : ' (' + p + '%)');
-   if (p >= 90) line.className = 'err';
-   box.appendChild(line);
-   const bar = document.createElement('div'); bar.className = 'bar';
-   const fill = document.createElement('div'); fill.className = 'fill'; fill.style.width = p + '%';
-   if (p >= 90) fill.style.background = 'var(--vscode-errorForeground)';
-   bar.appendChild(fill); box.appendChild(bar);
-   const input = document.createElement('input'); input.type = 'number'; input.min = '0'; input.step = '0.25';
-   input.value = cap === null ? '' : cap; input.placeholder = 'no cap';
-   input.title = 'Limit for ' + label + ' (' + period + '), empty = no cap';
-   input.style.width = '90px'; input.style.marginBottom = '4px';
-   input.onchange = () => send({ type: 'config', action: 'budgetSet', category, period, value: input.value });
-   box.appendChild(input);
-  }
+  const box = document.createElement('div');
+  const head = document.createElement('div'); head.className = 'info';
+  head.innerHTML = '<b>' + label + '</b> &mdash; type a limit and press Enter (empty = no cap)';
+  box.appendChild(head);
+  box.appendChild(limitRow(category, label, 'daily', row.day_usd, row.daily_cap));
+  box.appendChild(limitRow(category, label, 'monthly', row.month_usd, row.monthly_cap));
   return box;
  }
  function showBudget(b) {
