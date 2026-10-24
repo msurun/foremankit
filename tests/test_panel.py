@@ -527,6 +527,23 @@ def test_prices_status_shows_phase_price_now_and_the_announced_change(monkeypatc
     assert panel.read_tier(1_000_100.0)["tier"] == "cheap"
 
 
+def test_prices_status_lists_models_cheapest_first_by_blended_price(monkeypatch, tmp_path: Path):
+    """Within a provider models are ordered cheapest first by the blended price (input_miss weighed 31x against output,
+    the orchestrator's real traffic). `low_in` beats `flash` because its cheaper input dominates at that ratio."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    (tmp_path / "orchestrator.yaml").write_text("upstreams:\n  deepseek: {models: {sonnet: pro}}\n", encoding="utf-8")
+    (tmp_path / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    models:\n"
+        "      pro: {id: ds-pro, price: {input_miss: 1.32, input_hit: 0.044, output: 3.96}}\n"
+        "      flash: {id: ds-flash, price: {input_miss: 0.30, input_hit: 0.006, output: 1.20}}\n"
+        "      big_in: {id: big-in, price: {input_miss: 5.0, input_hit: 0.5, output: 1.0}}\n"
+        "      low_in: {id: low-in, price: {input_miss: 0.1, input_hit: 0.01, output: 2.0}}\n", encoding="utf-8")
+    [deepseek] = panel.prices_status(now=0.0)["providers"]
+    assert list(deepseek["models"]) == ["low_in", "flash", "pro", "big_in"]
+
+
 def test_a_used_up_orchestrator_budget_is_a_panel_issue_with_a_way_back_to_claude(monkeypatch, tmp_path: Path):
     """While DeepSeek/Gemini orchestrate and their own cap is passed, the panel says so; delegation spend is irrelevant."""
     import time as time_module

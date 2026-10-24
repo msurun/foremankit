@@ -662,6 +662,20 @@ def orchestrator_budget_issues() -> list[dict[str, str]]:
              "in routing.yaml or go back to Claude.", "fix": "apply-preset claude"}]
 
 
+# A call moves about 31 input tokens per output token: the orchestrator's own proxy traffic (the bulk of what the
+# upstreams serve) sends the whole context each turn (measured 2026-10-24: 31.6:1 over 1214 calls in calls.jsonl).
+# Sorting by `ratio * input_miss + output` gives the same order as the blended price, since 1/(ratio+1) cancels.
+PRICE_SORT_INPUT_RATIO = 31.0
+
+
+def _model_price_sort_key(model: dict[str, Any]) -> tuple[float, float]:
+    """A model's blended price per 1M tokens as a sort key: `ratio * input_miss + output`, cheapest first."""
+    price = model.get("price") or {}
+    input_miss = price.get("input_miss", float("inf"))
+    output = price.get("output", float("inf"))
+    return PRICE_SORT_INPUT_RATIO * input_miss + output, output
+
+
 def prices_status(now: float | None = None) -> dict[str, Any]:
     """What the 'Prices now' menu shows: per provider of the orchestrator upstreams, each model's price now (peak or
     off-peak), the peak price, when the phase changes and the next announced price change; plus the tier the main
@@ -674,6 +688,7 @@ def prices_status(now: float | None = None) -> dict[str, Any]:
         section = providers.get(upstream_provider(name, upstreams)) or {}
         models = {alias: {"id": entry.get("id"), **pricing.price_status(entry, section, now)}
                   for alias, entry in (section.get("models") or {}).items() if entry.get("price")}
+        models = dict(sorted(models.items(), key=lambda item: _model_price_sort_key(item[1])))
         phases = {model["phase"] for model in models.values() if model["phase"]}
         rows.append({"provider": name, "phase": next(iter(phases), None), "next_change": next(
             (model["next_change"] for model in models.values() if model["next_change"]), None), "models": models})
