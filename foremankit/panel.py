@@ -533,7 +533,8 @@ def refresh_offered_models() -> dict[str, list[str]]:
             if provider.is_llm or not provider.api_key() or section.get("enabled", True) is False:
                 continue
             try:
-                offered[name] = list_models(client, section["base_url"], provider.api_key(), timeout=4)
+                ids = list_models(client, section["base_url"], provider.api_key(), timeout=4)
+                offered[name] = [model_id.removeprefix("models/") for model_id in ids]   # Gemini lists 'models/<id>'
             except (httpx.HTTPError, ValueError, KeyError):
                 continue
     (state_dir() / OFFERED_FILE).write_text(json.dumps({"at": time.time(), "offered": offered}), encoding="utf-8")

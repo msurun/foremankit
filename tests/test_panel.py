@@ -470,3 +470,19 @@ def test_a_vanished_model_id_becomes_a_panel_issue_and_the_fix_rewrites_provider
     assert panel.model_issues() == []
     with pytest.raises(ValueError):
         panel.fix_model("deepseek:nothing", "x")
+
+
+def test_refresh_offered_models_strips_the_gemini_models_prefix(monkeypatch, tmp_path: Path):
+    """Gemini lists 'models/gemini-x'; the cache holds the bare id so a configured 'gemini-x' is not reported as gone."""
+    import foremankit.providers as providers_module
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TEST_PANEL_KEY", "k")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "providers.yaml").write_text(
+        "providers:\n  gemini:\n    base_url: http://x\n    key_env: TEST_PANEL_KEY\n"
+        "    models:\n      pro: {id: gemini-3-pro, price: {}}\n", encoding="utf-8")
+    monkeypatch.setattr(providers_module, "list_models",
+                        lambda client, url, key, timeout=15: ["models/gemini-3-pro", "models/aqa"])
+    assert panel.refresh_offered_models() == {"gemini": ["gemini-3-pro", "aqa"]}
+    assert panel.model_issues() == []
