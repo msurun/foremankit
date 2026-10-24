@@ -195,6 +195,7 @@ class Panel {
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
+      budgetSet: ['budget-set', period, '--name', category, '--value', String(value)],
       fixModel: ['fix-model', '--name', name, '--model', model],
       orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
@@ -314,7 +315,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <details><summary class="info" id="pricesSummary">Prices now</summary>
 <div id="prices"></div>
 </details>
-<details><summary class="info">Costs</summary>
+<details><summary class="info" id="costSummary">Costs</summary>
+<div id="budgetRows"></div>
 <div id="delegSummary" class="info">no delegated calls yet</div>
 <div id="delegDays" class="days"></div>
 <div id="delegToday" class="info"></div>
@@ -394,7 +396,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  const money = (v) => '$' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2));
  function showDelegations(d) {
   if (d.error) return;
-  headCost = 'today ' + money(d.today.cost); renderHead();
   $('delegSummary').textContent = 'today: ' + d.today.calls + ' delegated calls, ' + money(d.today.cost) + ' | last 7 days: ' + money(d.week_cost);
   const max = Math.max(...d.days.map((x) => x.cost), 0.000001); const bars = $('delegDays'); bars.innerHTML = '';
   for (const x of d.days) { const b = document.createElement('div'); b.style.height = Math.max(2, Math.round(34 * x.cost / max)) + 'px'; b.title = x.day + ': ' + money(x.cost); bars.appendChild(b); }
@@ -455,7 +456,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPrices(s.prices); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -523,6 +524,41 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  function untilText(ts) {
   const hours = Math.max(0, Math.round((ts * 1000 - Date.now()) / 3600000));
   return new Date(ts * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' (in ' + hours + ' h)';
+ }
+ const money2 = (v) => '$' + (v >= 1 ? v.toFixed(2) : v.toFixed(3));
+ function capText(cap) { return cap === null || cap === undefined ? 'no cap' : money2(cap); }
+ function pct(spent, cap) { return cap === null || cap === undefined || cap <= 0 ? 0 : Math.min(100, Math.round(100 * spent / cap)); }
+ function budgetLine(category, label, row) {
+  const box = document.createElement('div'); box.className = 'info';
+  const head = document.createElement('b'); head.textContent = label + ': '; box.appendChild(head);
+  for (const period of ['daily', 'monthly']) {
+   const spent = period === 'daily' ? row.day_usd : row.month_usd;
+   const cap = period === 'daily' ? row.daily_cap : row.monthly_cap;
+   const p = pct(spent, cap);
+   const line = document.createElement('div');
+   line.textContent = (period === 'daily' ? 'today ' : 'month ') + money2(spent) + ' / ' + capText(cap) + (cap === null ? '' : ' (' + p + '%)');
+   if (p >= 90) line.className = 'err';
+   box.appendChild(line);
+   const bar = document.createElement('div'); bar.className = 'bar';
+   const fill = document.createElement('div'); fill.className = 'fill'; fill.style.width = p + '%';
+   if (p >= 90) fill.style.background = 'var(--vscode-errorForeground)';
+   bar.appendChild(fill); box.appendChild(bar);
+   const input = document.createElement('input'); input.type = 'number'; input.min = '0'; input.step = '0.25';
+   input.value = cap === null ? '' : cap; input.placeholder = 'no cap';
+   input.title = 'Limit for ' + label + ' (' + period + '), empty = no cap';
+   input.style.width = '90px'; input.style.marginBottom = '4px';
+   input.onchange = () => send({ type: 'config', action: 'budgetSet', category, period, value: input.value });
+   box.appendChild(input);
+  }
+  return box;
+ }
+ function showBudget(b) {
+  const box = $('budgetRows'); if (!b) return; box.innerHTML = '';
+  box.appendChild(budgetLine('orchestrator', 'Orchestrator', b.orchestrator || {}));
+  box.appendChild(budgetLine('delegation', 'Agents (delegation)', b.delegation || {}));
+  const short = (r) => money2(r.day_usd) + '/' + capText(r.daily_cap);
+  $('costSummary').textContent = 'Costs (' + short(b.orchestrator || {}) + ' now)';
+  headCost = 'orch ' + short(b.orchestrator || {}) + ' | agents ' + short(b.delegation || {}); renderHead();
  }
  function showPrices(info) {
   const box = $('prices'); if (!info) return; box.innerHTML = '';

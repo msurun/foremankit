@@ -135,7 +135,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -581,6 +581,74 @@ def fix_model(target: str, new_id: str) -> str:
     return f"{target} now uses {new_id}. Check its price in providers.yaml: the old price is still counted."
 
 
+BUDGET_KEYS = {(budget.DELEGATION, "daily"): "daily_usd", (budget.DELEGATION, "monthly"): "monthly_usd",
+               (budget.ORCHESTRATOR, "daily"): "orchestrator_daily_usd",
+               (budget.ORCHESTRATOR, "monthly"): "orchestrator_monthly_usd"}
+
+
+def budget_status(now: float | None = None) -> dict[str, Any]:
+    """What the panel shows per spend category: spent today and this month plus the caps (None = no cap)."""
+    now = time.time() if now is None else now
+    state = StateStore().load()
+    caps = _read_yaml(config_dir() / "routing.yaml").get("budget") or {}
+    rows: dict[str, Any] = {}
+    for category in (budget.DELEGATION, budget.ORCHESTRATOR):
+        day, month = budget.spent(state, now, category)
+        daily_cap, monthly_cap = budget.caps(caps, category)
+        rows[category] = {"day_usd": round(day, 4), "month_usd": round(month, 4),
+                          "daily_cap": daily_cap, "monthly_cap": monthly_cap}
+    return rows
+
+
+def set_budget(category: str, period: str, value: str) -> str:
+    """Write one cap into routing.yaml `budget:` (an empty value = no cap, stored as null). Comments stay."""
+    key = BUDGET_KEYS.get((category, period))
+    if key is None:
+        raise ValueError(f"category must be delegation or orchestrator, period daily or monthly")
+    text_value = _checked_amount(value)
+    path = config_dir() / "routing.yaml"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    pattern = re.compile(rf"^(\s+){re.escape(key)}:\s*[^#\r\n]*?(\s*#.*)?$")
+    for index, line in enumerate(lines):
+        match = pattern.match(line.rstrip("\r\n"))
+        if match:
+            lines[index] = f"{match.group(1)}{key}: {text_value}{match.group(2) or ''}{_ending_of(line)}"
+            break
+    else:
+        _insert_cap(lines, key, text_value)
+    path.write_text("".join(lines), encoding="utf-8")
+    return f"{category} {period} limit: {text_value or 'none'}"
+
+
+def _checked_amount(value: str) -> str:
+    """The number as text for the yaml ('none'/'null'/empty -> ''), refusing anything that is not a non-negative number."""
+    text = (value or "").strip()
+    if text.lower() in ("", "none", "null"):
+        return ""
+    try:
+        amount = float(text)
+    except ValueError as error:
+        raise ValueError(f"{value!r} is not a number") from error
+    if amount < 0:
+        raise ValueError("a limit cannot be negative")
+    return f"{amount:g}"
+
+
+def _ending_of(line: str) -> str:
+    """The line's own line ending ('' on the last line without one)."""
+    body = line.rstrip("\r\n")
+    return line[len(body):]
+
+
+def _insert_cap(lines: list[str], key: str, text_value: str) -> None:
+    """Add the key right after the `budget:` line when routing.yaml does not have it yet."""
+    for index, line in enumerate(lines):
+        if re.match(r"^budget:\s*$", line.rstrip("\r\n")):
+            lines.insert(index + 1, f"  {key}: {text_value}{_ending_of(line)}")
+            return
+    raise ValueError("routing.yaml has no `budget:` block")
+
+
 def orchestrator_budget_issues() -> list[dict[str, str]]:
     """A panel problem while an external orchestrator is active and its own budget is used up: the gateway refuses its
     requests, and the fix is to go back to Claude (the delegation budget is a separate counter)."""
@@ -916,6 +984,7 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
         "worker-test": lambda: test_worker(args.name),
         "orchestrator": lambda: set_orchestrator(args.name),
         "fix-model": lambda: fix_model(args.name, args.model),
+        "budget-set": lambda: set_budget(args.name, args.action or "", args.value),
         "orchestrator-mode": lambda: set_orchestrator_mode(args.name, args.cwd),
         "worker-enable": lambda: set_worker_enabled(args.name, args.action == "true"),
         "profile-set": lambda: set_profile(args.model, json.loads(args.fields)),
@@ -935,7 +1004,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -949,6 +1018,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--url", default="")
     parser.add_argument("--accept", default="internal")
     parser.add_argument("--priority", type=int, default=10)
+    parser.add_argument("--value", default="", help="budget-set: the amount, empty = no cap")
     parser.add_argument("--levels", default="", help="thinking: comma list like low=false,high=true")
     return parser
 
@@ -988,7 +1058,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "profile-set", "delegation-set"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}
