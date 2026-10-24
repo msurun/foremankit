@@ -223,9 +223,22 @@ def line_message(line: str) -> dict:
     return message if isinstance(message, dict) else {}
 
 
+def autocompact_window(model: str) -> int:
+    """The auto-compact window `/autocompact` saved for that model in ~/.claude/settings.json; 0 when there is none."""
+    entries = load_json(Path.home() / ".claude" / "settings.json").get("modelSettings") or {}
+    for name, entry in entries.items():
+        if isinstance(entry, dict) and (model == name or model.startswith(name)):
+            try:
+                return int(entry.get("autoCompactWindow") or 0)
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 def cloud_window(model: str, tokens: int) -> int:
-    """Context window of a cloud model: FOREMANKIT_CLOUD_WINDOW, else 1M for a "[1m]" id or a larger observed context."""
-    configured = int(number_env("FOREMANKIT_CLOUD_WINDOW", 0.0))
+    """Context window of a cloud model: FOREMANKIT_CLOUD_WINDOW, else the /autocompact window, else 1M for a "[1m]"
+    id or a larger observed context."""
+    configured = int(number_env("FOREMANKIT_CLOUD_WINDOW", 0.0)) or autocompact_window(model)
     if configured > 0:
         return configured
     return CLOUD_WINDOW_BIG if "[1m]" in model or tokens > CLOUD_WINDOW else CLOUD_WINDOW

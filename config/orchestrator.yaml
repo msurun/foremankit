@@ -20,6 +20,14 @@ main_loop_tools: [Agent, Task]
 side_requests_to_cloud: true
 side_request_model: claude-sonnet-5-5
 
+# The tuned local model has far less context (32k) than Claude Code's auto-compact window (100k, per model), so a
+# local session that grows is spilled to the cloud instead of hitting "context exceeded": the request goes untouched
+# to the same Claude model and the session keeps compacting normally. After a compaction it fits again and comes back.
+# ratio = share of the llama-server window at which the spill happens (below the hook's 75 % warning).
+# false = old behaviour: the request is sent to the local model and fails when the window is exceeded.
+overflow_to_cloud: true
+overflow_ratio: 0.70
+
 # Claude Code's effort slider -> does the local model think? true/false per level (sent to llama-server per request as
 # chat_template_kwargs.enable_thinking, which overrides the server's start-up default). Levels not listed, and requests
 # without an effort, keep that default. llama.cpp has no per-request thinking budget, so "on" means unlimited thinking.

@@ -39,6 +39,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "side_requests_to_cloud": True, "side_request_model": "claude-sonnet-5-5",
+            "overflow_to_cloud": True, "overflow_ratio": 0.70,
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
@@ -130,6 +131,18 @@ def record_usage(tokens: int, cfg: dict[str, Any]) -> None:
         pass   # a missing hint must never fail the request
 
 
+def overflows(data: dict[str, Any], cfg: dict[str, Any]) -> bool:
+    """True when the request no longer fits the running llama-server, even after trimming.
+
+    A local-mode session keeps its own model id, so Claude Code's auto-compact window (100k) is far above the window
+    of the tuned local model (32k): without a spill the llama-server refuses the request long before auto-compact
+    fires. The request is then sent to the cloud untouched, so the session survives and compacts as usual."""
+    if not cfg.get("overflow_to_cloud", True):
+        return False
+    window = int(server_window(cfg) or cfg.get("context_tokens") or 0)
+    return bool(window) and request_chars(data) // 4 > window * float(cfg.get("overflow_ratio", 0.70))
+
+
 def describe_side_request(data: dict[str, Any]) -> str:
     """One short line about a request that is not the main loop (tools, streaming, size, first words of the system
     prompt), so the log shows what kind of side request (subagent, auto-mode check, title) reaches the local model."""
@@ -150,7 +163,8 @@ def shape_local(data: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, An
     before = request_chars(data)
     data = shape_request(data, read_prompt(cfg), cfg["trim"])
     after = request_chars(data)
-    record_usage(after // 4, cfg)
+    if not overflows(data, cfg):      # an overflowing request leaves for the cloud, its fill is no local fill
+        record_usage(after // 4, cfg)
     if os.getenv(DUMP_ENV):
         Path(os.environ[DUMP_ENV]).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return data, f" (main loop: ~{before // 4000}k -> ~{after // 4000}k tokens)" + thinking_note
@@ -216,6 +230,13 @@ def send_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> byte
     return json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
 
 
+def spill_to_cloud(call: Call, data: dict[str, Any]) -> bytes:
+    """Send an untouched local request to the cloud because it does not fit the local window; returns the body."""
+    call.local = False
+    call.note = f" (does not fit the local window -> cloud as {data.get('model')})"
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
 def local_role() -> str:
     """What the local llama-server is for: orchestrator (Claude Code), worker (delegated tasks) or both."""
     try:
@@ -250,13 +271,15 @@ def target_url(request: Request, cfg: dict[str, Any], local: bool) -> str:
 
 
 def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict[str, Any]) -> bytes:
-    """Body for the upstream call: side requests go to the cloud, local main-loop requests are shaped, rest unchanged."""
-    if call.local and cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
+    """Body for the upstream call: side requests to the cloud, local requests shaped, an oversized one spilled there."""
+    if not call.local or data is None:
+        return body
+    if cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
         return send_to_cloud(call, data, cfg)
-    if call.local and data is not None:
-        shaped, call.note = shape_local(data, cfg)
-        return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
-    return body
+    shaped, call.note = shape_local(data, cfg)
+    if overflows(shaped, cfg):
+        return spill_to_cloud(call, data)
+    return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
 
 
 async def relay(request: Request, call: Call, cfg: dict[str, Any],
