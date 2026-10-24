@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,9 @@ from .config import ConfigError
 from .delegation import CATEGORIES, describe, set_switch
 from .formatting import format_result, format_review, format_status
 from .netguard import PrivacyError
+from .passrates import format_pass_rates, summarize_pass_rates
 from .records import DEFAULT_MAX_OUTPUT_TOKENS, ReviewJob
+from .regression import regress
 from .router import Router, RouterError
 from .transcripts import find_transcripts, summarize_many
 
@@ -216,9 +220,20 @@ def cmd_stats(router: Router, args: argparse.Namespace) -> int:
                   f"in={int(counts['tokens_in']):>9} out={int(counts['tokens_out']):>8} ${counts['cost_usd']:.4f} "
                   f"cut={int(counts['truncated'])} cont={int(counts['continuations'])}")
     _print_outcomes(stats["outcomes"])
+    cutoff = time.time() - args.days * 86400 if args.days else 0.0
+    print("pass@k (checked delegations):")
+    for line in format_pass_rates(summarize_pass_rates(router.log.read(), cutoff)).splitlines():
+        print(f"  {line}")
     print(f"total cost ${stats['cost_usd']:.4f}; same tokens at {stats['reference']} API prices "
           f"~${stats['reference_usd']:.4f} -> saved ~${stats['saved_usd']:.4f} (rough: output quality/lengths differ)")
     return 0
+
+
+def cmd_regress(router: Router, args: argparse.Namespace) -> int:
+    """Run the REGRESSION.md commands whose module changed (git status); --list only shows them."""
+    code, report = regress(args.ledger, os.getcwd(), run=not args.list)
+    print(report)
+    return code
 
 
 def cmd_sessions(router: Router, args: argparse.Namespace) -> int:
@@ -293,7 +308,7 @@ def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
 
 
 COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
-            "check": cmd_check, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
+            "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions}
 
 
@@ -336,6 +351,9 @@ def _add_code_quality_parsers(sub: Any) -> None:
     review.add_argument("--allow-cost", action="store_true")
     check = sub.add_parser("check", help="check python files against the clean-code rules of config/conventions.md")
     check.add_argument("files", nargs="+")
+    regress_parser = sub.add_parser("regress", help="run the REGRESSION.md commands for the modules changed in the git tree")
+    regress_parser.add_argument("--ledger", default="REGRESSION.md")
+    regress_parser.add_argument("--list", action="store_true", help="only list the affected entries")
 
 
 def _add_delegate_parser(sub: Any) -> None:

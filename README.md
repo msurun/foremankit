@@ -128,7 +128,7 @@ A provider is active only when its key is set.
 ```bash
 foremankit status                     # providers, remaining limits, spend today/this month, LLM pool nodes
 foremankit models [provider]          # list from /models of every active provider; flags config IDs that are missing
-foremankit stats [--days 7]           # cost and calls per provider/kind + estimated savings vs Sonnet API prices
+foremankit stats [--days 7]           # cost and calls per provider/kind + estimated savings vs Sonnet API prices + pass@1/pass@3 per kind and model
 foremankit nodes                       # status of all nodes: reachability, busyness, speed, rule, accepted data level, netguard
 foremankit nodes key                   # creates FOREMANKIT_PEER_KEY in .env
 foremankit llm status                  # all nodes
@@ -138,6 +138,7 @@ foremankit llm <node|self|others|all> on|off|auto
 foremankit profile [name]            # shows or switches the profile (home|work|...)
 foremankit delegation [paid|free|local|all] on|off|status   # switch a whole source category
 foremankit check file.py [...]       # checks Python files against the clean-code rules (config/conventions.md)
+foremankit regress [--list]        # run the REGRESSION.md commands (| Module | Downstream | Command |) for modules changed in the git tree
 foremankit review [--diff] files     # review by a second model (your own LLM or a paid one); --diff reviews the git diff
 python install.py --check          # what of foremankit is installed (separately from the CLI, in the foremankit folder)
 foremankit delegate "task" --kind quick [--sensitivity private] [--files a.py b.py] [--escalate] [--allow-cost] [--verify "pytest"] [--verify-target "test_a.py"]

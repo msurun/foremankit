@@ -43,6 +43,8 @@ SESSION_HOOK_MARK = "session_length_reminder.py"   # UserPromptSubmit: one remin
 NUDGE_HOOK_MARK = "delegation_nudge.py"             # UserPromptSubmit + PostToolUse(Write|Edit|Bash): delegation counter, silent when delegation is off
 NUDGE_TOOLS = "Write|Edit|Bash"                     # the tools whose output the counter measures
 GUARD_HOOK_MARK = "orchestrator_guard.py"           # PreToolUse on every tool: keeps sensitive data from an external orchestrator (silent in claude/local mode)
+GUARD_SCRIPTS = (("guard_git.py", "Bash|PowerShell"), ("guard_destructive.py", "Bash|PowerShell"),
+                ("guard_config.py", "Write|Edit|MultiEdit|NotebookEdit"))   # PreToolUse: commit gate, destructive commands, protected configs
 CHECKPOINT_HOOK_MARK = "auto_checkpoint.py"         # PostToolUse on delegate: auto-checkpoint after agent tasks
 GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
 PICKER_NAME = "ForemanKit (local / DeepSeek / Gemini)"
@@ -226,10 +228,18 @@ def _apply_guard(hooks: dict, py: Path, remove: bool) -> None:
     _update_event(hooks, "PreToolUse", GUARD_HOOK_MARK, None if remove else entry)
 
 
+def _apply_guards(hooks: dict, py: Path, remove: bool) -> None:
+    """Guard hooks: block hook bypasses and secrets in commits, destructive commands and edits of protected configs."""
+    for script, matcher in GUARD_SCRIPTS:
+        entry = {"matcher": matcher, "hooks": [{"type": "command", "command": _hook_command(py, script)}]}
+        _update_event(hooks, "PreToolUse", script, None if remove else entry)
+
+
 def _apply_hooks(hooks: dict, py: Path, remove: bool, only: str | None) -> None:
     """Add or remove, in `hooks`, every hook group that `only` selects (None selects all of them)."""
     groups = (("notify", _apply_notify), ("session", _apply_session),
-              ("checkpoint", _apply_checkpoint), ("nudge", _apply_nudge), ("guard", _apply_guard))
+              ("checkpoint", _apply_checkpoint), ("nudge", _apply_nudge), ("guard", _apply_guard),
+              ("guards", _apply_guards))
     for name, apply in groups:
         if only in (None, name):
             apply(hooks, py, remove)

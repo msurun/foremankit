@@ -12,7 +12,11 @@ even if the model forgets the CLAUDE.md rule. It never blocks the call. Two inde
    model, see `uses_local_model`); a cloud session never gets the local model's fill level. While the file is fresh the hook
    warns once per level at 60 % and 75 %; from 85 % it orders the model to stop its work and write a handoff, on every
    prompt until the session is replaced. The size of a transcript file is no usable token count (JSONL overhead, tool
-   results the gateway cuts), so cloud sessions get no token levels.
+   results the gateway cuts).
+3. Context fill (cloud sessions): the last `claude-*` answer in the transcript carries a `usage` record; its input +
+   cache-read + cache-creation tokens ARE the context of that turn. One reminder per level (70 %, 85 % of the window),
+   never a stop order (Claude Code compacts by itself). The level resets after a /compact, so the reminder can fire
+   again. While such a record exists it replaces trigger 1, which would keep warning after a compaction.
 """
 import json
 import os
@@ -23,6 +27,20 @@ from pathlib import Path
 LEVELS = (0.60, 0.75, 0.85)       # fractions of the context window; the last one means: stop and hand over
 TAIL_BYTES = 256 * 1024           # how much of the transcript's end is searched for the model of the last answer
 GATEWAY_FRESH_S = 10 * 60         # older gateway data belongs to a finished local session
+CLOUD_LEVELS = (0.70, 0.85)       # fractions of the cloud window: heads-up, then "hand over at the next breakpoint"
+CLOUD_WINDOW = 200_000            # tokens; a "[1m]" model id or an observed larger context means the 1M window
+CLOUD_WINDOW_BIG = 1_000_000
+USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+CLOUD_TEXT = {
+    "en": ("ℹ foremankit: context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). Plan a /compact or a new "
+           "session at the next breakpoint.",
+           "⚠ foremankit: context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). At the next breakpoint save "
+           "the state (memory / repo) and start a new session or /compact."),
+    "pl": ("ℹ foremankit: kontekst zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). Zaplanuj /compact lub "
+           "nową sesję przy najbliższym punkcie przerwania.",
+           "⚠ foremankit: kontekst zapełniony w {pct:.0%} (~{tokens:,} / {window:,} tokenów). Przy najbliższym punkcie "
+           "przerwania zapisz stan (pamięć / repo) i zacznij nową sesję lub zrób /compact."),
+}
 # User-facing texts per language: English by default, Polish with FOREMANKIT_LANG=pl.
 LEVEL_TEXT = {
     "en": (("ℹ foremankit: local model context is {pct:.0%} full (~{tokens:,} / {window:,} tokens). "
@@ -185,6 +203,63 @@ def remind_context(state: dict, state_file: Path, session_id: str, fill: tuple) 
     return True
 
 
+def tail_lines(transcript_path: str) -> list[str]:
+    """Lines from the last TAIL_BYTES of the transcript, newest last; empty when the file cannot be read."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - TAIL_BYTES))
+            return handle.read().decode("utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+
+
+def line_message(line: str) -> dict:
+    """The `message` object of one transcript line; {} when the line is cut off, not JSON or has no message."""
+    try:
+        message = json.loads(line).get("message")
+    except (ValueError, AttributeError):
+        return {}
+    return message if isinstance(message, dict) else {}
+
+
+def cloud_window(model: str, tokens: int) -> int:
+    """Context window of a cloud model: FOREMANKIT_CLOUD_WINDOW, else 1M for a "[1m]" id or a larger observed context."""
+    configured = int(number_env("FOREMANKIT_CLOUD_WINDOW", 0.0))
+    if configured > 0:
+        return configured
+    return CLOUD_WINDOW_BIG if "[1m]" in model or tokens > CLOUD_WINDOW else CLOUD_WINDOW
+
+
+def cloud_context(transcript_path: str) -> tuple[int, int] | None:
+    """(context tokens, window) from the newest `claude-*` answer with a usage record; None when there is none."""
+    for line in reversed(tail_lines(transcript_path)):
+        message = line_message(line)
+        usage, model = message.get("usage"), message.get("model")
+        if isinstance(usage, dict) and isinstance(model, str) and model.startswith("claude-"):
+            tokens = sum(int(usage.get(key) or 0) for key in USAGE_KEYS)
+            return tokens, cloud_window(model, tokens)
+    return None
+
+
+def remind_cloud(state: dict, state_file: Path, session_id: str, usage: tuple[int, int]) -> None:
+    """Remind once per cloud context level; a lower level (after /compact) is stored silently so it can fire again."""
+    tokens, window = usage
+    fraction = tokens / window
+    level = sum(fraction >= value for value in CLOUD_LEVELS)
+    session_state = session_entry(state, session_id)
+    previous = int(session_state.get("cloud_level", 0))
+    if level == previous:
+        return
+    state[session_id] = {**session_state, "cloud_level": level}
+    remember(state, state_file)
+    if level > previous:
+        text = CLOUD_TEXT[ui_language()][level - 1].format(pct=fraction, tokens=tokens, window=window)
+        emit(text, f"The context is {fraction:.0%} full (~{tokens:,} of {window:,} tokens). At the next natural "
+                   f"breakpoint suggest in ONE line a /compact or a NEW session after saving the state to memory "
+                   f"or the repo. Never interrupt a task in progress; do not repeat this suggestion.")
+
+
 def size_reminder(session_state: dict, transcript_path: str, now: float) -> dict:
     """The session entry to store when the transcript-size reminder is due now; an empty dict when it is not."""
     try:
@@ -206,6 +281,17 @@ def emit_size_reminder(size_mb: float) -> None:
          f"repeat this suggestion.")
 
 
+def remind_by_context(state: dict, state_dir: Path, event: dict, now: float) -> bool:
+    """Local-model fill or cloud context level; True when the context logic handled this call (the MB proxy is skipped)."""
+    state_file, session_id, transcript_path = state_dir / "session_reminder.json", event["session_id"], event["transcript_path"]
+    if uses_local_model(transcript_path):
+        return remind_context(state, state_file, session_id, context_level(state_dir, now))
+    usage = cloud_context(transcript_path)
+    if usage:
+        remind_cloud(state, state_file, session_id, usage)
+    return bool(usage)
+
+
 def run() -> int:
     """Read the hook event and print at most one reminder."""
     event = read_event()
@@ -217,8 +303,7 @@ def run() -> int:
     state_file = state_dir / "session_reminder.json"
     state = load_json(state_file)
     now = number_env("FOREMANKIT_FAKE_NOW", time.time())
-    fill = context_level(state_dir, now) if uses_local_model(transcript_path) else (0, 0, 0, 0.0)
-    if remind_context(state, state_file, session_id, fill):
+    if remind_by_context(state, state_dir, event, now):
         return 0
     updated = size_reminder(session_entry(state, session_id), transcript_path, now)
     if updated:
