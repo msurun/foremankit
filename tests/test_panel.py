@@ -541,3 +541,33 @@ def test_a_used_up_orchestrator_budget_is_a_panel_issue_with_a_way_back_to_claud
     panel.upstream.set_mode("deepseek")
     [issue] = panel.orchestrator_budget_issues()
     assert issue["fix"] == "apply-preset claude" and "orchestrator daily budget" in issue["text"]
+
+
+def test_escalation_pin_is_saved_and_read_back(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Pinning the main loop on `pro` writes the state file, keeps the mode and says so."""
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    message = panel.set_escalation_control("pro")
+    assert (tmp_path / panel.escalation.MODE_FILE).is_file()
+    assert panel.escalation_control() == "pro"
+    assert "pro" in message
+
+
+def test_unknown_escalation_pin_is_rejected_and_writes_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """A mode the switch does not offer raises ValueError and leaves no state file behind."""
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    with pytest.raises(ValueError):
+        panel.set_escalation_control("bogus")
+    assert not (tmp_path / panel.escalation.MODE_FILE).exists()
+
+
+def test_prices_status_reports_the_escalation_control_and_its_modes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """The switch starts on auto; after pinning flash the menu offers auto, flash and pro and shows flash in force."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    before = panel.prices_status()
+    assert before["control"] == "auto"
+    panel.set_escalation_control("flash")
+    after = panel.prices_status()
+    assert after["control"] == "flash"
+    assert [mode["name"] for mode in after["modes"]] == ["auto", "flash", "pro"]

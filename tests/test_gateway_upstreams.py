@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from starlette.requests import Request
 
+from foremankit import escalation
 from foremankit import gateway
 from foremankit import upstream
 from foremankit.state import CallLog, StateStore
@@ -475,3 +476,75 @@ def test_the_orchestrator_budget_is_separate_from_the_delegation_budget(gateway_
     state = store.load()
     assert budget.check(state, {"daily_usd": 1.5}, now, 0.0) is None                    # delegation (1.4) is not blocked
     assert budget.spent(state, now, budget.DELEGATION)[0] == pytest.approx(1.4)
+
+
+# --- the panel switch over the escalation tier --------------------------------
+
+
+def write_escalation_mode(state: Path, raw: str) -> None:
+    """Write the panel switch file (`escalation_mode.json`) of the state dir with the given raw text."""
+    (state / escalation.MODE_FILE).write_text(raw, encoding="utf-8")
+
+
+def reset_escalation_state() -> None:
+    """Forget the in-memory escalation state so each test starts from a known, order-independent point."""
+    gateway._escalation.clear()
+    gateway._escalation_control.clear()
+
+
+def escalation_policy() -> dict:
+    """The upstream config of the escalation tests: sonnet on flash, escalation to pro after two errors."""
+    return {"name": "deepseek", "models": {"opus": "pro", "sonnet": "flash", "haiku": "flash"},
+            "escalation": {"expensive": "pro", "errors": 2, "clean": 2, "min_expensive_s": 0}}
+
+
+def clean_history() -> dict:
+    """A one-turn history whose last tool_result succeeded."""
+    return {"messages": [{"role": "user", "content": [{"type": "tool_result", "is_error": False}]}]}
+
+
+def failing_history() -> dict:
+    """A one-turn history whose last tool_result failed."""
+    return {"messages": [{"role": "user", "content": [{"type": "tool_result", "is_error": True}]}]}
+
+
+def test_a_pro_switch_pins_the_main_loop_to_the_expensive_alias(gateway_dirs: Path, tmp_path: Path):
+    """{"mode": "pro"} in the panel file sends the very next clean turn to the expensive alias."""
+    reset_escalation_state()
+    write_escalation_mode(tmp_path / "state", '{"mode": "pro"}')
+    alias = gateway.main_loop_alias("deepseek", escalation_policy(), clean_history())
+    assert alias == "pro"
+    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
+    assert written["tier"] == "expensive" and written["control"] == "pro"
+
+
+def test_a_flash_switch_overrides_an_escalated_main_loop_immediately(gateway_dirs: Path, tmp_path: Path):
+    """After auto escalated to pro on tool errors, {"mode": "flash"} brings the next call straight back to flash."""
+    reset_escalation_state()
+    up = escalation_policy()
+    assert gateway.main_loop_alias("deepseek", up, failing_history()) == "flash"
+    assert gateway.main_loop_alias("deepseek", up, failing_history()) == "pro"
+    write_escalation_mode(tmp_path / "state", '{"mode": "flash"}')
+    assert gateway.main_loop_alias("deepseek", up, failing_history()) == "flash"
+    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
+    assert written["tier"] == "cheap" and written["control"] == "flash"
+
+
+def test_going_back_to_auto_restarts_the_main_loop_on_the_cheap_alias(gateway_dirs: Path, tmp_path: Path):
+    """Leaving the pro pin for auto starts from a fresh state, so a clean turn runs on flash, not on pro."""
+    reset_escalation_state()
+    write_escalation_mode(tmp_path / "state", '{"mode": "pro"}')
+    assert gateway.main_loop_alias("deepseek", escalation_policy(), clean_history()) == "pro"
+    write_escalation_mode(tmp_path / "state", '{"mode": "auto"}')
+    assert gateway.main_loop_alias("deepseek", escalation_policy(), clean_history()) == "flash"
+    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
+    assert written["control"] == "auto"
+
+
+@pytest.mark.parametrize("raw", [None, "{not json", '{"mode": "sideways"}'])
+def test_a_missing_or_broken_panel_file_means_auto(gateway_dirs: Path, tmp_path: Path, raw):
+    """No file, invalid JSON or an unknown mode all fall back to auto, so the gateway behaves as before."""
+    path = tmp_path / "state" / escalation.MODE_FILE
+    if raw is not None:
+        path.write_text(raw, encoding="utf-8")
+    assert gateway.escalation_mode() == escalation.AUTO

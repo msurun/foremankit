@@ -48,7 +48,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import budget, model_watch, pairing, presets, pricing, upstream
+from foremankit import budget, escalation, model_watch, pairing, presets, pricing, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -677,7 +677,33 @@ def prices_status(now: float | None = None) -> dict[str, Any]:
         phases = {model["phase"] for model in models.values() if model["phase"]}
         rows.append({"provider": name, "phase": next(iter(phases), None), "next_change": next(
             (model["next_change"] for model in models.values() if model["next_change"]), None), "models": models})
-    return {"providers": rows, "tier": read_tier(now)}
+    return {"providers": rows, "tier": read_tier(now), "control": escalation_control(), "modes": escalation_modes()}
+
+
+def escalation_modes() -> list[dict[str, str]]:
+    """The options of the panel's escalation switch: auto (the gateway decides) or a pinned flash / pro."""
+    return [{"name": escalation.AUTO, "label": "auto (flash -> pro on errors)"},
+            {"name": escalation.FLASH, "label": "always flash (cheap)"},
+            {"name": escalation.PRO, "label": "always pro (expensive)"}]
+
+
+def escalation_control() -> str:
+    """The escalation switch as saved (auto when the file is missing or broken)."""
+    try:
+        saved = json.loads((state_dir() / escalation.MODE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return escalation.AUTO
+    return escalation.mode_of(saved.get("mode") if isinstance(saved, dict) else None)
+
+
+def set_escalation_control(mode: str) -> str:
+    """Pin the main loop's tier (`flash`, `pro`) or hand it back to the gateway (`auto`); the next request obeys it."""
+    if mode not in escalation.MODES:
+        raise ValueError(f"mode must be one of {', '.join(escalation.MODES)}")
+    state_dir().mkdir(parents=True, exist_ok=True)
+    (state_dir() / escalation.MODE_FILE).write_text(json.dumps({"mode": mode, "time": time.time()}), encoding="utf-8")
+    return {"auto": "the gateway decides the tier again (starts on flash)",
+            "flash": "the main loop always uses flash", "pro": "the main loop always uses pro"}[mode]
 
 
 def upstream_provider(name: str, upstreams: dict[str, Any]) -> str:
@@ -981,6 +1007,7 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
     return {
         "role": lambda: set_role(args.action or ""),
         "delegation-set": lambda: set_delegation(args.name or "all", args.action == "true"),
+        "escalation-set": lambda: set_escalation_control(args.name or escalation.AUTO),
         "worker-test": lambda: test_worker(args.name),
         "orchestrator": lambda: set_orchestrator(args.name),
         "fix-model": lambda: fix_model(args.name, args.model),
@@ -1004,7 +1031,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -1058,7 +1085,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}

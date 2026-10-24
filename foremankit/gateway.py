@@ -549,32 +549,59 @@ def external_refusal(mode: str, up: dict[str, Any]) -> str | None:
 
 
 _escalation: dict[str, dict[str, Any]] = {}   # mode -> escalation state (cheap/expensive), in-memory per gateway run
+_escalation_control: dict[str, str] = {}      # mode -> the panel switch that in-memory state belongs to
+
+
+def escalation_mode() -> str:
+    """The panel switch for the external main loop: auto (hysteresis), flash (always cheap) or pro (always
+    expensive). A missing or broken file means auto, so the gateway behaves as before."""
+    try:
+        raw = json.loads((state_dir() / escalation.MODE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return escalation.AUTO
+    return escalation.mode_of(raw.get("mode") if isinstance(raw, dict) else None)
 
 
 def main_loop_alias(mode: str, up: dict[str, Any], data: dict[str, Any]) -> str:
     """The provider alias for the main loop: cheap by default, switched to the expensive one after repeated tool
-    errors and back down after a clean run (hysteresis, foremankit/escalation.py). No `escalation` block = as configured."""
+    errors and back down after a clean run (hysteresis, foremankit/escalation.py), unless the panel switch pins a
+    tier. No `escalation` block = as configured."""
     base = upstream.upstream_model(up, "sonnet")
     policy = up.get("escalation")
     if not policy:
         return base
-    state = _escalation.get(mode, escalation.default_state())
-    previous = state["tier"]
-    state = escalation.next_state(state, escalation.last_tool_error(data.get("messages") or []), policy, time.time())
-    _escalation[mode] = state
-    if state["tier"] != previous:
-        print(f"   orchestrator {mode}: switched to {state['tier']} (errors={state['errors']}, clean={state['clean']})",
-              flush=True)
-    alias = policy.get("expensive", base) if state["tier"] == "expensive" else base
-    write_tier(mode, state["tier"], alias)
+    control = escalation_mode()
+    state = next_escalation_state(mode, control, policy, data)
+    alias = policy.get("expensive", base) if state["tier"] == escalation.EXPENSIVE_TIER else base
+    write_tier(mode, state["tier"], alias, control)
     return alias
 
 
-def write_tier(mode: str, tier: str, alias: str) -> None:
-    """Tell the panel which tier the main loop runs on (cheap / expensive) and with which model alias."""
+def next_escalation_state(mode: str, control: str, policy: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """The tier state after this turn: pinned by the panel switch, else the automatic hysteresis. Moving the switch
+    starts from a fresh state, so going back to auto begins cheap again."""
+    previous = _escalation.get(mode, escalation.default_state())
+    if _escalation_control.get(mode) != control:
+        previous = escalation.default_state()
+        _escalation_control[mode] = control
+    forced = escalation.tier_for_mode(control)
+    if forced:
+        state = {**previous, "tier": forced}
+    else:
+        state = escalation.next_state(previous, escalation.last_tool_error(data.get("messages") or []),
+                                      policy, time.time())
+    _escalation[mode] = state
+    if state["tier"] != previous["tier"]:
+        reason = f"panel switch: {control}" if forced else f"errors={state['errors']}, clean={state['clean']}"
+        print(f"   orchestrator {mode}: switched to {state['tier']} ({reason})", flush=True)
+    return state
+
+
+def write_tier(mode: str, tier: str, alias: str, control: str) -> None:
+    """Tell the panel which tier the main loop runs on (cheap / expensive), with which model alias, and who chose it."""
+    payload = {"mode": mode, "tier": tier, "alias": alias, "control": control, "time": time.time()}
     try:
-        (state_dir() / TIER_FILE).write_text(json.dumps({"mode": mode, "tier": tier, "alias": alias, "time": time.time()}),
-                                             encoding="utf-8")
+        (state_dir() / TIER_FILE).write_text(json.dumps(payload), encoding="utf-8")
     except OSError:
         pass   # a missing hint must never fail the request
 

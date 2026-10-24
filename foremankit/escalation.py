@@ -17,6 +17,24 @@ DEFAULT_ERRORS_TO_ESCALATE = 2
 DEFAULT_CLEAN_TO_FALL_BACK = 6
 DEFAULT_MIN_EXPENSIVE_S = 120.0
 
+# The panel's switch: `auto` leaves the hysteresis above in charge, the other two pin a tier until switched back.
+AUTO = "auto"
+FLASH = "flash"
+PRO = "pro"
+MODES = (AUTO, FLASH, PRO)
+MODE_FILE = "escalation_mode.json"          # state dir: {"mode": auto|flash|pro}; missing file means auto
+FORCED_TIERS = {FLASH: CHEAP_TIER, PRO: EXPENSIVE_TIER}
+
+
+def mode_of(value: Any) -> str:
+    """The escalation mode of a raw panel value; anything unknown means `auto`."""
+    return value if value in MODES else AUTO
+
+
+def tier_for_mode(mode: str) -> str | None:
+    """The tier the panel switch pins (cheap for flash, expensive for pro), or None when `auto` decides."""
+    return FORCED_TIERS.get(mode_of(mode))
+
 
 def last_tool_error(messages: list[dict]) -> bool:
     """Return True when the last tool_result block in the history has is_error truthy.

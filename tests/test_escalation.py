@@ -95,3 +95,39 @@ def test_policy_values_override_the_defaults():
     second = esc.next_state(first, False, policy, 1.0)
     assert second["tier"] == "expensive" and second["clean"] == 1
     assert esc.next_state(second, False, policy, 2.0)["tier"] == "cheap"
+
+
+# --- mode_of / tier_for_mode -------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [esc.AUTO, esc.FLASH, esc.PRO])
+def test_mode_of_keeps_a_known_mode(value):
+    """A known panel value is returned unchanged."""
+    assert esc.mode_of(value) == value
+
+
+@pytest.mark.parametrize("value", [None, "", "AUTO", "expensive", 3])
+def test_mode_of_maps_unknown_values_to_auto(value):
+    """Anything the panel can send that is not a known mode falls back to auto."""
+    assert esc.mode_of(value) == esc.AUTO
+
+
+def test_tier_for_mode_flash_pins_cheap():
+    """The flash switch forces the cheap tier."""
+    assert esc.tier_for_mode(esc.FLASH) == esc.CHEAP_TIER
+
+
+def test_tier_for_mode_pro_pins_expensive():
+    """The pro switch forces the expensive tier."""
+    assert esc.tier_for_mode(esc.PRO) == esc.EXPENSIVE_TIER
+
+
+def test_tier_for_mode_auto_pins_nothing():
+    """Auto leaves the hysteresis in charge, so no tier is pinned."""
+    assert esc.tier_for_mode(esc.AUTO) is None
+
+
+@pytest.mark.parametrize("value", [None, "", "AUTO", "expensive", 3])
+def test_tier_for_mode_unknown_value_pins_nothing(value):
+    """An unknown mode is treated as auto and pins no tier."""
+    assert esc.tier_for_mode(value) is None

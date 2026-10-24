@@ -199,6 +199,7 @@ class Panel {
       fixModel: ['fix-model', '--name', name, '--model', model],
       orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
+      escalationSet: ['escalation-set', '--name', name],
       workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
       role: ['role', role],
@@ -305,6 +306,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="issues"></div>
 <h3>Who orchestrates Claude Code</h3>
 <div id="presetChoice"></div>
+<div class="info" id="escalationRow" style="display:none"><label>Main loop tier <select id="escalationMode" style="width:auto"></select></label> <span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; flash / pro = pinned until you switch back.</div>
 <div class="info">Claude = your subscription. Local = the model on this PC. DeepSeek / Gemini = an external API for when the Claude limit is spent (needs the API key in .env; a folder above the provider's sensitivity ceiling is refused). The panel sets router, role and direct mode for you.</div>
 <h3>Helpers (delegation)</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
@@ -458,7 +460,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -507,6 +509,21 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    r.onchange = () => send({ type: 'preset', name });
    l.appendChild(r); l.appendChild(document.createTextNode(' ' + (name === 'custom' ? 'custom (set by hand below)' : name))); box.appendChild(l);
   }
+ }
+ function showEscalation(s) {
+  const prices = s.prices || {};
+  const mode = (s.preset.state || {}).mode || '';
+  $('escalationRow').style.display = mode === 'claude' || mode === 'local' ? 'none' : 'block';
+  const sel = $('escalationMode');
+  const names = (prices.modes || []).map((m) => m.name).join(',');
+  if (sel.dataset.names !== names) {
+   sel.innerHTML = '';
+   for (const m of prices.modes || []) { const o = document.createElement('option'); o.value = m.name; o.textContent = m.label; sel.appendChild(o); }
+   sel.dataset.names = names;
+  }
+  if (document.activeElement !== sel) sel.value = prices.control || 'auto';
+  const t = prices.tier;
+  $('escalationNow').textContent = t ? 'now: ' + t.alias + ' (' + t.tier + ')' : 'no request yet';
  }
  function showIssues(list) {
   const box = $('issues'); box.innerHTML = '';
@@ -568,7 +585,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  function showPrices(info) {
   const box = $('prices'); if (!info) return; box.innerHTML = '';
   const add = (text, cls) => { const d = document.createElement('div'); d.className = cls || 'info'; d.textContent = text; box.appendChild(d); };
-  if (info.tier) add('orchestrator now: ' + info.tier.mode + ' / ' + info.tier.alias + ' (' + info.tier.tier + ' tier)');
+  if (info.tier) add('orchestrator now: ' + info.tier.mode + ' / ' + info.tier.alias + ' (' + info.tier.tier + ' tier, switch ' + (info.tier.control || 'auto') + ')');
   let cheap = '';
   for (const p of info.providers) {
    if (p.phase) {
@@ -604,6 +621,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
+ $('escalationMode').onchange = () => send({ type: 'config', action: 'escalationSet', name: $('escalationMode').value });
  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
