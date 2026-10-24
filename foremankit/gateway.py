@@ -396,7 +396,7 @@ def record_orchestrator_spend(model: str, usage: dict[str, int], mode: str, ceil
         print(f"   no price for model={model} in providers.yaml: the answer is not counted in the budget", flush=True)
     usd = budget.cost_usd(price, usage)
     if usd > 0:
-        StateStore().update(lambda state: budget.record(state, time.time(), usd))
+        StateStore().update(lambda state: budget.record(state, time.time(), usd, budget.ORCHESTRATOR))
     if usage["prompt_tokens"] or usage["completion_tokens"]:
         CallLog().write({"event": "call", "kind": "orchestrator", "sensitivity": ceiling, "provider": mode,
                          "node": None, "model": model, "escalate": False, "dry_run": False, "success": True,
@@ -415,6 +415,16 @@ async def counted_stream(chunks: Any, call: Call, cfg: dict[str, Any]) -> Any:
             yield chunk
     finally:
         record_orchestrator_spend(call.provider_model, collector.normalized(), mode, ceiling)
+
+
+def orchestrator_budget_refusal() -> str | None:
+    """Why an external orchestrator request must be refused: its own daily/monthly budget is used up (routing.yaml
+    `budget: orchestrator_daily_usd`). The delegation budget is a different counter and is not touched."""
+    caps = _read_yaml(config_dir() / "routing.yaml").get("budget") or {}
+    reason = budget.check(StateStore().load(), caps, time.time(), 0.0, budget.ORCHESTRATOR)
+    if reason:
+        return f"{reason}. Switch the orchestrator to claude in the panel, or raise orchestrator_daily_usd in routing.yaml"
+    return None
 
 
 def external_refusal(mode: str, up: dict[str, Any]) -> str | None:
@@ -531,7 +541,7 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any],
     mode, up = external
     data = parse_body(body)
     call = Call(request.url.path, data.get("model") if data else None, False, time.time(), route=f"external:{mode}")
-    reason = external_refusal(mode, up)
+    reason = external_refusal(mode, up) or orchestrator_budget_refusal()
     if reason:
         call.log(503)
         return switched_off(reason)

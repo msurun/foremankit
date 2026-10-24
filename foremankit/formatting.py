@@ -82,8 +82,18 @@ def format_status(status: dict[str, Any]) -> str:
 def _status_header(status: dict[str, Any]) -> str:
     budget = status["budget"]
     dry = " [DRY RUN]" if status["dry_run"] else ""
-    return (f"foremankit{dry} | profile={status.get('profile') or '-'}"
-            f" | spend today ${budget['day_usd']:.4f}/{budget['daily_cap']} month ${budget['month_usd']:.4f}/{budget['monthly_cap']}")
+    head = f"foremankit{dry} | profile={status.get('profile') or '-'}"
+    spend = " | ".join(
+        f"{name} today ${row['day_usd']:.4f}/{_cap(row['daily_cap'])} month ${row['month_usd']:.4f}/{_cap(row['monthly_cap'])}"
+        for name, row in budget.get("categories", {}).items())
+    if spend:
+        return f"{head} | spend: {spend}"
+    return f"{head} | spend today ${budget['day_usd']:.4f}/{budget['daily_cap']} month ${budget['month_usd']:.4f}/{budget['monthly_cap']}"
+
+
+def _cap(value: float | None) -> str:
+    """A budget cap for the status line: the number, or 'no cap'."""
+    return "no cap" if value is None else f"{value:g}"
 
 
 def _provider_line(provider: dict[str, Any]) -> str:

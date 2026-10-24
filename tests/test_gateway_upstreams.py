@@ -456,3 +456,22 @@ def test_the_main_loop_tier_is_written_for_the_panel(gateway_dirs: Path, tmp_pat
     written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
     assert written["mode"] == "deepseek" and written["tier"] == "cheap" and written["alias"] == "flash"
     gateway._escalation.clear()
+
+
+def test_the_orchestrator_budget_is_separate_from_the_delegation_budget(gateway_dirs: Path, tmp_path: Path, fake_upstream: list):
+    """Spending the orchestrator cap refuses orchestrator requests (503) but leaves delegation untouched, and vice versa."""
+    from foremankit import budget
+    (gateway_dirs / "routing.yaml").write_text("budget: {daily_usd: 1.5, orchestrator_daily_usd: 1.5}\n", encoding="utf-8")
+    import time as time_module
+    now = time_module.time()
+    store = StateStore(tmp_path / "state" / "state.json")
+    store.update(lambda state: budget.record(state, now, 1.4, budget.DELEGATION))      # delegation nearly used up
+    store.update(lambda state: budget.record(state, now, 0.1, budget.ORCHESTRATOR))
+    use_mode("deepseek")
+    assert post("/v1/messages", tooled_request()).status_code == 200                    # orchestrator still within 1.5
+    store.update(lambda state: budget.record(state, now, 1.5, budget.ORCHESTRATOR))     # now 1.6 > 1.5
+    refused = post("/v1/messages", tooled_request())
+    assert refused.status_code == 503 and b"orchestrator daily budget" in refused.body
+    state = store.load()
+    assert budget.check(state, {"daily_usd": 1.5}, now, 0.0) is None                    # delegation (1.4) is not blocked
+    assert budget.spent(state, now, budget.DELEGATION)[0] == pytest.approx(1.4)

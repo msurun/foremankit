@@ -525,3 +525,19 @@ def test_prices_status_shows_phase_price_now_and_the_announced_change(monkeypatc
     assert gemini["phase"] is None and gemini["models"]["flash"]["upcoming"]["from"] == "2027-01-01"
     assert result["tier"] is None                      # the tier file is older than an hour
     assert panel.read_tier(1_000_100.0)["tier"] == "cheap"
+
+
+def test_a_used_up_orchestrator_budget_is_a_panel_issue_with_a_way_back_to_claude(monkeypatch, tmp_path: Path):
+    """While DeepSeek/Gemini orchestrate and their own cap is passed, the panel says so; delegation spend is irrelevant."""
+    import time as time_module
+    from foremankit import budget
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    (tmp_path / "routing.yaml").write_text("budget: {daily_usd: 1.5, orchestrator_daily_usd: 1.5}\n", encoding="utf-8")
+    store = panel.StateStore()
+    store.update(lambda state: budget.record(state, time_module.time(), 1.6, budget.ORCHESTRATOR))
+    assert panel.orchestrator_budget_issues() == []                      # claude mode: not relevant
+    panel.upstream.set_mode("deepseek")
+    [issue] = panel.orchestrator_budget_issues()
+    assert issue["fix"] == "apply-preset claude" and "orchestrator daily budget" in issue["text"]

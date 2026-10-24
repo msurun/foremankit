@@ -784,3 +784,18 @@ def test_delegate_with_everything_switched_off_tells_the_caller_to_do_the_work_i
     assert not any(call.startswith(DEEPSEEK) for call in mock.calls)
     delegation.set_switch(router.store, "paid", "on")
     assert router.delegate("anything", kind="bulk_code")["provider"] == "deepseek"
+
+
+def test_budget_categories_have_their_own_caps_and_counters():
+    """A cap of one category does not block the other; the total still adds both."""
+    from foremankit import budget
+    state: dict = {}
+    cfg = {"daily_usd": 1.5, "monthly_usd": 5.0, "orchestrator_daily_usd": 1.0}
+    budget.record(state, 1_000_000.0, 1.2, budget.ORCHESTRATOR)
+    assert budget.check(state, cfg, 1_000_000.0, 0.0, budget.ORCHESTRATOR) == (
+        "orchestrator daily budget ($1.2000 spent + ~$0.0000 > $1.00)")
+    assert budget.check(state, cfg, 1_000_000.0, 0.5) is None               # delegation counter is still empty
+    budget.record(state, 1_000_000.0, 0.3)
+    assert budget.spent(state, 1_000_000.0) == (1.5, 1.5)                  # total of both categories
+    assert budget.spent(state, 1_000_000.0, budget.DELEGATION) == (0.3, 0.3)
+    assert budget.caps({}, budget.ORCHESTRATOR) == (None, None)            # no cap until configured

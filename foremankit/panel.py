@@ -48,7 +48,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import model_watch, pairing, presets, pricing, upstream
+from foremankit import budget, model_watch, pairing, presets, pricing, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -581,6 +581,19 @@ def fix_model(target: str, new_id: str) -> str:
     return f"{target} now uses {new_id}. Check its price in providers.yaml: the old price is still counted."
 
 
+def orchestrator_budget_issues() -> list[dict[str, str]]:
+    """A panel problem while an external orchestrator is active and its own budget is used up: the gateway refuses its
+    requests, and the fix is to go back to Claude (the delegation budget is a separate counter)."""
+    if upstream.active_mode() in upstream.BUILTIN_MODES:
+        return []
+    caps = _read_yaml(config_dir() / "routing.yaml").get("budget") or {}
+    reason = budget.check(StateStore().load(), caps, time.time(), 0.0, budget.ORCHESTRATOR)
+    if not reason:
+        return []
+    return [{"id": "orchestrator_budget", "text": f"The orchestrator's {reason}: its requests are refused. Raise orchestrator_daily_usd "
+             "in routing.yaml or go back to Claude.", "fix": "apply-preset claude"}]
+
+
 def prices_status(now: float | None = None) -> dict[str, Any]:
     """What the 'Prices now' menu shows: per provider of the orchestrator upstreams, each model's price now (peak or
     off-peak), the peak price, when the phase changes and the next announced price change; plus the tier the main
@@ -621,7 +634,7 @@ def preset_status() -> dict[str, Any]:
     problems = presets.issues({**state, "llama_installed": llama_installed(),
                                "key_missing": bool(key_env) and not os.getenv(key_env)})
     return {"current": presets.current_preset(state, upstreams), "names": presets.preset_names(upstreams),
-            "issues": problems + model_issues(), "state": state}
+            "issues": problems + model_issues() + orchestrator_budget_issues(), "state": state}
 
 
 class SensitivityRefused(ValueError):

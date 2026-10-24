@@ -1,9 +1,15 @@
-"""USD cost accounting and hard daily/monthly stop for paid providers."""
+"""USD cost accounting and hard daily/monthly stops for paid providers, kept apart for delegated work and for an
+external orchestrator (Claude Code running on DeepSeek/Gemini): each has its own caps and its own counters."""
 from __future__ import annotations
 
 from typing import Any
 
 from .state import utc_day, utc_month
+
+# Spend categories. The caps of a category are `daily_usd` / `monthly_usd` in routing.yaml `budget:`, with this prefix.
+DELEGATION = "delegation"
+ORCHESTRATOR = "orchestrator"
+CAP_PREFIX = {DELEGATION: "", ORCHESTRATOR: "orchestrator_"}
 
 # Constants for token pricing keys
 INPUT_MISS_KEY = "input_miss"
@@ -70,38 +76,54 @@ def _spend(state: dict[str, Any], now: float) -> dict[str, Any]:
     return spend
 
 
-def spent(state: dict[str, Any], now: float) -> tuple[float, float]:
-    """Return the amount spent so far today and this month.
+def _category_spend(state: dict[str, Any], now: float, category: str) -> dict[str, Any]:
+    """The counters of one spend category (day and month, reset when the UTC day or month changes)."""
+    entry = _spend(state, now).setdefault("categories", {}).setdefault(category, {})
+    if entry.get("day") != utc_day(now):
+        entry.update(day=utc_day(now), day_usd=0.0)
+    if entry.get("month") != utc_month(now):
+        entry.update(month=utc_month(now), month_usd=0.0)
+    return entry
+
+
+def spent(state: dict[str, Any], now: float, category: str | None = None) -> tuple[float, float]:
+    """Return the amount spent so far today and this month: of one category, or of everything when `category` is None.
 
     Returns a tuple of (daily_usd, monthly_usd).
     """
-    spend_data = _spend(state, now)
-    daily_amount = float(spend_data["day_usd"])
-    monthly_amount = float(spend_data["month_usd"])
-    return daily_amount, monthly_amount
+    spend_data = _spend(state, now) if category is None else _category_spend(state, now, category)
+    return float(spend_data["day_usd"]), float(spend_data["month_usd"])
 
 
-def check(state: dict[str, Any], budget_cfg: dict[str, Any], now: float, est_usd: float) -> str | None:
-    """Return a skip reason when the call could exceed the daily or monthly cap.
+def caps(budget_cfg: dict[str, Any], category: str = DELEGATION) -> tuple[float | None, float | None]:
+    """The (daily, monthly) caps of a category; None = no cap. Delegation defaults to 1 / 10 USD as before, the
+    orchestrator has no cap until `orchestrator_daily_usd` / `orchestrator_monthly_usd` are set."""
+    prefix = CAP_PREFIX[category]
+    default_daily, default_monthly = (1.0, 10.0) if category == DELEGATION else (None, None)
+    daily = budget_cfg.get(f"{prefix}daily_usd", default_daily)
+    monthly = budget_cfg.get(f"{prefix}monthly_usd", default_monthly)
+    return (None if daily is None else float(daily)), (None if monthly is None else float(monthly))
+
+
+# codecheck: allow too-many-parameters (callers pass state, budget, now and the estimate positionally; category is optional)
+def check(state: dict[str, Any], budget_cfg: dict[str, Any], now: float, est_usd: float,
+          category: str = DELEGATION) -> str | None:
+    """Return a skip reason when the call could exceed the daily or monthly cap of its category.
 
     Returns None if the budget is sufficient.
     """
-    current_day_spent, current_month_spent = spent(state, now)
-    daily_limit = float(budget_cfg.get("daily_usd", 1.0))
-    monthly_limit = float(budget_cfg.get("monthly_usd", 10.0))
-
-    if current_day_spent + est_usd > daily_limit:
-        return f"daily budget (${current_day_spent:.4f} spent + ~${est_usd:.4f} > ${daily_limit:.2f})"
-    if current_month_spent + est_usd > monthly_limit:
-        return f"monthly budget (${current_month_spent:.4f} spent + ~${est_usd:.4f} > ${monthly_limit:.2f})"
+    day_spent, month_spent = spent(state, now, category)
+    daily_limit, monthly_limit = caps(budget_cfg, category)
+    label = "" if category == DELEGATION else f"{category} "
+    if daily_limit is not None and day_spent + est_usd > daily_limit:
+        return f"{label}daily budget (${day_spent:.4f} spent + ~${est_usd:.4f} > ${daily_limit:.2f})"
+    if monthly_limit is not None and month_spent + est_usd > monthly_limit:
+        return f"{label}monthly budget (${month_spent:.4f} spent + ~${est_usd:.4f} > ${monthly_limit:.2f})"
     return None
 
 
-def record(state: dict[str, Any], now: float, usd: float) -> None:
-    """Record the specified USD amount in the state for the current day and month."""
-    spend_data = _spend(state, now)
-    current_day_usd = float(spend_data["day_usd"])
-    current_month_usd = float(spend_data["month_usd"])
-
-    spend_data["day_usd"] = round(current_day_usd + usd, 8)
-    spend_data["month_usd"] = round(current_month_usd + usd, 8)
+def record(state: dict[str, Any], now: float, usd: float, category: str = DELEGATION) -> None:
+    """Record the specified USD amount for the current day and month: in the total and in its category."""
+    for counters in (_spend(state, now), _category_spend(state, now, category)):
+        counters["day_usd"] = round(float(counters["day_usd"]) + usd, 8)
+        counters["month_usd"] = round(float(counters["month_usd"]) + usd, 8)

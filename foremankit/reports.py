@@ -143,8 +143,19 @@ class Reporter:
                      for provider in router.providers.values() if not provider.is_llm]
         return {"dry_run": is_dry_run(), "config_dir": router.cfg.get("dir"), "profile": state.get("profile"),
                 "budget": {"day_usd": day, "month_usd": month, "daily_cap": budget_cfg.get("daily_usd"),
-                           "monthly_cap": budget_cfg.get("monthly_usd")},
+                           "monthly_cap": budget_cfg.get("monthly_usd"),
+                           "categories": self._budget_categories(state, budget_cfg, now)},
                 "providers": providers, "llm": [self.node_status(node) for node in router.nodes()]}
+
+    @staticmethod
+    def _budget_categories(state: dict[str, Any], budget_cfg: dict[str, Any], now: float) -> dict[str, dict[str, Any]]:
+        """Spend and caps per category (delegation, orchestrator)."""
+        rows = {}
+        for category in (budget.DELEGATION, budget.ORCHESTRATOR):
+            day, month = budget.spent(state, now, category)
+            daily_cap, monthly_cap = budget.caps(budget_cfg, category)
+            rows[category] = {"day_usd": day, "month_usd": month, "daily_cap": daily_cap, "monthly_cap": monthly_cap}
+        return rows
 
     def _provider_row(self, provider: Provider, state: dict[str, Any], now: float) -> dict[str, Any]:
         if provider.cfg.get("enabled", True) is False:
