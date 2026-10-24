@@ -39,6 +39,8 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+
+import httpx
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -46,7 +48,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import pairing, presets, upstream
+from foremankit import model_watch, pairing, presets, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -515,6 +517,63 @@ def preset_state(port: int | None = None) -> dict[str, Any]:
             "server_up": bool(server_status().get("up")), "router_up": port_open(port)}
 
 
+OFFERED_FILE = "models_offered.json"   # state dir: ids each provider listed at the last refresh {"at", "offered"}
+OFFERED_TTL_S = 24 * 3600
+
+
+def refresh_offered_models() -> dict[str, list[str]]:
+    """Ask every cloud provider with a key what models it lists now (GET /models) and cache the answer. A provider that
+    does not answer (blocked network, no key) is left out, so its models are never reported as gone."""
+    from foremankit.providers import Provider, list_models
+    offered: dict[str, list[str]] = {}
+    sections = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
+    with httpx.Client() as client:
+        for name, section in sections.items():
+            provider = Provider(name, section or {})
+            if provider.is_llm or not provider.api_key() or section.get("enabled", True) is False:
+                continue
+            try:
+                offered[name] = list_models(client, section["base_url"], provider.api_key(), timeout=4)
+            except (httpx.HTTPError, ValueError, KeyError):
+                continue
+    (state_dir() / OFFERED_FILE).write_text(json.dumps({"at": time.time(), "offered": offered}), encoding="utf-8")
+    return offered
+
+
+def cached_offered_models() -> dict[str, list[str]]:
+    """The ids of the last refresh; {} when there is none (status never touches the network)."""
+    try:
+        return json.loads((state_dir() / OFFERED_FILE).read_text(encoding="utf-8")).get("offered") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def model_issues() -> list[dict[str, str]]:
+    """Panel problems for configured model ids that a provider no longer lists, with a one-click fix when a successor exists."""
+    providers = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
+    found = []
+    for row in model_watch.stale_models(providers, cached_offered_models()):
+        target = f"{row['provider']}:{row['alias']}"
+        text = f"{row['provider']}: model {row['id']} is no longer offered"
+        if row["candidates"]:
+            found.append({"id": f"model:{target}", "text": f"{text}; closest successor: {row['candidates'][0]} (the price stays as configured)",
+                          "fix": f"fix-model {target} {row['candidates'][0]}"})
+        else:
+            found.append({"id": f"model:{target}", "text": f"{text}; no successor found, edit providers.yaml", "fix": ""})
+    return found
+
+
+def fix_model(target: str, new_id: str) -> str:
+    """Point `provider:alias` of providers.yaml at `new_id`; comments and prices stay. The price is NOT updated."""
+    provider, _, alias = target.partition(":")
+    path = config_dir() / "providers.yaml"
+    try:
+        path.write_text(model_watch.rewrite_model_id(path.read_text(encoding="utf-8"), provider, alias, new_id), encoding="utf-8")
+    except KeyError as missing:
+        raise ValueError(f"{missing} is not in providers.yaml") from missing
+    return f"{target} now uses {new_id}. Check its price in providers.yaml: the old price is still counted."
+
+
 def preset_status() -> dict[str, Any]:
     """What the panel's single 'who orchestrates Claude Code' choice shows: the preset in force, all presets and issues."""
     upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
@@ -523,7 +582,7 @@ def preset_status() -> dict[str, Any]:
     problems = presets.issues({**state, "llama_installed": llama_installed(),
                                "key_missing": bool(key_env) and not os.getenv(key_env)})
     return {"current": presets.current_preset(state, upstreams), "names": presets.preset_names(upstreams),
-            "issues": problems, "state": state}
+            "issues": problems + model_issues(), "state": state}
 
 
 class SensitivityRefused(ValueError):
@@ -797,26 +856,26 @@ def run_join(args: argparse.Namespace) -> str:
         return f"not done: {problem}"
 
 
+def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
+    """The settings changes of the command line, each a function that runs only when its action is chosen."""
+    return {
+        "role": lambda: set_role(args.action or ""),
+        "delegation-set": lambda: set_delegation(args.name or "all", args.action == "true"),
+        "worker-test": lambda: test_worker(args.name),
+        "orchestrator": lambda: set_orchestrator(args.name),
+        "fix-model": lambda: fix_model(args.name, args.model),
+        "orchestrator-mode": lambda: set_orchestrator_mode(args.name, args.cwd),
+        "worker-enable": lambda: set_worker_enabled(args.name, args.action == "true"),
+        "profile-set": lambda: set_profile(args.model, json.loads(args.fields)),
+        "worker-add": lambda: add_worker(args.name, args.url, args.accept, args.priority),
+        "worker-remove": lambda: remove_worker(args.name),
+    }
+
+
 def run_config_action(args: argparse.Namespace) -> str:
-    """role / worker-add / worker-remove from the command line; a rejected value comes back as a message, not a crash."""
+    """A settings change from the command line; a rejected value comes back as a message, not a crash."""
     try:
-        if args.what == "role":
-            return set_role(args.action or "")
-        if args.what == "delegation-set":
-            return set_delegation(args.name or "all", args.action == "true")
-        if args.what == "worker-test":
-            return test_worker(args.name)
-        if args.what == "orchestrator":
-            return set_orchestrator(args.name)
-        if args.what == "orchestrator-mode":
-            return set_orchestrator_mode(args.name, args.cwd)
-        if args.what == "worker-enable":
-            return set_worker_enabled(args.name, args.action == "true")
-        if args.what == "profile-set":
-            return set_profile(args.model, json.loads(args.fields))
-        if args.what == "worker-add":
-            return add_worker(args.name, args.url, args.accept, args.priority)
-        return remove_worker(args.name)
+        return config_actions(args)[args.what]()
     except ValueError as problem:
         return f"not done: {problem}"
 
@@ -824,7 +883,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -859,6 +918,7 @@ def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
         "models": list_models,
         "command": lambda: {"command": command_for(args.action, args.model)},
         "preset-plan": lambda: guarded(plan_preset, args.name, args.cwd),
+        "refresh-models": lambda: {"message": f"offered models refreshed for {', '.join(refresh_offered_models()) or 'no provider'}"},
         "apply-preset": lambda: guarded(apply_preset, args.name, args.cwd),
         "mark-folder": lambda: guarded(lambda: {"message": mark_folder(args.name, args.cwd)}),
         "pair-host": start_pairing_host,
@@ -876,7 +936,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "profile-set", "delegation-set"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "profile-set", "delegation-set"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}

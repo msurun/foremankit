@@ -14,6 +14,7 @@ const POLL_MS = 4000;
 const WORKERS_POLL_MS = 12000;
 const LIVE_POLL_MS = 1000;
 const DELEGATIONS_POLL_MS = 8000;
+const MODEL_NAMES_POLL_MS = 6 * 3600 * 1000;   // which model names the providers list now (renamed models show up as a problem)
 const LIVE_FRESH_MS = 4000;
 const http = require('http');
 const STATE_DIR = process.env.FOREMANKIT_STATE_DIR || path.join(os.homedir(), '.config', 'foremankit');
@@ -107,12 +108,16 @@ class Panel {
     this.liveTimer = setInterval(() => this.pushLive(), LIVE_POLL_MS);
     this.delegationsTimer = setInterval(() => this.pushDelegations(), DELEGATIONS_POLL_MS);
     this.pushDelegations();
-    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.pairTimer); });
+    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.modelNamesTimer); clearInterval(this.pairTimer); });
+    this.refreshModelNames();
+    this.modelNamesTimer = setInterval(() => this.refreshModelNames(), MODEL_NAMES_POLL_MS);
     this.pushStatus();
     this.pushWorkers();
     this.pushFirewall();
     this.pushModels();
   }
+
+  async refreshModelNames() { await backend(['refresh-models']); await this.pushStatus(); }
 
   post(message) { if (this.view) this.view.webview.postMessage(message); }
   async pushStatus() { if (this.view && this.view.visible && !this.busy) this.post({ type: 'status', data: await backend(['status']) }); }
@@ -190,6 +195,7 @@ class Panel {
   configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
+      fixModel: ['fix-model', '--name', name, '--model', model],
       orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
       workerTest: ['worker-test', '--name', name],
@@ -506,6 +512,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  }
  function runFix(fix) {
   if (fix.startsWith('apply-preset ')) send({ type: 'preset', name: fix.slice('apply-preset '.length) });
+  else if (fix.startsWith('fix-model ')) { const [, target, id] = fix.split(' '); send({ type: 'config', action: 'fixModel', name: target, model: id }); }
   else if (fix === 'start-server') $('startServer').click();
   else if (fix === 'download-llama') send({ type: 'terminal', action: 'download-llama', model: '' });
  }

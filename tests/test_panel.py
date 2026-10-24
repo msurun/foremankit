@@ -450,3 +450,23 @@ def test_default_model_follows_the_preset_and_the_users_own_choice_comes_back(mo
     panel.sync_default_model("claude")
     assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "sonnet", "theme": "dark"}
     assert panel.sync_default_model("claude") == ""
+
+
+def test_a_vanished_model_id_becomes_a_panel_issue_and_the_fix_rewrites_providers_yaml(monkeypatch, tmp_path: Path):
+    """The cached list of offered models shows deepseek-v4-pro gone; the fix points providers.yaml at the successor."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    (tmp_path / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    models:\n      pro:\n        id: deepseek-v4-pro   # keep me\n"
+        "        price: {input_miss: 1, output: 2}\n", encoding="utf-8")
+    (tmp_path / "state" / panel.OFFERED_FILE).write_text(
+        json.dumps({"at": 0, "offered": {"deepseek": ["deepseek-v5-pro", "deepseek-flash"]}}), encoding="utf-8")
+    [issue] = panel.model_issues()
+    assert issue["fix"] == "fix-model deepseek:pro deepseek-v5-pro" and "no longer offered" in issue["text"]
+    message = panel.fix_model("deepseek:pro", "deepseek-v5-pro")
+    assert "price" in message
+    assert "id: deepseek-v5-pro   # keep me" in (tmp_path / "providers.yaml").read_text(encoding="utf-8")
+    assert panel.model_issues() == []
+    with pytest.raises(ValueError):
+        panel.fix_model("deepseek:nothing", "x")
