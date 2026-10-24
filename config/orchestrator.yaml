@@ -69,7 +69,10 @@ upstreams:
     context: 128000
     tools_keep: &keep_tools [Read, Write, Edit, Glob, Grep, Bash, PowerShell, Agent, WebFetch, "mcp__foremankit__*", "mcp__claude-vscode__*"]
     schema: {}                       # overrides of the built-in profile (foremankit/provider_schema.py): drop_keywords, describe_keywords, ...
-    models: {opus: pro, sonnet: pro, haiku: flash}
+    models: {opus: pro, sonnet: flash, haiku: flash}
+    # cheap-first: the main loop runs on flash and moves to pro after repeated tool errors, then back down after
+    # a clean run. errors/clean/min_expensive_s tune the hysteresis (foremankit/escalation.py).
+    escalation: {expensive: pro, errors: 2, clean: 6, min_expensive_s: 120}
   gemini:
     url: http://127.0.0.1:4000
     key_env: LITELLM_MASTER_KEY
@@ -77,7 +80,8 @@ upstreams:
     context: 1000000
     tools_keep: *keep_tools
     schema: {}
-    models: {opus: pro, sonnet: pro, haiku: flash}
+    models: {opus: pro, sonnet: flash, haiku: flash}
+    escalation: {expensive: pro, errors: 2, clean: 6, min_expensive_s: 120}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
 # (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:

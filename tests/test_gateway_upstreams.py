@@ -21,17 +21,23 @@ DEEPSEEK_URL = "http://deepseek.test/anthropic"
 PROVIDER_KEY = "provider-secret"
 KEY_ENV = "TEST_DS_KEY"
 
-# Written to orchestrator.yaml: one declared external orchestrator with aliases for the three model tiers.
+# Written to orchestrator.yaml: one declared external orchestrator; models are provider aliases resolved via providers.yaml.
 UPSTREAMS_YAML = (
     "upstreams:\n"
     "  deepseek:\n"
     f"    url: {DEEPSEEK_URL}\n"
     f"    key_env: {KEY_ENV}\n"
     "    ceiling: normal\n"
+    "    models: {opus: pro, sonnet: pro, haiku: flash}\n"
+)
+
+# providers.yaml is the single source of truth for ids and prices: the upstream aliases resolve through it.
+PROVIDERS_YAML = (
+    "providers:\n"
+    "  deepseek:\n"
     "    models:\n"
-    "      opus: ds-pro\n"
-    "      sonnet: ds-pro\n"
-    "      haiku: ds-flash\n"
+    "      pro: {id: ds-pro, price: {input_miss: 1.32, input_hit: 0.044, output: 3.96}}\n"
+    "      flash: {id: ds-flash, price: {input_miss: 0.3, input_hit: 0.006, output: 1.2}}\n"
 )
 
 EXTERNAL_PROMPT = "EXTERNAL RULES"
@@ -72,6 +78,7 @@ def gateway_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     config.mkdir()
     state.mkdir()
     (config / "orchestrator.yaml").write_text(UPSTREAMS_YAML, encoding="utf-8")
+    (config / "providers.yaml").write_text(PROVIDERS_YAML, encoding="utf-8")
     (config / "orchestrator.external.md").write_text(EXTERNAL_PROMPT, encoding="utf-8")
     (state / gateway.LOCAL_ROLE_FILE).write_text("orchestrator", encoding="utf-8")
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(config))
@@ -128,7 +135,7 @@ def test_a_declared_external_mode_returns_its_name_and_config(gateway_dirs: Path
 def test_an_undeclared_mode_is_external_with_an_empty_config(gateway_dirs: Path):
     use_mode("not-there")
     external = gateway.external_mode(gateway.settings())
-    assert external == ("not-there", {})
+    assert external[0] == "not-there" and external[1].get("name") == "not-there" and not external[1].get("url")
 
 
 # --- external_refusal -------------------------------------------------------
@@ -376,6 +383,28 @@ def test_an_external_answer_is_counted_in_the_budget_and_call_log(gateway_dirs: 
     assert row["kind"] == "orchestrator" and row["provider"] == "deepseek" and row["model"] == "ds-pro"
     assert row["tokens_in"] == 1000 and row["tokens_out"] == 200 and row["cache_hit"] == 500
     assert row["cost_usd"] == pytest.approx(0.001474, abs=1e-9)
+
+
+def test_the_main_loop_starts_cheap_and_escalates_after_repeated_tool_errors(monkeypatch):
+    """Cheap first; two failing turns in a row move the main loop to the expensive alias, two clean turns move it back."""
+    gateway._escalation.clear()
+    monkeypatch.setattr(gateway.time, "time", lambda: 1000.0)
+    up = {"name": "deepseek", "models": {"opus": "pro", "sonnet": "flash", "haiku": "flash"},
+          "escalation": {"expensive": "pro", "errors": 2, "clean": 2, "min_expensive_s": 0}}
+    error = {"messages": [{"role": "user", "content": [{"type": "tool_result", "is_error": True}]}]}
+    clean = {"messages": [{"role": "user", "content": [{"type": "tool_result", "is_error": False}]}]}
+    assert gateway.main_loop_alias("deepseek", up, clean) == "flash"
+    assert gateway.main_loop_alias("deepseek", up, error) == "flash"
+    assert gateway.main_loop_alias("deepseek", up, error) == "pro"
+    assert gateway.main_loop_alias("deepseek", up, clean) == "pro"
+    assert gateway.main_loop_alias("deepseek", up, clean) == "flash"
+    gateway._escalation.clear()
+
+
+def test_without_an_escalation_block_the_main_loop_keeps_the_configured_alias():
+    gateway._escalation.clear()
+    up = {"name": "deepseek", "models": {"sonnet": "flash"}}
+    assert gateway.main_loop_alias("deepseek", up, {"messages": []}) == "flash"
 
 
 

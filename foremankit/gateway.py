@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
-from foremankit import budget, provider_schema, upstream
+from foremankit import budget, escalation, provider_schema, upstream
 from foremankit.state import CallLog, StateStore
 from foremankit.live import LiveMeter
 from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
@@ -328,7 +328,7 @@ def external_mode(cfg: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     if mode in upstream.BUILTIN_MODES:
         return None
     declared = cfg.get("upstreams") or {}
-    return mode, declared.get(mode) or {}
+    return mode, {**(declared.get(mode) or {}), "name": mode}
 
 
 def serves_picker_entry(body: bytes, cfg: dict[str, Any]) -> bool:
@@ -417,14 +417,41 @@ def external_refusal(mode: str, up: dict[str, Any]) -> str | None:
     return None
 
 
+_escalation: dict[str, dict[str, Any]] = {}   # mode -> escalation state (cheap/expensive), in-memory per gateway run
+
+
+def main_loop_alias(mode: str, up: dict[str, Any], data: dict[str, Any]) -> str:
+    """The provider alias for the main loop: cheap by default, switched to the expensive one after repeated tool
+    errors and back down after a clean run (hysteresis, foremankit/escalation.py). No `escalation` block = as configured."""
+    base = upstream.upstream_model(up, "sonnet")
+    policy = up.get("escalation")
+    if not policy:
+        return base
+    state = _escalation.get(mode, escalation.default_state())
+    previous = state["tier"]
+    state = escalation.next_state(state, escalation.last_tool_error(data.get("messages") or []), policy, time.time())
+    _escalation[mode] = state
+    if state["tier"] != previous:
+        print(f"   orchestrator {mode}: switched to {state['tier']} (errors={state['errors']}, clean={state['clean']})",
+              flush=True)
+    return policy.get("expensive", base) if state["tier"] == "expensive" else base
+
+
 def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    """Rewrite a request for an external orchestrator: model by alias (tool-less side requests use the cheap alias)
-    and, for the main loop, the extra rules prompt; returns it with a log note."""
+    """Rewrite a request for an external orchestrator: cheap main-loop model (escalated to the expensive one on tool
+    errors), haiku for tool-less side requests; for the main loop, the extra rules prompt; returns it with a log note."""
     side = is_toolless_message("/v1/messages", data)
-    alias = upstream.upstream_model(up, "haiku" if side else str(data.get("model", "")))
-    data = {**data, "model": model_id_for(up.get("provider", up.get("name", "?")), alias)}
+    main = is_main_loop(data, cfg["main_loop_tools"])
+    provider = up.get("provider", up.get("name", "?"))
+    if side:
+        alias = upstream.upstream_model(up, "haiku")
+    elif main:
+        alias = main_loop_alias(up.get("name", "?"), up, data)
+    else:
+        alias = upstream.upstream_model(up, str(data.get("model", "")))
+    data = {**data, "model": model_id_for(provider, alias)}
     data = adapt_for_provider(data, up)
-    if side or not is_main_loop(data, cfg["main_loop_tools"]):
+    if side or not main:
         return data, f" (-> {data['model']}{' side request' if side else ''})"
     prompt_cfg = {**cfg, "prompt_file": up.get("prompt_file", "orchestrator.external.md")}
     trim = {"enabled": False, "system": "append", **(up.get("trim") or {})}
@@ -489,7 +516,7 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any],
         call.log(503)
         return switched_off(reason)
     if data is not None and request.url.path == "/v1/messages":
-        shaped, call.note = shape_external(data, {**up, "name": mode}, cfg)
+        shaped, call.note = shape_external(data, up, cfg)
         call.provider_model = shaped.get("model", "")
         body = json.dumps(shaped, ensure_ascii=False).encode("utf-8")
         if os.getenv(DUMP_ENV):
