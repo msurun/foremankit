@@ -9,7 +9,9 @@ chains:
   # 14/14 bulk-code tasks like Groq and DeepSeek, 5-13 s vs ~2 s; benchmarks/CLOUD_VS_LOCAL.md). llm.kinds limits it to small inputs.
   # 2026-10-11 (owner): DeepSeek flash first for bulk_code. It costs a fraction of a cent per file and passes verify
   # in fewer rounds than the free clouds, which saves Claude tokens spent on supervising retries; free clouds are the fallback.
-  bulk_code:    ["deepseek:flash", mistral, groq, llm, "gemini:flash"]
+  # 2026-10-24: gemini:lite31 (gemini-3.1-flash-lite) passed 13/14 of the bulk-code bench at 0.017 USD vs 14/14 at 0.040 USD for
+  # gemini:flash (benchmarks/cloud_code_results.jsonl), so it goes first among the Gemini fallbacks.
+  bulk_code:    ["deepseek:flash", mistral, groq, llm, "gemini:lite31", "gemini:flash"]
   data_script:  ["deepseek:flash", "gemini:flash"]
   hard_code:    ["deepseek:pro", "gemini:pro"]
   long_context: ["deepseek:flash", "gemini:flash"]
@@ -77,6 +79,13 @@ llm:
     bulk_code:   {max_input_tokens: 12000}  # one file plus its tests and interfaces (raised from 5000 on 2026-10-10; ctx is 32768)
     data_script: {max_input_tokens: 12000}  # pandas / SQL scripts with their context (raised from 5000 on 2026-10-10)
     # hard_code, long_context: not listed -> never local (they are the slow ones)
+
+# Paid entries of these kinds are tried cheapest first, by the estimated cost of THIS call at the price valid now (DeepSeek
+# is half price off-peak). Free and local entries keep their place; costs within `tolerance` (20 %) keep the order above.
+# hard_code is not listed: there quality matters more than price.
+price_order:
+  kinds: [bulk_code, data_script, long_context]
+  tolerance: 0.2
 
 reasoning:
   # Effort level sent to providers that support it (providers.yaml -> `thinking`). Gemini 3.x cannot turn

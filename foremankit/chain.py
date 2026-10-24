@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from . import delegation, netguard, prompting, reasoning
+from .price_order import order_by_price
 from .records import (
     MAX_OUTPUT_CAP,
     MIN_OUTPUT_TOKENS,
@@ -79,12 +80,22 @@ class ChainRun:
         self.exclude = exclude
         self.ctx, self.notes = prepare_context(router, request)
         self.resume = self._load_resume(request)
-        self.chain = ([self.resume.chain_entry] if self.resume
-                      else build_chain(router.routing, self.ctx.kind, self.ctx.sensitivity, self.ctx.escalate))
+        self.chain = ([self.resume.chain_entry] if self.resume else self._ordered_chain())
         self.attempts = 0
         self.nodes = {node.name: node for node in router.nodes()}
         self.skipped: list[str] = []
         self.deferred: list[str] = []
+
+    def _ordered_chain(self) -> list[str]:
+        """The chain of the task; for the kinds listed under `price_order` in routing.yaml its paid entries are
+        re-ordered by the estimated cost right now (DeepSeek's off-peak half price included)."""
+        ctx, routing = self.ctx, self.router.routing
+        chain = build_chain(routing, ctx.kind, ctx.sensitivity, ctx.escalate)
+        setting = routing.get("price_order") or {}
+        if ctx.escalate or ctx.kind not in (setting.get("kinds") or []):
+            return chain
+        return order_by_price(chain, self.router.providers, (ctx.est_in, ctx.max_out),
+                              float(setting.get("tolerance", 0.2)))
 
     def _load_resume(self, request: TaskRequest) -> Resume | None:
         """The saved cut-off answer named by `continue_from` (it picks the source and the id of the finished file)."""

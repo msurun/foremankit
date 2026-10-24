@@ -89,6 +89,11 @@ providers:
         # (input 1.50 / cached 0.15 / output 7.50) -> update then.
         price: {input_miss: 0.75, input_hit: 0.075, output: 3.75}
         price_from: {"2027-01-01": {input_miss: 1.50, input_hit: 0.15, output: 7.50}}   # announced doubling, applied automatically
+      # Flash-Lite variants, on /models 2026-10-24; prices from ai.google.dev/gemini-api/docs/pricing, no announced change.
+      # gemini-2.5-flash-lite answers HTTP 404 on this key (tested 2026-10-24), so it is not listed.
+      lite31:
+        id: gemini-3.1-flash-lite
+        price: {input_miss: 0.25, input_hit: 0.025, output: 1.50}
       pro:
         id: gemini-3.1-pro-preview     # confirmed on /models 2026-10-07
         # Prices for prompts <= 200k tokens (4.00 / 0.40 / 18.00 above that; context_guard keeps us below).
