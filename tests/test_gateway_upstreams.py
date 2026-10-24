@@ -376,13 +376,13 @@ def test_an_external_answer_is_counted_in_the_budget_and_call_log(gateway_dirs: 
     use_mode("deepseek")
     asyncio.run(drain(post("/v1/messages", tooled_request())))
     state = StateStore(tmp_path / "state" / "state.json").load()
-    assert state["spend"]["day_usd"] == pytest.approx(0.001474, abs=1e-9)
+    assert state["spend"]["day_usd"] == pytest.approx(0.002134, abs=1e-9)
     rows = CallLog(tmp_path / "state" / "calls.jsonl").read()
     assert len(rows) == 1
     row = rows[0]
     assert row["kind"] == "orchestrator" and row["provider"] == "deepseek" and row["model"] == "ds-pro"
-    assert row["tokens_in"] == 1000 and row["tokens_out"] == 200 and row["cache_hit"] == 500
-    assert row["cost_usd"] == pytest.approx(0.001474, abs=1e-9)
+    assert row["tokens_in"] == 1500 and row["tokens_out"] == 200 and row["cache_hit"] == 500   # input 1000 miss + 500 hit
+    assert row["cost_usd"] == pytest.approx(0.002134, abs=1e-9)
 
 
 def test_the_main_loop_starts_cheap_and_escalates_after_repeated_tool_errors(monkeypatch):
@@ -416,3 +416,43 @@ def test_the_provider_model_id_comes_from_providers_yaml_so_a_rename_is_fixed_in
     assert gateway.model_id_for("deepseek", "pro") == "deepseek-v5-pro"
     assert gateway.model_id_for("deepseek", "unknown") == "unknown"      # an unknown alias is sent as written
     assert gateway.price_for_model("deepseek-v5-pro") == {"input_miss": 1, "output": 2}
+
+
+def test_the_usage_reader_counts_a_message_start_buried_in_a_long_chunk():
+    """A chunk longer than the kept tail must still be scanned from its start: the cache numbers sit in message_start."""
+    collector = gateway.UsageCollector()
+    start = b'event: message_start\ndata: {"message":{"usage":{"input_tokens":236,"cache_read_input_tokens":640}}}\n\n'
+    collector.feed(start + b"event: content_block_delta\ndata: " + b"x" * 3000 + b"\n\n")
+    collector.feed(b'event: message_delta\ndata: {"usage":{"output_tokens":8}}\n\n')
+    assert collector.normalized() == {"prompt_tokens": 876, "cache_hit": 640, "completion_tokens": 8}
+
+
+def test_cache_writes_are_prompt_tokens_that_are_not_hits():
+    """Anthropic format: input_tokens excludes cache reads; writes are billed as misses."""
+    collector = gateway.UsageCollector()
+    collector.feed(b'"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":400,"output_tokens":7}')
+    assert collector.normalized() == {"prompt_tokens": 550, "cache_hit": 400, "completion_tokens": 7}
+
+
+def test_the_price_of_a_model_follows_the_peak_schedule(gateway_dirs: Path, monkeypatch: pytest.MonkeyPatch):
+    """Listed prices are peak prices; outside the peak hours the answer is priced at the off-peak factor."""
+    (gateway_dirs / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    price_schedule: {peak_utc_hours: [[1, 4]], peak_weekdays: [0, 1, 2, 3, 4], off_peak_factor: 0.5}\n"
+        "    models:\n      pro: {id: ds-pro, price: {input_miss: 2.0, input_hit: 0.1, output: 4.0}}\n", encoding="utf-8")
+    from datetime import datetime, timezone
+    friday_peak = datetime(2026, 10, 23, 2, 0, tzinfo=timezone.utc).timestamp()
+    saturday = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(gateway.time, "time", lambda: friday_peak)
+    assert gateway.price_for_model("ds-pro") == {"input_miss": 2.0, "input_hit": 0.1, "output": 4.0}
+    monkeypatch.setattr(gateway.time, "time", lambda: saturday)
+    assert gateway.price_for_model("ds-pro") == {"input_miss": 1.0, "input_hit": 0.05, "output": 2.0}
+
+
+def test_the_main_loop_tier_is_written_for_the_panel(gateway_dirs: Path, tmp_path: Path):
+    """The panel shows cheap/expensive from a small file the gateway keeps in the state dir."""
+    gateway._escalation.clear()
+    up = {"name": "deepseek", "models": {"sonnet": "flash"}, "escalation": {"expensive": "pro"}}
+    gateway.main_loop_alias("deepseek", up, {"messages": []})
+    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
+    assert written["mode"] == "deepseek" and written["tier"] == "cheap" and written["alias"] == "flash"
+    gateway._escalation.clear()

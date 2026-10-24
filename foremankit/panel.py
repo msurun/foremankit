@@ -48,7 +48,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import model_watch, pairing, presets, upstream
+from foremankit import model_watch, pairing, presets, pricing, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -135,7 +135,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "llama_installed": llama_installed(),
             "thinking": get_thinking()}
 
 
@@ -579,6 +579,38 @@ def fix_model(target: str, new_id: str) -> str:
     except KeyError as missing:
         raise ValueError(f"{missing} is not in providers.yaml") from missing
     return f"{target} now uses {new_id}. Check its price in providers.yaml: the old price is still counted."
+
+
+def prices_status(now: float | None = None) -> dict[str, Any]:
+    """What the 'Prices now' menu shows: per provider of the orchestrator upstreams, each model's price now (peak or
+    off-peak), the peak price, when the phase changes and the next announced price change; plus the tier the main
+    loop runs on. Read from providers.yaml, the single source of prices."""
+    now = time.time() if now is None else now
+    providers = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
+    upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
+    rows = []
+    for name in upstreams:
+        section = providers.get(upstream_provider(name, upstreams)) or {}
+        models = {alias: {"id": entry.get("id"), **pricing.price_status(entry, section, now)}
+                  for alias, entry in (section.get("models") or {}).items() if entry.get("price")}
+        phases = {model["phase"] for model in models.values() if model["phase"]}
+        rows.append({"provider": name, "phase": next(iter(phases), None), "next_change": next(
+            (model["next_change"] for model in models.values() if model["next_change"]), None), "models": models})
+    return {"providers": rows, "tier": read_tier(now)}
+
+
+def upstream_provider(name: str, upstreams: dict[str, Any]) -> str:
+    """The providers.yaml section of an orchestrator upstream (its `provider:` key, else the upstream's own name)."""
+    return (upstreams.get(name) or {}).get("provider", name)
+
+
+def read_tier(now: float) -> dict[str, Any] | None:
+    """The tier the gateway last used for the main loop ({"mode", "tier", "alias"}); None when stale (an hour) or absent."""
+    try:
+        tier = json.loads((state_dir() / "orchestrator_tier.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return tier if now - tier.get("time", 0) < 3600 else None
 
 
 def preset_status() -> dict[str, Any]:

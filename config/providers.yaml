@@ -29,6 +29,10 @@ providers:
     # the People's Republic of China; retention is open-ended. An opt-out of training is a stated right, but no API
     # switch was found. So: never for "internal" or "private" (FOREMANKIT_ALLOW_INTERNAL cannot override this flag).
     trains_on_data: true
+    # Listed prices are PEAK prices. Checked 2026-10-24 (api-docs.deepseek.com/quick_start/pricing): off-peak is half of
+    # peak; peak = 01:00-04:00 and 06:00-10:00 UTC, Monday-Friday, excluding Chinese public holidays (not modelled: such
+    # a day is counted as a normal weekday, i.e. at peak price, so the estimate can only be too high).
+    price_schedule: {peak_utc_hours: [[1, 4], [6, 10]], peak_weekdays: [0, 1, 2, 3, 4], off_peak_factor: 0.5}
     timeout: 180
     limits: {rpm: 30, rpd: null, tpd: null}   # VERIFY (DeepSeek has no fixed public rate limit)
     # Thinking is ON by default (effort high) and its tokens are billed as output. Owner's decision 2026-10-11:
@@ -84,6 +88,7 @@ providers:
         # Prices from ai.google.dev/gemini-api/docs/pricing on 2026-10-07; they DOUBLE on 2027-01-01
         # (input 1.50 / cached 0.15 / output 7.50) -> update then.
         price: {input_miss: 0.75, input_hit: 0.075, output: 3.75}
+        price_from: {"2027-01-01": {input_miss: 1.50, input_hit: 0.15, output: 7.50}}   # announced doubling, applied automatically
       pro:
         id: gemini-3.1-pro-preview     # confirmed on /models 2026-10-07
         # Prices for prompts <= 200k tokens (4.00 / 0.40 / 18.00 above that; context_guard keeps us below).

@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from foremankit.config import _read_yaml, config_dir, load_env, state_dir
-from foremankit import budget, escalation, provider_schema, upstream
+from foremankit import budget, escalation, pricing, provider_schema, upstream
 from foremankit.state import CallLog, StateStore
 from foremankit.live import LiveMeter
 from foremankit.gateway_trim import (is_main_loop, request_chars, shape_request, system_text, thinking_wanted,
@@ -42,6 +42,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
 ORCHESTRATOR_FILE = "orchestrator_target.json"   # state dir: {"name", "url"} of the machine that serves Claude Code; absent = this PC
+TIER_FILE = "orchestrator_tier.json"            # state dir: {"mode", "tier", "alias", "time"} of the main loop (panel)
 LIVE_FILE = "gateway_live.json"                 # state dir: what the local model is doing right now (foremankit/live.py)
 LOCAL_ROLE_FILE = "local_role"          # file in the state dir: orchestrator | worker | both (default worker)
 DUMP_ENV = "FOREMANKIT_GATEWAY_DUMP"   # path: the last shaped main-loop request is written there as JSON (for tuning)
@@ -347,13 +348,17 @@ def model_id_for(provider: str, alias: str) -> str:
 
 
 def price_for_model(model_id: str) -> dict[str, Any] | None:
-    """The USD-per-1M-token price of a provider model, found by id in providers.yaml; None when it is unknown."""
+    """The USD-per-1M-token price of a provider model right now (peak / off-peak, announced changes), found by id in
+    providers.yaml; None when the model is unknown."""
     providers = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
     for section in providers.values():
-        for entry in (section or {}).get("models", {}).values():
+        for entry in ((section or {}).get("models") or {}).values():
             if (entry or {}).get("id") == model_id:
-                return (entry or {}).get("price") or {}
+                return pricing.effective_price(entry, section, time.time())
     return None
+
+
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
 
 class UsageCollector:
@@ -364,16 +369,20 @@ class UsageCollector:
         self._tail = ""
 
     def feed(self, chunk: bytes) -> None:
-        """Scan the newest part of the stream for usage fields; later (cumulative) values win."""
-        self._tail = (self._tail + chunk.decode("utf-8", "ignore"))[-1024:]
-        for field in ("input_tokens", "cache_read_input_tokens", "output_tokens"):
-            for value in re.findall(rf'"{field}"\s*:\s*(\d+)', self._tail):
+        """Scan the whole new chunk (plus the unfinished end of the last one) for usage fields; cumulative values win.
+        Only the tail kept for the next round is cut, never the part being scanned."""
+        text = self._tail + chunk.decode("utf-8", "ignore")
+        for field in USAGE_FIELDS:
+            for value in re.findall(rf'"{field}"\s*:\s*(\d+)', text):
                 self.counts[field] = max(self.counts.get(field, 0), int(value))
+        self._tail = text[-256:]
 
     def normalized(self) -> dict[str, int]:
-        """Token counts in the shape budget.cost_usd expects."""
-        return {"prompt_tokens": self.counts.get("input_tokens", 0),
-                "cache_hit": self.counts.get("cache_read_input_tokens", 0),
+        """Token counts in the shape budget.cost_usd expects. In the Anthropic format `input_tokens` is only what was
+        NOT served from the cache, so the prompt is input + cache writes + cache reads; the reads are the cache hits."""
+        read = self.counts.get("cache_read_input_tokens", 0)
+        uncached = self.counts.get("input_tokens", 0) + self.counts.get("cache_creation_input_tokens", 0)
+        return {"prompt_tokens": uncached + read, "cache_hit": read,
                 "completion_tokens": self.counts.get("output_tokens", 0)}
 
 
@@ -434,7 +443,18 @@ def main_loop_alias(mode: str, up: dict[str, Any], data: dict[str, Any]) -> str:
     if state["tier"] != previous:
         print(f"   orchestrator {mode}: switched to {state['tier']} (errors={state['errors']}, clean={state['clean']})",
               flush=True)
-    return policy.get("expensive", base) if state["tier"] == "expensive" else base
+    alias = policy.get("expensive", base) if state["tier"] == "expensive" else base
+    write_tier(mode, state["tier"], alias)
+    return alias
+
+
+def write_tier(mode: str, tier: str, alias: str) -> None:
+    """Tell the panel which tier the main loop runs on (cheap / expensive) and with which model alias."""
+    try:
+        (state_dir() / TIER_FILE).write_text(json.dumps({"mode": mode, "tier": tier, "alias": alias, "time": time.time()}),
+                                             encoding="utf-8")
+    except OSError:
+        pass   # a missing hint must never fail the request
 
 
 def shape_external(data: dict[str, Any], up: dict[str, Any], cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:

@@ -501,3 +501,27 @@ def test_probe_sends_the_lab_key_so_a_shared_server_is_not_reported_as_starting(
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     assert panel.probe("http://127.0.0.1:8080/props") is None
     assert seen["authorization"] == "Bearer secret"
+
+
+def test_prices_status_shows_phase_price_now_and_the_announced_change(monkeypatch, tmp_path: Path):
+    """The 'Prices now' menu data: DeepSeek-like peak/off-peak with the peak price kept, Gemini-like flat with an upcoming change."""
+    from datetime import datetime, timezone
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    (tmp_path / "orchestrator.yaml").write_text("upstreams:\n  deepseek: {models: {sonnet: pro}}\n  gemini: {models: {sonnet: flash}}\n", encoding="utf-8")
+    (tmp_path / "providers.yaml").write_text(
+        "providers:\n  deepseek:\n    price_schedule: {peak_utc_hours: [[1, 4]], peak_weekdays: [0, 1, 2, 3, 4], off_peak_factor: 0.5}\n"
+        "    models:\n      pro: {id: ds-pro, price: {input_miss: 2.0, input_hit: 0.1, output: 4.0}}\n"
+        "  gemini:\n    models:\n      flash:\n        id: g-flash\n        price: {input_miss: 1.0, input_hit: 0.1, output: 5.0}\n"
+        "        price_from: {\"2027-01-01\": {input_miss: 2.0, input_hit: 0.2, output: 10.0}}\n", encoding="utf-8")
+    (tmp_path / "state" / "orchestrator_tier.json").write_text(
+        json.dumps({"mode": "deepseek", "tier": "cheap", "alias": "flash", "time": 1_000_000.0}), encoding="utf-8")
+    saturday = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc).timestamp()
+    result = panel.prices_status(now=saturday)
+    deepseek, gemini = result["providers"]
+    assert deepseek["phase"] == "off-peak" and deepseek["models"]["pro"]["price"]["output"] == 2.0
+    assert deepseek["models"]["pro"]["peak_price"]["output"] == 4.0 and deepseek["next_change"] > saturday
+    assert gemini["phase"] is None and gemini["models"]["flash"]["upcoming"]["from"] == "2027-01-01"
+    assert result["tier"] is None                      # the tier file is older than an hour
+    assert panel.read_tier(1_000_100.0)["tier"] == "cheap"

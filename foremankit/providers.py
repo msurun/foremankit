@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from foremankit import pricing
+
 TOGGLE_VALUES = ("auto", "on", "off")
 DEFAULT_TIMEOUT_S = 120              # seconds; a slow local LLM may need a minute or more for one answer
 
@@ -119,7 +121,7 @@ class Provider:
         if alias not in models:
             raise KeyError(f"{self.name}: unknown model alias {alias!r}")
         entry = models[alias]
-        return alias, entry["id"], entry.get("price") or {}
+        return alias, entry["id"], pricing.effective_price(entry, self.cfg, time.time())
 
 
 # ---------------------------------------------------------------- HTTP helpers

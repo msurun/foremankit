@@ -311,6 +311,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
+<details><summary class="info" id="pricesSummary">Prices now</summary>
+<div id="prices"></div>
+</details>
 <details><summary class="info">Costs</summary>
 <div id="delegSummary" class="info">no delegated calls yet</div>
 <div id="delegDays" class="days"></div>
@@ -452,7 +455,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showPresets(s.preset); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -515,6 +518,28 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   else if (fix.startsWith('fix-model ')) { const [, target, id] = fix.split(' '); send({ type: 'config', action: 'fixModel', name: target, model: id }); }
   else if (fix === 'start-server') $('startServer').click();
   else if (fix === 'download-llama') send({ type: 'terminal', action: 'download-llama', model: '' });
+ }
+ const perM = (p) => '$' + p.input_miss + ' in / $' + p.input_hit + ' cached / $' + p.output + ' out per 1M';
+ function untilText(ts) {
+  const hours = Math.max(0, Math.round((ts * 1000 - Date.now()) / 3600000));
+  return new Date(ts * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' (in ' + hours + ' h)';
+ }
+ function showPrices(info) {
+  const box = $('prices'); if (!info) return; box.innerHTML = '';
+  const add = (text, cls) => { const d = document.createElement('div'); d.className = cls || 'info'; d.textContent = text; box.appendChild(d); };
+  if (info.tier) add('orchestrator now: ' + info.tier.mode + ' / ' + info.tier.alias + ' (' + info.tier.tier + ' tier)');
+  let cheap = '';
+  for (const p of info.providers) {
+   if (p.phase) {
+    cheap = cheap || (p.phase === 'off-peak' ? 'cheap' : 'expensive');
+    add(p.provider + ': ' + (p.phase === 'off-peak' ? 'OFF-PEAK = CHEAP (half price)' : 'PEAK = EXPENSIVE') + ', changes ' + (p.next_change ? untilText(p.next_change) : 'never'));
+   } else add(p.provider + ': flat price, no peak hours');
+   for (const [alias, m] of Object.entries(p.models)) {
+    add('  ' + alias + ' ' + m.id + ': ' + perM(m.price) + (m.phase === 'off-peak' ? ' (peak: $' + m.peak_price.input_miss + ' / $' + m.peak_price.input_hit + ' / $' + m.peak_price.output + ')' : ''));
+    if (m.upcoming) add('  ! ' + alias + ' from ' + m.upcoming.from + ': ' + perM(m.upcoming.price));
+   }
+  }
+  $('pricesSummary').textContent = 'Prices now' + (cheap ? ' (' + cheap + ')' : '');
  }
  function renderHead() {
   const s = lastStatus; if (!s) return;

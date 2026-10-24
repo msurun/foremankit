@@ -47,6 +47,11 @@ def cfg() -> dict[str, Any]:
     config = copy.deepcopy(load_config(REPO / "config"))
     # Tests must not depend on local deployment choices (deepseek is disabled on the work laptop).
     config["providers"]["deepseek"]["enabled"] = True
+    # Cost tests check arithmetic at the listed prices: no peak/off-peak schedule or dated price change, whatever the clock says.
+    for provider in config["providers"].values():
+        provider.pop("price_schedule", None)
+        for model in (provider.get("models") or {}).values():
+            model.pop("price_from", None)
     return config
 
 
