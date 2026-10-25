@@ -192,7 +192,7 @@ class Panel {
     await this.applyPreset(name);
   }
 
-  configArgs({ action, role, name, url, accept, priority, model, fields, enabled }) {
+  configArgs({ action, role, name, url, accept, priority, model, fields, enabled, category, period, value }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
       budgetSet: ['budget-set', period, '--name', category, '--value', String(value)],
@@ -585,7 +585,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  function showPrices(info) {
   const box = $('prices'); if (!info) return; box.innerHTML = '';
   const add = (text, cls) => { const d = document.createElement('div'); d.className = cls || 'info'; d.textContent = text; box.appendChild(d); };
-  if (info.tier) add('orchestrator now: ' + info.tier.mode + ' / ' + info.tier.alias + ' (' + info.tier.tier + ' tier, switch ' + (info.tier.control || 'auto') + ')');
+  if (info.tier) add('orchestrator now: ' + info.tier.mode + ' / ' + info.tier.alias + ' (' + info.tier.tier + ' tier, switch ' + (info.control || 'auto') + ')');
   let cheap = '';
   for (const p of info.providers) {
    if (p.phase) {
