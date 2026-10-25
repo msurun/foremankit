@@ -144,6 +144,28 @@ def test_check_switch_reports_missing_key_environment_variable(
     assert API_KEY_ENV in message
 
 
+def test_check_switch_reports_missing_url_environment_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared but unset url_env yields an error naming that variable."""
+    monkeypatch.setenv(API_KEY_ENV, "secret")
+    monkeypatch.delenv("FOREMANKIT_TEST_URL", raising=False)
+    config = {
+        "upstreams": {
+            "mistral": {
+                "url_env": "FOREMANKIT_TEST_URL",
+                "key_env": API_KEY_ENV,
+                "ceiling": "private",
+            }
+        }
+    }
+
+    message = upstream.check_switch(config, "mistral", tmp_path)
+
+    assert message is not None
+    assert "FOREMANKIT_TEST_URL" in message
+
+
 def test_check_switch_refuses_private_repo_with_internal_ceiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

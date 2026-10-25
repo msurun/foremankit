@@ -290,7 +290,7 @@ def _try_probe_path(client: httpx.Client, endpoint: Endpoint, probe_path: tuple[
     try:
         response = client.get(endpoint.url + path, timeout=timeout, headers=endpoint.headers())
         if response.status_code in WRONG_KEY_STATUSES:
-            return None, f"HTTP {response.status_code}: wrong or missing API key (FOREMANKIT_PEER_KEY)", True
+            return None, f"HTTP {response.status_code}: wrong or missing API key, or a proxy refused the request", True
         if response.status_code == 200:
             return _model_names(response.json().get(list_key, []), name_fields), "", True
         return None, f"HTTP {response.status_code}", False   # server is up but lacks this API: try the next one

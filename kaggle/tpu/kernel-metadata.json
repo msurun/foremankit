@@ -1,0 +1,15 @@
+{
+  "id": "REPLACE_WITH_KAGGLE_USER/foremankit-tpu",
+  "title": "ForemanKit TPU batch",
+  "code_file": "serve_tpu.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

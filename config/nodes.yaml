@@ -27,6 +27,8 @@
 #
 # Authentication: every node's server runs with --api-key; the shared key is env FOREMANKIT_PEER_KEY (same value on all
 # machines, kept only in .env, never in git). Create it with `foremankit nodes key`.
+# A node that must NOT receive that shared key names its own variable instead:
+#   key_env: KAGGLE_LLM_KEY    (sent as its own Bearer token; no header at all when the variable is unset)
 
 settings:
   key_env: FOREMANKIT_PEER_KEY
@@ -56,3 +58,19 @@ nodes:
     learn: true                # this laptop is switched between models (start-llama.ps1 menu: 35B MoE ~28 tok/s, 4-7B dense 60+),
                                # so the speed is learned from real calls; the written numbers are the 35B Q4_K_XL profile (64k ctx)
     speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 150}
+  kaggle:
+    # Free Kaggle notebook serving Ollama (kaggle/, the GPU lane) behind a Cloudflare QUICK tunnel. Two things about it:
+    #   - the URL changes with every session, so point this node at the new one WITHOUT editing this file:
+    #       $env:FOREMANKIT_NODE_KAGGLE_LAN = "https://<new-name>.trycloudflare.com"
+    #   - the URL is the ROOT only (never .../v1): the router appends /v1/chat/completions itself.
+    hostname: kaggle-notebook  # not a machine of the lab: it is never "me"
+    priority: 5                # after both laptops: a free stop-gap, never preferred over our own hardware
+    lan: ["https://ipaq-walks-apache-deer.trycloudflare.com"]
+    preferred_models: ["qwen3.8:27b"]
+    # The prompts cross Cloudflare and land on a disposable notebook, so public data only by default. Raise to
+    # `internal` only after deciding that plant/process data may leave our hardware.
+    accept: normal
+    key_env: KAGGLE_LLM_KEY    # its own throwaway token; the shared lab key is never sent outside the lab
+    learn: true                # unknown accelerator, restarted every session: learn the speed from real calls
+    speed: {prompt_tps: 100, gen_tps: 6, expected_output_cap: 1500, max_seconds: 900}
+    max_concurrent: 1          # Ollama queues one request per loaded model unless OLLAMA_NUM_PARALLEL says more

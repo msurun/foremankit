@@ -103,6 +103,18 @@ def test_borrowing_from_a_more_important_machine_is_limited_to_idle_and_short(la
     assert other.name == "firefly" and other.idle_only is True and other.loan_max_s == 45
 
 
+def test_a_node_with_its_own_key_env_never_receives_the_shared_lab_key(lab, cfg, monkeypatch):
+    """A tunnelled node outside the lab sends its own throwaway token, and no header at all while that token is unset."""
+    config = lab("firefly")
+    config["nodes"]["kaggle"] = {"hostname": "kaggle-notebook", "priority": 5, "key_env": "KAGGLE_LLM_KEY",
+                                 "lan": ["https://notebook.trycloudflare.com"]}
+    _, _, kaggle = nodes.build_nodes(config, provider_cfg(cfg))
+    assert kaggle.endpoints[0].api_key is None and kaggle.endpoints[0].headers() == {}
+    monkeypatch.setenv("KAGGLE_LLM_KEY", "ollama")
+    _, _, kaggle = nodes.build_nodes(config, provider_cfg(cfg))
+    assert kaggle.endpoints[0].api_key == "ollama" and "shared-secret" not in str(kaggle.endpoints[0].headers())
+
+
 def test_an_unlisted_machine_becomes_the_node_local_with_the_default_speed(lab, cfg):
     config = lab("some-other-pc")
     local, *others = nodes.build_nodes(config, provider_cfg(cfg))

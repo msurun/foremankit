@@ -110,7 +110,7 @@ budget:
   # Two separate budgets (each stops only its own kind of spend):
   daily_usd: 1.5        # delegated work (the delegate tool) - hard stop for paid providers
   monthly_usd: 5.0      # delegated work per month (= the USD 5 loaded on Gemini 2026-10-07)
-  orchestrator_daily_usd: 1.5     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
+  orchestrator_daily_usd: 2.5     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
   orchestrator_monthly_usd: 5.0   # same, per month (remove the line for no monthly cap)
   per_call_usd: 0.10    # a paid call whose WORST-CASE cost is above this is refused unless allow_cost=true is passed
                         # (2026-10-10: two calls of ~0.30 USD each returned unusable cut-off output)
@@ -166,6 +166,10 @@ verify:
     - ForemanKit/.venv/Scripts/foremankit check
     - ForemanKit/.venv/Scripts/python -m pytest
     - ForemanKit/.venv/Scripts/python -m ruff check
+    # Windows spawns these without a shell, and CreateProcess only resolves a relative path that starts with "./"
+    - ./ForemanKit/.venv/Scripts/foremankit check
+    - ./ForemanKit/.venv/Scripts/python -m pytest
+    - ./ForemanKit/.venv/Scripts/python -m ruff check
 
 # One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the
 # system prompt of these kinds (a project can override it with <project>/.foremankit/conventions.md). `foremankit check <files>`

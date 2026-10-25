@@ -1,0 +1,16 @@
+{
+  "id": "REPLACE_WITH_KAGGLE_USER/foremankit-batch",
+  "title": "ForemanKit batch",
+  "code_file": "run_batch.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

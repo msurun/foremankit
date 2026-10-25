@@ -180,6 +180,25 @@ providers:
         id: gpt-oss-120b               # VERIFY
         price: {input_miss: 0, input_hit: 0, output: 0}
 
+  kaggle:
+    # The free Kaggle notebook (nodes.yaml `kaggle`) also used as the ORCHESTRATOR (orchestrator.yaml upstreams.kaggle).
+    # enabled: false - it is never routed as a cloud provider; this block only supplies the model id and a zero price,
+    # so an orchestrated answer through it is logged as a free call instead of "no price for model ... not counted".
+    # The address changes every session and comes from FOREMANKIT_NODE_KAGGLE_LAN, not from base_url (shown as an
+    # example only; Cloudflare quick tunnels are gone once the notebook stops).
+    type: openai
+    base_url: https://ipaq-walks-apache-deer.trycloudflare.com/v1
+    key_env: KAGGLE_LLM_KEY
+    enabled: false
+    free: true
+    trains_on_data: false      # our own disposable notebook, deleted after the session
+    timeout: 900               # ~6 tok/s: a full tool-calling turn takes minutes
+    default_model: main
+    models:
+      main:
+        id: qwen3.8:27b
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
   llm:
     type: llm
     # The POOL of local-LLM servers: llama.cpp `llama-server` or Ollama, on this machine and on the other machines of the

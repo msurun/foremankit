@@ -96,18 +96,28 @@ def allowed(ceiling: str, level: str) -> bool:
     return LEVELS.index(level) <= LEVELS.index(ceiling)
 
 
+def upstream_url(upstream: dict) -> str | None:
+    """Return the base URL of an upstream: `url`, else the value of the environment variable named by `url_env`
+    (a tunnel whose address changes every session), else None."""
+    named = upstream.get("url_env")
+    return upstream.get("url") or (os.environ.get(str(named)) if named else None)
+
+
 def check_switch(cfg: dict, mode: str, cwd: Path) -> str | None:
     """Return an error message when switching to `mode` is not permitted, else None."""
     if mode in BUILTIN_MODES:
         return None
     upstreams = cfg.get("upstreams", {})
-    if mode not in upstreams:
+    upstream = upstreams.get(mode)
+    if upstream is None:
         valid = ", ".join((*BUILTIN_MODES, *upstreams))
         return f"Unknown mode '{mode}'. Valid modes: {valid}."
-    upstream = upstreams[mode]
-    key_error = _missing_key_error(mode, upstream)
-    if key_error is not None:
-        return key_error
+    error = _missing_key_error(mode, upstream) or _sensitivity_error(mode, upstream, cwd)
+    return error if error is not None else _missing_url_error(mode, upstream)
+
+
+def _sensitivity_error(mode: str, upstream: dict, cwd: Path) -> str | None:
+    """Return an error message when the repository is too sensitive for the upstream's ceiling, else None."""
     ceiling = upstream.get("ceiling", "normal")
     level = repo_sensitivity(cwd)
     if allowed(ceiling, level):
@@ -116,6 +126,20 @@ def check_switch(cfg: dict, mode: str, cwd: Path) -> str | None:
         f"Upstream '{mode}' allows sensitivity up to '{ceiling}' "
         f"but this repository is '{level}'."
     )
+
+
+def _missing_url_error(mode: str, upstream: dict) -> str | None:
+    """Return an error message when `url_env` is declared but its variable is unset, else None.
+
+    An upstream that declares no address at all is not rejected here: only an explicitly
+    configured `url_env` promises an address that must be present when the switch happens.
+    """
+    if upstream_url(upstream):
+        return None
+    named = upstream.get("url_env")
+    if named:
+        return f"Upstream '{mode}' reads its address from the environment variable {named}, which is not set."
+    return None
 
 
 def _missing_key_error(mode: str, upstream: dict) -> str | None:

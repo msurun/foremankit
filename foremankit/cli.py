@@ -307,9 +307,78 @@ def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_kaggle(router: Router, args: argparse.Namespace) -> int:
+    """Show the free Kaggle hours left this week, price a job queue in them, or log a finished session."""
+    from foremankit import kaggle as budget
+    handlers = {"status": _kaggle_status, "estimate": _kaggle_estimate,
+                "log": _kaggle_log, "push": _kaggle_push}
+    return handlers[args.action](budget, args)
+
+
+def _kaggle_status(budget: Any, _args: argparse.Namespace) -> int:
+    """Print used and left hours per accelerator, with how many <=9 h sessions that allows."""
+    for accelerator in ("gpu", "tpu"):
+        used = budget.week_used(accelerator) / budget.SECONDS_PER_HOUR
+        left = budget.remaining(accelerator)
+        print(f"{accelerator}: {used:5.1f} h used, {left:5.1f} h left of {budget.quota(accelerator):.0f} h "
+              f"({budget.sessions_needed(left)} sessions of {budget.SESSION_CAP_HOURS:.0f} h)")
+    print(f"ledger: {budget.sessions_path()} ({len(budget.read_sessions())} sessions)")
+    return 0
+
+
+def _kaggle_estimate(budget: Any, args: argparse.Namespace) -> int:
+    """Print what the jobs file would cost in this week's hours and whether it still fits."""
+    jobs = _read_jobs(_required_jobs(args))
+    accelerator = args.accelerator
+    hours = budget.estimate_hours(jobs, accelerator=accelerator)
+    left = budget.remaining(accelerator)
+    verdict = "fits" if hours <= left else "does NOT fit - split the queue or wait for Monday"
+    print(f"{len(jobs)} jobs: {hours:.2f} {accelerator.upper()} h, "
+          f"{budget.sessions_needed(hours)} session(s); {left:.1f} h left -> {verdict}")
+    return 0
+
+
+def _kaggle_log(budget: Any, args: argparse.Namespace) -> int:
+    """Record a finished session so the weekly budget stays truthful."""
+    seconds = {"gpu": args.gpu_hours * budget.SECONDS_PER_HOUR,
+               "tpu": args.tpu_hours * budget.SECONDS_PER_HOUR}
+    budget.log_session(seconds, jobs_done=args.jobs_done, note=args.note)
+    print(f"logged {args.gpu_hours:.2f} GPU h, {args.tpu_hours:.2f} TPU h, {args.jobs_done} jobs; "
+          f"left: gpu {budget.remaining('gpu'):.1f} h, tpu {budget.remaining('tpu'):.1f} h")
+    return 0
+
+
+def _kaggle_push(budget: Any, args: argparse.Namespace) -> int:
+    """Push the kernel folder to Kaggle, then remind the user to log the session afterwards."""
+    print(budget.push(Path(args.dir), args.datasets))
+    accelerator = budget.accelerator_of(Path(args.dir))
+    print(f"after the run: foremankit kaggle log --{accelerator}-hours <wall hours> --jobs-done <n>")
+    return 0
+
+
+def _required_jobs(args: argparse.Namespace) -> Path:
+    """The queue path, or a ConfigError that says the estimate needs one."""
+    if not args.jobs:
+        raise ConfigError("estimate needs a jobs file: foremankit kaggle estimate jobs.jsonl")
+    return Path(args.jobs)
+
+
+def _read_jobs(path: Path) -> list[dict[str, Any]]:
+    """The queue as dicts; a broken line is an error because the estimate would then lie."""
+    rows: list[dict[str, Any]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            raise ConfigError(f"{path.name} line {number}: {error}") from error
+    return rows
+
+
 COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
-            "sessions": cmd_sessions}
+            "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
 
 # ---------------------------------------------------------------- argument parser
@@ -356,6 +425,23 @@ def _add_code_quality_parsers(sub: Any) -> None:
     regress_parser.add_argument("--list", action="store_true", help="only list the affected entries")
 
 
+def _add_kaggle_parser(sub: Any) -> None:
+    kaggle = sub.add_parser("kaggle", help="free Kaggle hours: status | estimate <jobs.jsonl> | log | push")
+    kaggle.add_argument("action", nargs="?", default="status",
+                        choices=["status", "estimate", "log", "push"])
+    kaggle.add_argument("jobs", nargs="?", help="jobs JSONL for `estimate`")
+    kaggle.add_argument("--gpu-hours", type=float, default=0.0)
+    kaggle.add_argument("--tpu-hours", type=float, default=0.0)
+    kaggle.add_argument("--jobs-done", type=int, default=0)
+    kaggle.add_argument("--note", default="")
+    kaggle.add_argument("--dir", default="kaggle/kernel",
+                        help="kernel folder for `push` (kaggle/tpu for the TPU lane)")
+    kaggle.add_argument("--accelerator", default="gpu", choices=["gpu", "tpu"],
+                        help="which free tier `estimate` prices, and whose wall clock `push` logs")
+    kaggle.add_argument("--datasets", nargs="*", default=None,
+                        help="Kaggle datasets to attach (owner/slug), e.g. me/qwen27b-gguf me/foremankit-jobs")
+
+
 def _add_delegate_parser(sub: Any) -> None:
     delegate = sub.add_parser("delegate", help="manual delegate (use FOREMANKIT_DRY_RUN=1 to test routing)")
     delegate.add_argument("task")
@@ -381,6 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_basic_parsers(sub)
     _add_node_parsers(sub)
     _add_code_quality_parsers(sub)
+    _add_kaggle_parser(sub)
     _add_delegate_parser(sub)
     return parser
 

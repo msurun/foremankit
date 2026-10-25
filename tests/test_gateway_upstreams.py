@@ -548,3 +548,29 @@ def test_a_missing_or_broken_panel_file_means_auto(gateway_dirs: Path, tmp_path:
     if raw is not None:
         path.write_text(raw, encoding="utf-8")
     assert gateway.escalation_mode() == escalation.AUTO
+
+
+ROUTE_YAML = UPSTREAMS_YAML + "model_routes:\n  fm-deepseek-pro: {upstream: deepseek, tier: pro}\n"
+
+
+def test_a_model_route_pins_its_tier_regardless_of_the_panel_mode(gateway_dirs: Path):
+    """A route in model_routes resolves to its upstream with the tier pinned, whatever the orchestrator mode is."""
+    (gateway_dirs / "orchestrator.yaml").write_text(ROUTE_YAML, encoding="utf-8")
+    body = json.dumps({"model": "fm-deepseek-pro", "messages": []}).encode()
+    route = gateway.model_route(body, gateway.settings())
+    assert route is not None
+    assert route[0] == "deepseek" and route[1]["pin"] == "pro" and route[1]["name"] == "deepseek"
+
+
+def test_a_claude_55_model_is_not_a_route(gateway_dirs: Path):
+    """A normal Claude model id matches no route, so it follows the usual mode, local and cloud path."""
+    (gateway_dirs / "orchestrator.yaml").write_text(ROUTE_YAML, encoding="utf-8")
+    body = json.dumps({"model": "claude-sonnet-5-5", "messages": []}).encode()
+    assert gateway.model_route(body, gateway.settings()) is None
+
+
+def test_a_pinned_upstream_uses_its_tier_for_the_main_loop():
+    """A pinned upstream answers with its tier on every request, not with the escalation state."""
+    gateway._escalation.clear()
+    up = {"name": "deepseek", "models": {"sonnet": "flash", "haiku": "flash", "opus": "pro"}, "pin": "pro"}
+    assert gateway.main_loop_alias("deepseek", up, {"messages": []}) == "pro"

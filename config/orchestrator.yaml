@@ -83,12 +83,18 @@ trim:
 # Switch with `foremankit orchestrator use deepseek|gemini|claude|local` (state file orchestrator_mode), then restart
 # Claude Code with ANTHROPIC_BASE_URL pointing at this gateway (`foremankit orchestrator env`). The endpoint must speak
 # the Anthropic Messages API: DeepSeek has one; for Gemini run a translating proxy (LiteLLM) and put its URL here.
+# An OpenAI-compatible endpoint (Ollama, llama-server's /v1/chat/completions, vLLM) is used with `format: openai`,
+# which makes the gateway translate both ways; a rotating address comes from `url_env` instead of `url`.
 # Model ids and URLs below are placeholders to verify against the provider's current docs.
 #   ceiling: the highest repo sensitivity (.foremankit/sensitivity: normal|internal|private; missing = private) this
 #            provider may see. DeepSeek trains on data and sits abroad -> normal only. Never "private".
 #   provider: name of the provider in providers.yaml (defaults to the upstream name) - the single source of truth
 #             for model ids and prices. A provider rename is fixed there once (run `foremankit models`).
 #   models:  Claude alias the plugin asks for -> provider alias (pro / flash; side requests use the haiku one).
+#   url_env: name of an environment variable holding the address, for a service whose URL changes (a tunnel); used
+#            instead of `url`. Unset = the switch is refused with that variable named.
+#   format:  openai = the endpoint speaks /chat/completions and the gateway translates both ways; absent = it speaks
+#            the Anthropic Messages API itself.
 #   context: window in tokens (the session-length hint uses it). trim: optional gateway_trim overrides (default none).
 upstreams:
   deepseek:
@@ -111,6 +117,32 @@ upstreams:
     schema: {}
     models: {opus: pro, sonnet: flash, haiku: flash}
     escalation: {expensive: pro, errors: 2, clean: 6, min_expensive_s: 120}
+  kaggle:
+    # The free Kaggle GPU notebook (qwen3.8:27b) as the orchestrator once the Claude limit is spent: ~30 free GPU hours
+    # a week, 9 h per session. The Cloudflare quick tunnel changes with every session, so the address is read from the
+    # environment - the SAME variable as nodes.yaml, so one line serves both the orchestrator and the delegated pool:
+    #   FOREMANKIT_NODE_KAGGLE_LAN=https://<new-name>.trycloudflare.com     (root only, never .../v1)
+    # The notebook serves Ollama, which speaks the OpenAI API only; format: openai translates every request and answer
+    # into the Anthropic Messages API Claude Code expects (foremankit/openai_bridge.py).
+    url_env: FOREMANKIT_NODE_KAGGLE_LAN
+    key_env: KAGGLE_LLM_KEY
+    format: openai                   # absent = the endpoint already speaks the Anthropic Messages API
+    ceiling: internal                # our own account and disposable notebook, but the prompts DO leave this machine
+    context: 32000                   # must match OLLAMA_CONTEXT_LENGTH in the notebook: Ollama silently truncates more
+    tools_keep: *keep_tools
+    schema: {}
+    models: {opus: main, sonnet: main, haiku: main}   # provider aliases (providers.yaml `kaggle`) -> qwen3.8:27b
+    # No escalation block: the notebook has one model, so cheap/expensive would cost the same.
+
+# Per-session choice without the panel switch: a model name in the Claude Code picker goes to the upstream with its tier
+# pinned (tier = a provider alias of that upstream, or `main` for a single-model one). Stateless, so two sessions
+# can run different routes at once. Claude 5.5 names (claude-*-5-5) are not routes and always go to Anthropic.
+model_routes:
+  fm-deepseek-pro: {upstream: deepseek, tier: pro}
+  fm-deepseek-flash: {upstream: deepseek, tier: flash}
+  fm-gemini-pro: {upstream: gemini, tier: pro}
+  fm-gemini-flash: {upstream: gemini, tier: flash}
+  fm-kaggle: {upstream: kaggle, tier: main}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
 # (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:

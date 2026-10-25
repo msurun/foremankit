@@ -255,13 +255,16 @@ def _other_node(name: str, entry: dict[str, Any], lab: _Lab) -> Node:
 
 
 def _remote_endpoints(name: str, entry: dict[str, Any], lab: _Lab) -> list[Endpoint]:
-    """One endpoint per address of every kind of link; the 2nd, 3rd ... address of a kind get a #number."""
+    """One endpoint per address of every kind of link; the 2nd, 3rd ... address of a kind get a #number.
+    A node with its own `key_env` sends THAT key (no header when the variable is unset), so the shared lab key
+    never travels to a server outside the lab (e.g. a tunnelled notebook)."""
     port = int(lab.reader.get(entry, "port", DEFAULT_LLM_PORT))
+    key = os.environ.get(entry["key_env"]) if entry.get("key_env") else lab.key
     endpoints = []
     for kind in lab.link_kinds:
         for number, address in enumerate(_addresses(name, entry, kind), 1):
             label = f"{name}/{kind}" + (f"#{number}" if number > 1 else "")
-            endpoints.append(Endpoint(label, _url(address, port), lab.key))
+            endpoints.append(Endpoint(label, _url(address, port), key))
     return endpoints
 
 
