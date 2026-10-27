@@ -85,3 +85,17 @@ def test_writing_again_replaces_slot_entries_without_duplicates():
     assert len(names) == len(set(names))
     assert env_map(twice)["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"] == "Renamed"
     assert "ANTHROPIC_DEFAULT_HAIKU_MODEL" not in names
+
+
+def test_model_picker_block_renames_behaves_as_and_flags_replace():
+    cfg = {"model_picker": {"replace_built_in": True, "options": [{"model": "fm-gemini", "label": "Gemini", "behaves_as": "claude-sonnet-5-5"}]}}
+    block = install.model_picker_block(cfg)
+    assert block == {"options": [{"model": "fm-gemini", "label": "Gemini", "behavesAs": "claude-sonnet-5-5"}], "replaceBuiltInOptions": True}
+    assert install.model_picker_block({}) == {}
+
+
+def test_merged_claude_settings_sets_and_removes_model_picker_keeping_other_keys():
+    block = {"options": [{"model": "x"}], "replaceBuiltInOptions": True}
+    on = install.merged_claude_settings({"env": {"A": "1"}}, block)
+    assert on == {"env": {"A": "1"}, "modelPicker": block}
+    assert install.merged_claude_settings(on, {}) == {"env": {"A": "1"}}

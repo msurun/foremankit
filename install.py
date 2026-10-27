@@ -174,6 +174,22 @@ def picker_env(picker: dict) -> dict:
     return env
 
 
+def model_picker_block(cfg: dict) -> dict:
+    """The Claude Code `modelPicker` settings value built from orchestrator.yaml `model_picker:` ({} if absent)."""
+    spec = cfg.get("model_picker") or {}
+    options = [{("behavesAs" if key == "behaves_as" else key): value for key, value in row.items()}
+               for row in spec.get("options") or []]
+    return {"options": options, "replaceBuiltInOptions": bool(spec.get("replace_built_in"))} if options else {}
+
+
+def merged_claude_settings(data: dict, block: dict) -> dict:
+    """Return `data` with `modelPicker` set to `block`, or without the key when `block` is empty."""
+    merged = {key: value for key, value in data.items() if key != "modelPicker"}
+    if block:
+        merged["modelPicker"] = block
+    return merged
+
+
 def picker_settings(cfg: dict) -> tuple[str, dict]:
     """Model id of the picker's custom entry and the picker env, from orchestrator.yaml `picker:` (env empty if absent)."""
     picker = cfg.get("picker") or {}
@@ -1050,6 +1066,7 @@ class Installer:
                         lambda data: self.merged_vscode_settings(data, base_url, model_id, False, bool(wanted), extra))
         if wanted:
             self.write_json(folder / "tasks.json", lambda data: self.merged_vscode_tasks(data, wanted, False, (TASK_SERVER,)))
+        self.write_json(CLAUDE_HOME / "settings.json", lambda data: merged_claude_settings(data, model_picker_block(cfg)))
         self.register_logon_task()
 
     def disable_router_mode(self) -> None:
@@ -1061,6 +1078,8 @@ class Installer:
         base_url = f"http://127.0.0.1:{cfg.get('port', 8081)}"
         model_id = (cfg.get("local_models") or ["claude-sonnet-5"])[0]
         self.unregister_logon_task()
+        if (CLAUDE_HOME / "settings.json").exists():
+            self.write_json(CLAUDE_HOME / "settings.json", lambda data: merged_claude_settings(data, {}))
         folder = self.vscode_user_dir()
         settings, tasks = folder / "settings.json", folder / "tasks.json"
         if settings.exists():

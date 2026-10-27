@@ -142,17 +142,22 @@ model_routes:
   fm-deepseek: {upstream: deepseek}               # tier from the panel switch
   fm-gemini: {upstream: gemini}                   # tier from the panel switch
   fm-kaggle: {upstream: kaggle, tier: main}
-  # The Fable slot is re-labelled "DeepSeek" by `picker:` below and sends this old id.
-  claude-opus-5: {upstream: deepseek}             # "DeepSeek" slot -> tier from the panel switch
   # Local LLM (claude-sonnet-5) lives in local_models. The 5.5 ids are NOT listed -> they stay on Anthropic.
 
-# The Claude Code picker while the router is on (external preset). Opus 5.5, Sonnet 5.5, Haiku 5.5 and Default are left
-# alone and stay on Anthropic. Two entries are re-labelled for external providers: the Fable slot ("DeepSeek") and the
-# custom entry ("Gemini"). Kaggle: type /model fm-kaggle; local llama.cpp: the "Sonnet 5" entry (claude-sonnet-5).
-# Other legacy entries (Opus 5 = DeepSeek too) keep their native label. Written to the VS Code settings by install.py.
-picker:
-  FABLE:  {model: claude-opus-5, name: "DeepSeek"}
-  custom: {model: fm-gemini, name: "Gemini"}
+# The Claude Code /model picker while the router is on (external preset): install.py writes this as `modelPicker` into
+# ~/.claude/settings.json and removes it when the router turns off. replace_built_in hides the built-in lineup, so the
+# picker shows Default + exactly these rows: 3 Anthropic models and 4 external providers (DeepSeek/Gemini tier comes
+# from the panel selectors). `behaves_as` is the model whose capabilities (context window) the row is assumed to have.
+model_picker:
+  replace_built_in: true
+  options:
+    - {model: claude-opus-5-5, label: "Opus 5.5", description: "Anthropic"}
+    - {model: claude-sonnet-5-5, label: "Sonnet 5.5", description: "Anthropic"}
+    - {model: claude-haiku-5-5, label: "Haiku 5.5", description: "Anthropic"}
+    - {model: fm-deepseek, label: "DeepSeek", description: "External (model: panel selector)", behaves_as: claude-sonnet-5-5}
+    - {model: fm-gemini, label: "Gemini", description: "External (model: panel selector)", behaves_as: claude-sonnet-5-5}
+    - {model: fm-kaggle, label: "Kaggle", description: "External, Qwen on Kaggle (32k context)", behaves_as: claude-sonnet-5-5}
+    - {model: claude-sonnet-5, label: "Local LLM", description: "llama.cpp on this machine", behaves_as: claude-sonnet-5-5}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
 # (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:
