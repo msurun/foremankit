@@ -306,8 +306,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="issues"></div>
 <h3>Who orchestrates Claude Code</h3>
 <div id="presetChoice"></div>
-<div class="info" id="escalationRow" style="display:none"><b>Main loop tier</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
-<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Set the tier of a provider its tier with the switch above. External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
+<div class="info" id="escalationRow" style="display:none"><b>Model per provider (DeepSeek, Gemini)</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
+<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Choose the model of DeepSeek and Gemini with the selectors above (auto = flash, pro after errors). External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
 <h3>Helpers (delegation)</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
 <details><summary class="info">Which helpers</summary>
@@ -513,7 +513,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  function showEscalation(s) {
   const prices = s.prices || {};
   const mode = (s.preset.state || {}).mode || '';
-  $('escalationRow').style.display = mode === 'claude' || mode === 'local' ? 'none' : 'block';
+  $('escalationRow').style.display = mode === 'claude' ? 'none' : 'block';
   const box = $('escalationTiers');
   const providers = prices.escalation || [];
   const key = providers.map((p) => p.provider + ':' + p.control).join(',');
