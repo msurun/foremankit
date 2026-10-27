@@ -1,7 +1,7 @@
 """Regression guard for the real config/orchestrator.yaml model wiring.
 
-The Claude Code picker exposes four providers (Local / Kaggle / DeepSeek / Gemini)
-through the four native tier slots. DeepSeek and Gemini carry no static tier here:
+The Claude Code picker keeps the Anthropic 5.5 models and adds DeepSeek (Fable slot)
+and Gemini (custom entry); Kaggle is typed as fm-kaggle. DeepSeek and Gemini carry no static tier here:
 the tier (auto / flash / pro; gemini also lite31) is chosen per provider in the
 panel. Kaggle is a single model. Local llama.cpp is the `local_models` entry and
 the default new-chat model. The 5.5 ids must stay unrouted so they keep going to
@@ -21,9 +21,10 @@ CONFIG = Path(__file__).resolve().parent.parent / "config" / "orchestrator.yaml"
 # The old Claude ids the picker slots are wired to -> (upstream, tier). A None tier
 # means the tier is dynamic (chosen per provider in the panel, not pinned here).
 PROVIDER_ROUTES = {
-    "claude-opus-5": ("deepseek", None),        # "DeepSeek" slot
-    "claude-sonnet-4-6": ("gemini", None),      # "Gemini" slot
-    "claude-fable-5": ("kaggle", "main"),       # "Kaggle" slot
+    "claude-opus-5": ("deepseek", None),        # re-labelled Fable slot "DeepSeek"
+    "fm-deepseek": ("deepseek", None),
+    "fm-gemini": ("gemini", None),              # custom picker entry "Gemini"
+    "fm-kaggle": ("kaggle", "main"),            # typed in /model
 }
 
 # "Local LLM" is the local llama.cpp entry: it must live in local_models, not model_routes.
@@ -32,13 +33,12 @@ LOCAL_ID = "claude-sonnet-5"
 # The real 5.5 ids must stay unrouted so they keep going to Anthropic.
 REAL_55_IDS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 
-# Router ON: each picker slot (the four tier slots) is re-pointed to a provider and given its name.
+# Router ON: only the Fable slot and the custom entry are re-pointed; Opus/Sonnet/Haiku stay Anthropic.
 PICKER_SLOTS = {
-    "OPUS": ("claude-opus-5", "DeepSeek"),
-    "SONNET": ("claude-sonnet-4-6", "Gemini"),
-    "HAIKU": ("claude-fable-5", "Kaggle"),
-    "FABLE": ("claude-sonnet-5", "Local LLM"),
+    "FABLE": ("claude-opus-5", "DeepSeek"),
+    "custom": ("fm-gemini", "Gemini"),
 }
+NATIVE_SLOTS = ("OPUS", "SONNET", "HAIKU")
 
 
 def _config() -> dict:
@@ -83,3 +83,15 @@ def test_picker_slots_name_every_provider():
         assert entry is not None, f"picker slot '{slot}' is missing"
         assert entry.get("model") == model_id, f"picker '{slot}' should point at {model_id}, got {entry}"
         assert entry.get("name") == name, f"picker '{slot}' should be named {name!r}, got {entry}"
+
+
+def test_anthropic_slots_are_not_overridden():
+    picker = _config().get("picker") or {}
+    for slot in NATIVE_SLOTS:
+        assert slot not in picker, f"picker slot '{slot}' must stay native (Anthropic)"
+
+
+def test_legacy_ids_do_not_silently_route_externally():
+    routes = _config().get("model_routes") or {}
+    for model_id in ("claude-sonnet-4-6", "claude-fable-5"):
+        assert model_id not in routes

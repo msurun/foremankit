@@ -142,23 +142,17 @@ model_routes:
   fm-deepseek: {upstream: deepseek}               # tier from the panel switch
   fm-gemini: {upstream: gemini}                   # tier from the panel switch
   fm-kaggle: {upstream: kaggle, tier: main}
-  # The 4 picker slots are wired to these old ids (re-labelled by `picker:` below).
+  # The Fable slot is re-labelled "DeepSeek" by `picker:` below and sends this old id.
   claude-opus-5: {upstream: deepseek}             # "DeepSeek" slot -> tier from the panel switch
-  claude-sonnet-4-6: {upstream: gemini}           # "Gemini" slot   -> tier from the panel switch
-  claude-fable-5: {upstream: kaggle, tier: main}  # "Kaggle" slot   (VERIFY the exact id Claude Code sends)
-  # "Local LLM" (claude-sonnet-5) lives in local_models. The 5.5 ids are NOT listed -> they stay on Anthropic.
+  # Local LLM (claude-sonnet-5) lives in local_models. The 5.5 ids are NOT listed -> they stay on Anthropic.
 
-# The Claude Code picker while the router is on (external preset): each native slot (Sonnet, Haiku, Opus, Fable) is
-# re-pointed to one of the four providers and shows its name. Local llama.cpp is also the default new-chat model
-# (claude-sonnet-5 in local_models). Off (claude preset) the picker shows the original models again. Written to the
-# VS Code settings when the router turns on (install.py picker_env).
+# The Claude Code picker while the router is on (external preset). Opus 5.5, Sonnet 5.5, Haiku 5.5 and Default are left
+# alone and stay on Anthropic. Two entries are re-labelled for external providers: the Fable slot ("DeepSeek") and the
+# custom entry ("Gemini"). Kaggle: type /model fm-kaggle; local llama.cpp: the "Sonnet 5" entry (claude-sonnet-5).
+# Other legacy entries (Opus 5 = DeepSeek too) keep their native label. Written to the VS Code settings by install.py.
 picker:
-  # Router ON: the 4 tier slots name the 4 providers. The 5.5 ids are NOT re-pointed -> they stay on Anthropic and are
-  # reached by typing /model (claude-opus-5-5 / claude-sonnet-5-5 / claude-haiku-5-5).
-  OPUS:   {model: claude-opus-5, name: "DeepSeek"}
-  SONNET: {model: claude-sonnet-4-6, name: "Gemini"}
-  HAIKU:  {model: claude-fable-5, name: "Kaggle"}
-  FABLE:  {model: claude-sonnet-5, name: "Local LLM"}
+  FABLE:  {model: claude-opus-5, name: "DeepSeek"}
+  custom: {model: fm-gemini, name: "Gemini"}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
 # (hooks/orchestrator_guard.py), e.g. exports of the process historian. Examples:

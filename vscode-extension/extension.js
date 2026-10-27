@@ -307,7 +307,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <h3>Who orchestrates Claude Code</h3>
 <div id="presetChoice"></div>
 <div class="info" id="escalationRow" style="display:none"><b>Main loop tier</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
-<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; pick the provider in the Claude Code model picker (DeepSeek, Gemini, Kaggle, Local LLM) and set its tier with the switch above. External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
+<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Set the tier of a provider its tier with the switch above. External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
 <h3>Helpers (delegation)</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
 <details><summary class="info">Which helpers</summary>
