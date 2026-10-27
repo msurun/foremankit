@@ -199,7 +199,7 @@ class Panel {
       fixModel: ['fix-model', '--name', name, '--model', model],
       orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
-      escalationSet: ['escalation-set', '--name', name],
+      escalationSet: ['escalation-set', '--name', name, '--model', model],
       workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
       role: ['role', role],
@@ -306,8 +306,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="issues"></div>
 <h3>Who orchestrates Claude Code</h3>
 <div id="presetChoice"></div>
-<div class="info" id="escalationRow" style="display:none"><label>Main loop tier <select id="escalationMode" style="width:auto"></select></label> <span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; flash / pro = pinned until you switch back.</div>
-<div class="info">Claude = your subscription. Local = the model on this PC. DeepSeek / Gemini = an external API for when the Claude limit is spent (needs the API key in .env; a folder above the provider's sensitivity ceiling is refused). The panel sets router, role and direct mode for you.</div>
+<div class="info" id="escalationRow" style="display:none"><b>Main loop tier</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
+<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; pick the provider in the Claude Code model picker (DeepSeek, Gemini, Kaggle, Local LLM) and set its tier with the switch above. External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
 <h3>Helpers (delegation)</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
 <details><summary class="info">Which helpers</summary>
@@ -514,14 +514,23 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   const prices = s.prices || {};
   const mode = (s.preset.state || {}).mode || '';
   $('escalationRow').style.display = mode === 'claude' || mode === 'local' ? 'none' : 'block';
-  const sel = $('escalationMode');
-  const names = (prices.modes || []).map((m) => m.name).join(',');
-  if (sel.dataset.names !== names) {
-   sel.innerHTML = '';
-   for (const m of prices.modes || []) { const o = document.createElement('option'); o.value = m.name; o.textContent = m.label; sel.appendChild(o); }
-   sel.dataset.names = names;
+  const box = $('escalationTiers');
+  const providers = prices.escalation || [];
+  const key = providers.map((p) => p.provider + ':' + p.control).join(',');
+  if (box.dataset.key !== key) {
+   box.innerHTML = '';
+   for (const p of providers) {
+    const label = document.createElement('label'); label.className = 'info'; label.style.marginRight = '10px';
+    label.appendChild(document.createTextNode(p.provider + ' '));
+    const sel = document.createElement('select');
+    sel.dataset.provider = p.provider;
+    for (const m of p.modes || []) { const o = document.createElement('option'); o.value = m.name; o.textContent = m.label; sel.appendChild(o); }
+    sel.value = p.control || 'auto';
+    sel.onchange = () => send({ type: 'config', action: 'escalationSet', name: sel.dataset.provider, model: sel.value });
+    label.appendChild(sel); box.appendChild(label);
+   }
+   box.dataset.key = key;
   }
-  if (document.activeElement !== sel) sel.value = prices.control || 'auto';
   const t = prices.tier;
   $('escalationNow').textContent = t ? 'now: ' + t.alias + ' (' + t.tier + ')' : 'no request yet';
  }
@@ -621,7 +630,6 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
- $('escalationMode').onchange = () => send({ type: 'config', action: 'escalationSet', name: $('escalationMode').value });
  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };

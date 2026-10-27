@@ -509,45 +509,49 @@ def failing_history() -> dict:
 
 
 def test_a_pro_switch_pins_the_main_loop_to_the_expensive_alias(gateway_dirs: Path, tmp_path: Path):
-    """{"mode": "pro"} in the panel file sends the very next clean turn to the expensive alias."""
+    """{"deepseek": "pro"} in the panel file sends the very next clean turn straight to the pro alias."""
     reset_escalation_state()
-    write_escalation_mode(tmp_path / "state", '{"mode": "pro"}')
-    alias = gateway.main_loop_alias("deepseek", escalation_policy(), clean_history())
-    assert alias == "pro"
-    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
-    assert written["tier"] == "expensive" and written["control"] == "pro"
+    write_escalation_mode(tmp_path / "state", '{"deepseek": "pro"}')
+    assert gateway.main_loop_alias("deepseek", escalation_policy(), clean_history()) == "pro"
 
 
 def test_a_flash_switch_overrides_an_escalated_main_loop_immediately(gateway_dirs: Path, tmp_path: Path):
-    """After auto escalated to pro on tool errors, {"mode": "flash"} brings the next call straight back to flash."""
+    """After auto escalated to pro on tool errors, {"deepseek": "flash"} brings the next call straight back to flash."""
     reset_escalation_state()
     up = escalation_policy()
     assert gateway.main_loop_alias("deepseek", up, failing_history()) == "flash"
     assert gateway.main_loop_alias("deepseek", up, failing_history()) == "pro"
-    write_escalation_mode(tmp_path / "state", '{"mode": "flash"}')
+    write_escalation_mode(tmp_path / "state", '{"deepseek": "flash"}')
     assert gateway.main_loop_alias("deepseek", up, failing_history()) == "flash"
-    written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
-    assert written["tier"] == "cheap" and written["control"] == "flash"
 
 
 def test_going_back_to_auto_restarts_the_main_loop_on_the_cheap_alias(gateway_dirs: Path, tmp_path: Path):
     """Leaving the pro pin for auto starts from a fresh state, so a clean turn runs on flash, not on pro."""
     reset_escalation_state()
-    write_escalation_mode(tmp_path / "state", '{"mode": "pro"}')
+    write_escalation_mode(tmp_path / "state", '{"deepseek": "pro"}')
     assert gateway.main_loop_alias("deepseek", escalation_policy(), clean_history()) == "pro"
-    write_escalation_mode(tmp_path / "state", '{"mode": "auto"}')
+    write_escalation_mode(tmp_path / "state", '{"deepseek": "auto"}')
     assert gateway.main_loop_alias("deepseek", escalation_policy(), clean_history()) == "flash"
     written = json.loads((tmp_path / "state" / gateway.TIER_FILE).read_text(encoding="utf-8"))
     assert written["control"] == "auto"
 
 
-@pytest.mark.parametrize("raw", [None, "{not json", '{"mode": "sideways"}'])
+def test_a_lite31_pin_is_used_directly_for_that_provider(gateway_dirs: Path, tmp_path: Path):
+    """Gemini's lite31 pin short-circuits to the lite31 alias without touching the hysteresis."""
+    reset_escalation_state()
+    write_escalation_mode(tmp_path / "state", '{"gemini": "lite31"}')
+    up = {"name": "gemini", "models": {"opus": "pro", "sonnet": "flash", "haiku": "flash"},
+          "escalation": {"expensive": "pro"}}
+    assert gateway.main_loop_alias("gemini", up, clean_history()) == "lite31"
+
+
+@pytest.mark.parametrize("raw", [None, "{not json", '{"deepseek": "sideways"}'])
 def test_a_missing_or_broken_panel_file_means_auto(gateway_dirs: Path, tmp_path: Path, raw):
     """No file, invalid JSON or an unknown mode all fall back to auto, so the gateway behaves as before."""
     path = tmp_path / "state" / escalation.MODE_FILE
     if raw is not None:
         path.write_text(raw, encoding="utf-8")
-    assert gateway.escalation_mode() == escalation.AUTO
+    assert gateway.escalation_mode("deepseek") == escalation.AUTO
 
 
 ROUTE_YAML = UPSTREAMS_YAML + "model_routes:\n  fm-deepseek-pro: {upstream: deepseek, tier: pro}\n"

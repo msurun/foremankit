@@ -1,0 +1,85 @@
+"""Regression guard for the real config/orchestrator.yaml model wiring.
+
+The Claude Code picker exposes four providers (Local / Kaggle / DeepSeek / Gemini)
+through the four native tier slots. DeepSeek and Gemini carry no static tier here:
+the tier (auto / flash / pro; gemini also lite31) is chosen per provider in the
+panel. Kaggle is a single model. Local llama.cpp is the `local_models` entry and
+the default new-chat model. The 5.5 ids must stay unrouted so they keep going to
+Anthropic.
+
+This test reads the ACTUAL shipped config (not a fixture), so it fails the moment
+the wiring drifts from the picker the plugin really shows.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from foremankit.config import _read_yaml
+
+CONFIG = Path(__file__).resolve().parent.parent / "config" / "orchestrator.yaml"
+
+# The old Claude ids the picker slots are wired to -> (upstream, tier). A None tier
+# means the tier is dynamic (chosen per provider in the panel, not pinned here).
+PROVIDER_ROUTES = {
+    "claude-opus-5": ("deepseek", None),        # "DeepSeek" slot
+    "claude-sonnet-4-6": ("gemini", None),      # "Gemini" slot
+    "claude-fable-5": ("kaggle", "main"),       # "Kaggle" slot
+}
+
+# "Local LLM" is the local llama.cpp entry: it must live in local_models, not model_routes.
+LOCAL_ID = "claude-sonnet-5"
+
+# The real 5.5 ids must stay unrouted so they keep going to Anthropic.
+REAL_55_IDS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
+
+# Router ON: each picker slot (the four tier slots) is re-pointed to a provider and given its name.
+PICKER_SLOTS = {
+    "OPUS": ("claude-opus-5", "DeepSeek"),
+    "SONNET": ("claude-sonnet-4-6", "Gemini"),
+    "HAIKU": ("claude-fable-5", "Kaggle"),
+    "FABLE": ("claude-sonnet-5", "Local LLM"),
+}
+
+
+def _config() -> dict:
+    return _read_yaml(CONFIG)
+
+
+def test_every_picker_slot_is_wired_to_a_provider():
+    cfg = _config()
+    routes = cfg.get("model_routes") or {}
+    for model_id, (upstream_name, tier) in PROVIDER_ROUTES.items():
+        route = routes.get(model_id)
+        assert route is not None, f"{model_id} is missing from model_routes (it would fall through to the cloud)"
+        assert route.get("upstream") == upstream_name, f"{model_id} should go to {upstream_name}, got {route}"
+        if tier is None:
+            assert route.get("tier") is None, f"{model_id} must not pin a static tier (it is chosen in the panel)"
+        else:
+            assert route.get("tier") == tier, f"{model_id} should pin tier {tier}, got {route}"
+
+
+def test_local_llama_is_the_default_entry_not_a_route():
+    cfg = _config()
+    routes = cfg.get("model_routes") or {}
+    local_models = cfg.get("local_models") or []
+    assert LOCAL_ID in local_models, f"{LOCAL_ID} must be the local llama.cpp entry in local_models"
+    assert LOCAL_ID not in routes, f"{LOCAL_ID} must not also be a model_route (it is the local entry)"
+
+
+def test_real_55_ids_are_not_rewired():
+    cfg = _config()
+    routes = cfg.get("model_routes") or {}
+    local_models = cfg.get("local_models") or []
+    for model_id in REAL_55_IDS:
+        assert model_id not in routes, f"{model_id} must not be a model_route (it should stay on Anthropic)"
+        assert model_id not in local_models, f"{model_id} must not be in local_models"
+
+
+def test_picker_slots_name_every_provider():
+    cfg = _config()
+    picker = cfg.get("picker") or {}
+    for slot, (model_id, name) in PICKER_SLOTS.items():
+        entry = picker.get(slot)
+        assert entry is not None, f"picker slot '{slot}' is missing"
+        assert entry.get("model") == model_id, f"picker '{slot}' should point at {model_id}, got {entry}"
+        assert entry.get("name") == name, f"picker '{slot}' should be named {name!r}, got {entry}"

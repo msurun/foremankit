@@ -605,27 +605,29 @@ _escalation: dict[str, dict[str, Any]] = {}   # mode -> escalation state (cheap/
 _escalation_control: dict[str, str] = {}      # mode -> the panel switch that in-memory state belongs to
 
 
-def escalation_mode() -> str:
-    """The panel switch for the external main loop: auto (hysteresis), flash (always cheap) or pro (always
-    expensive). A missing or broken file means auto, so the gateway behaves as before."""
+def escalation_mode(provider: str) -> str:
+    """The per-provider panel switch for the main loop: auto (hysteresis) or a pinned provider alias (flash / pro /
+    lite31). A missing or broken file, or a provider without an entry, means auto, so the gateway behaves as before."""
     try:
         raw = json.loads((state_dir() / escalation.MODE_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return escalation.AUTO
-    return escalation.mode_of(raw.get("mode") if isinstance(raw, dict) else None)
+    return escalation.mode_of(raw.get(provider)) if isinstance(raw, dict) else escalation.AUTO
 
 
 def main_loop_alias(mode: str, up: dict[str, Any], data: dict[str, Any]) -> str:
-    """The provider alias for the main loop: cheap by default, switched to the expensive one after repeated tool
-    errors and back down after a clean run (hysteresis, foremankit/escalation.py), unless the panel switch pins a
-    tier. No `escalation` block = as configured."""
+    """The provider alias for the main loop: the panel's per-provider pin when set, else cheap by default switched to
+    the expensive one after repeated tool errors (hysteresis, foremankit/escalation.py). No `escalation` block = as
+    configured."""
     if up.get("pin"):
         return up["pin"]
     base = upstream.upstream_model(up, "sonnet")
+    control = escalation_mode(mode)
+    if control != escalation.AUTO:
+        return control                    # the panel pinned a provider alias (flash / pro / lite31)
     policy = up.get("escalation")
     if not policy:
         return base
-    control = escalation_mode()
     state = next_escalation_state(mode, control, policy, data)
     alias = policy.get("expensive", base) if state["tier"] == escalation.EXPENSIVE_TIER else base
     write_tier(mode, state["tier"], alias, control)
@@ -815,15 +817,21 @@ def model_route(body: bytes, cfg: dict[str, Any]) -> tuple[str, dict[str, Any]] 
     return name, {**declared, "name": name, "pin": str(route.get("tier", ""))}
 
 
+def external_target(body: bytes, cfg: dict):
+    """Return the upstream a request must go to (model route or external mode), else None."""
+    routed = model_route(body, cfg)
+    if routed:
+        return routed
+    external = external_mode(cfg)
+    return external if external and serves_picker_entry(body, cfg) else None
+
+
 async def handle(request: Request) -> Response:
     """Forward one request to the local llama-server or the cloud and stream the answer back."""
     body, cfg = await request.body(), settings()
-    routed = model_route(body, cfg)
-    if routed:
-        return await handle_external(request, body, cfg, routed)
-    external = external_mode(cfg)
-    if external and serves_picker_entry(body, cfg):
-        return await handle_external(request, body, cfg, external)
+    target = external_target(body, cfg)
+    if target:
+        return await handle_external(request, body, cfg, target)
     data = parse_body(body)
     model = data.get("model") if data else None
     call = Call(request.url.path, model, model in cfg["local_models"], time.time())

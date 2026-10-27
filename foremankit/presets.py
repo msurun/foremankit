@@ -14,13 +14,22 @@ ROLE_ORCHESTRATOR = "orchestrator"
 ROLE_WORKER = "worker"
 ROLE_BOTH = "both"
 
+# The external preset is router on. Which external model serves a window is
+# chosen in the Claude Code picker (fm-* names), not here.
+PRESET_EXTERNAL = "external"
+
 # Order matters: "direct" goes last because it makes the VS Code window reload.
 STEP_ORDER = ("mode", "role", "direct")
 
 
-def preset_names(upstreams: dict) -> list[str]:
-    """Return the panel choices: the two built-ins first, then each upstream name."""
-    return [MODE_CLAUDE, MODE_LOCAL, *upstreams]
+def preset_names() -> list[str]:
+    """Return the two panel choices: Claude direct, or external through the router."""
+    return [MODE_CLAUDE, PRESET_EXTERNAL]
+
+
+def preset_mode(name: str) -> str:
+    """Return the orchestrator mode that preset `name` sets (checked before anything changes)."""
+    return MODE_CLAUDE if name == MODE_CLAUDE else _wanted_settings(name, {"role": ROLE_WORKER})["mode"]
 
 
 def preset_plan(name: str, current: dict) -> dict:
@@ -35,20 +44,18 @@ def preset_plan(name: str, current: dict) -> dict:
     return {
         "steps": steps,
         "reload": any(step["action"] == "direct" for step in steps),
-        "needs_server": name == MODE_LOCAL and not current["server_up"],
+        "needs_server": name == PRESET_EXTERNAL and not current["server_up"],
         "summary": _summarise(steps),
     }
 
 
-def current_preset(current: dict, upstreams: dict) -> str:
-    """Return the preset name that matches `current` state, or "custom" if none does."""
-    mode = current["mode"]
-    role = current["role"]
+def current_preset(current: dict) -> str:
+    """Return "claude" or "external" for the matching state, or "custom" if neither."""
     if current["direct"]:
-        return MODE_CLAUDE if mode == MODE_CLAUDE else "custom"
-    if mode == MODE_LOCAL:
-        return MODE_LOCAL if role in (ROLE_ORCHESTRATOR, ROLE_BOTH) else "custom"
-    return mode if mode in upstreams else "custom"
+        return MODE_CLAUDE if current["mode"] == MODE_CLAUDE else "custom"
+    if current["mode"] == MODE_LOCAL and current["role"] in (ROLE_ORCHESTRATOR, ROLE_BOTH):
+        return PRESET_EXTERNAL
+    return "custom"
 
 
 def issues(state: dict) -> list[dict]:
@@ -72,13 +79,12 @@ def _wanted_settings(name: str, current: dict) -> dict:
     """Return {"mode", "role", "direct"} that preset `name` asks for."""
     if name == MODE_CLAUDE:
         return {"mode": MODE_CLAUDE, "role": ROLE_WORKER, "direct": True}
-    if name == MODE_LOCAL:
-        return {"mode": MODE_LOCAL, "role": _local_role(current["role"]), "direct": False}
-    # Any other name is an upstream provider: it only changes the mode.
-    return {"mode": name, "role": current["role"], "direct": False}
+    if name == PRESET_EXTERNAL:
+        return {"mode": MODE_LOCAL, "role": _external_role(current["role"]), "direct": False}
+    raise ValueError(f"unknown preset: {name!r}")
 
 
-def _local_role(current_role: str) -> str:
+def _external_role(current_role: str) -> str:
     """Keep the orchestrator role when it is already set, otherwise serve both."""
     return ROLE_ORCHESTRATOR if current_role == ROLE_ORCHESTRATOR else ROLE_BOTH
 
@@ -132,7 +138,7 @@ def _router_needed_issue(state: dict) -> dict | None:
         "id": "router_needed",
         "text": "This orchestrator reaches its model only through the router, "
         "which is not in use.",
-        "fix": f"apply-preset {state['mode']}",
+        "fix": f"apply-preset {PRESET_EXTERNAL}",
     }
 
 

@@ -692,33 +692,55 @@ def prices_status(now: float | None = None) -> dict[str, Any]:
         phases = {model["phase"] for model in models.values() if model["phase"]}
         rows.append({"provider": name, "phase": next(iter(phases), None), "next_change": next(
             (model["next_change"] for model in models.values() if model["next_change"]), None), "models": models})
-    return {"providers": rows, "tier": read_tier(now), "control": escalation_control(), "modes": escalation_modes()}
+    return {"providers": rows, "tier": read_tier(now),
+            "escalation": [{"provider": name, "control": escalation_control(name), "modes": escalation_modes(name)}
+                           for name in escalation_providers()]}
 
 
-def escalation_modes() -> list[dict[str, str]]:
-    """The options of the panel's escalation switch: auto (the gateway decides) or a pinned flash / pro."""
-    return [{"name": escalation.AUTO, "label": "auto (flash -> pro on errors)"},
-            {"name": escalation.FLASH, "label": "always flash (cheap)"},
-            {"name": escalation.PRO, "label": "always pro (expensive)"}]
+def escalation_providers() -> list[str]:
+    """The orchestrator upstreams with a tier choice (an `escalation` block): deepseek, gemini."""
+    upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
+    return [name for name, section in upstreams.items() if (section or {}).get("escalation")]
 
 
-def escalation_control() -> str:
-    """The escalation switch as saved (auto when the file is missing or broken)."""
+def escalation_aliases(provider: str) -> list[str]:
+    """The model aliases of `provider` in providers.yaml (its selectable tiers)."""
+    providers = _read_yaml(config_dir() / "providers.yaml").get("providers") or {}
+    upstreams = _read_yaml(config_dir() / "orchestrator.yaml").get("upstreams") or {}
+    section = providers.get(upstream_provider(provider, upstreams)) or {}
+    return list((section.get("models") or {}).keys())
+
+
+def escalation_modes(provider: str) -> list[dict[str, str]]:
+    """The tier options of the panel's per-provider switch: auto plus the provider's model aliases."""
+    options = [{"name": escalation.AUTO, "label": "auto (flash -> pro on errors)"}]
+    options.extend({"name": alias, "label": alias} for alias in escalation_aliases(provider))
+    return options
+
+
+def escalation_control(provider: str) -> str:
+    """The per-provider tier switch as saved (auto when the file is missing, broken or lacks the provider)."""
     try:
         saved = json.loads((state_dir() / escalation.MODE_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return escalation.AUTO
-    return escalation.mode_of(saved.get("mode") if isinstance(saved, dict) else None)
+    return escalation.mode_of(saved.get(provider)) if isinstance(saved, dict) else escalation.AUTO
 
 
-def set_escalation_control(mode: str) -> str:
-    """Pin the main loop's tier (`flash`, `pro`) or hand it back to the gateway (`auto`); the next request obeys it."""
+def set_escalation_control(provider: str, mode: str) -> str:
+    """Pin a provider's main-loop tier (its alias) or hand it back to the gateway (`auto`); the next request obeys it."""
     if mode not in escalation.MODES:
         raise ValueError(f"mode must be one of {', '.join(escalation.MODES)}")
+    path = state_dir() / escalation.MODE_FILE
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        loaded = {}
+    saved = loaded if isinstance(loaded, dict) else {}
+    saved[provider] = mode
     state_dir().mkdir(parents=True, exist_ok=True)
-    (state_dir() / escalation.MODE_FILE).write_text(json.dumps({"mode": mode, "time": time.time()}), encoding="utf-8")
-    return {"auto": "the gateway decides the tier again (starts on flash)",
-            "flash": "the main loop always uses flash", "pro": "the main loop always uses pro"}[mode]
+    path.write_text(json.dumps(saved, indent=1), encoding="utf-8")
+    return f"{provider} tier: {mode}"
 
 
 def upstream_provider(name: str, upstreams: dict[str, Any]) -> str:
@@ -742,7 +764,7 @@ def preset_status() -> dict[str, Any]:
     key_env = (upstreams.get(state["mode"]) or {}).get("key_env", "")
     problems = presets.issues({**state, "llama_installed": llama_installed(),
                                "key_missing": bool(key_env) and not os.getenv(key_env)})
-    return {"current": presets.current_preset(state, upstreams), "names": presets.preset_names(upstreams),
+    return {"current": presets.current_preset(state), "names": presets.preset_names(),
             "issues": problems + model_issues() + orchestrator_budget_issues(), "state": state}
 
 
@@ -767,9 +789,10 @@ def mark_folder(level: str, cwd: str = "") -> str:
 def plan_preset(name: str, cwd: str = "") -> dict[str, Any]:
     """What choosing preset `name` would change; refused (ValueError) when the key is missing or `cwd` is too sensitive."""
     settings = {**GATEWAY_DEFAULTS, **_read_yaml(config_dir() / "orchestrator.yaml")}
-    problem = upstream.check_switch(settings, name, Path(cwd or os.getcwd()))
+    mode = presets.preset_mode(name)
+    problem = upstream.check_switch(settings, mode, Path(cwd or os.getcwd()))
     if problem:
-        ceiling = ((settings.get("upstreams") or {}).get(name) or {}).get("ceiling")
+        ceiling = ((settings.get("upstreams") or {}).get(mode) or {}).get("ceiling")
         raise (SensitivityRefused(problem, ceiling) if ceiling and "sensitivity" in problem else ValueError(problem))
     return presets.preset_plan(name, preset_state())
 
@@ -1022,7 +1045,7 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
     return {
         "role": lambda: set_role(args.action or ""),
         "delegation-set": lambda: set_delegation(args.name or "all", args.action == "true"),
-        "escalation-set": lambda: set_escalation_control(args.name or escalation.AUTO),
+        "escalation-set": lambda: set_escalation_control(args.name, args.model),
         "worker-test": lambda: test_worker(args.name),
         "orchestrator": lambda: set_orchestrator(args.name),
         "fix-model": lambda: fix_model(args.name, args.model),

@@ -395,43 +395,31 @@ def test_orchestrator_mode_lists_upstreams_and_refuses_a_too_sensitive_folder(mo
     assert panel.orchestrator_mode_status()["mode"] == "deepseek"
 
 
-def test_apply_preset_changes_nothing_when_it_is_refused_and_puts_direct_last(monkeypatch, tmp_path: Path):
-    """A refused preset (private folder) touches no setting; an accepted one applies mode, role and direct in that order."""
+def test_apply_preset_external_sets_role_then_direct(monkeypatch, tmp_path: Path):
+    """The external preset sets the local role, then turns the router on (direct off), and reports reload."""
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("TEST_PANEL_KEY", "k")
-    (tmp_path / "orchestrator.yaml").write_text(
-        "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n", encoding="utf-8")
     calls: list[tuple] = []
+    monkeypatch.setattr(panel, "sync_default_model", lambda name: None)
     monkeypatch.setattr(panel, "direct_mode", lambda: True)
     monkeypatch.setattr(panel, "server_status", lambda: {"up": False})
     monkeypatch.setattr(panel, "port_open", lambda port: False)
     monkeypatch.setattr(panel, "set_role", lambda role: calls.append(("role", role)) or role)
     monkeypatch.setattr(panel, "set_direct_mode", lambda direct: calls.append(("direct", direct)) or "direct")
-    with pytest.raises(ValueError, match="private"):
-        panel.apply_preset("deepseek", str(tmp_path))
-    assert calls == [] and panel.upstream.active_mode() == "claude"
-    (tmp_path / ".foremankit").mkdir()
-    (tmp_path / ".foremankit" / "sensitivity").write_text("normal", encoding="utf-8")
-    result = panel.apply_preset("deepseek", str(tmp_path))
-    assert calls == [("direct", False)] and result["reload"] is True
-    assert panel.upstream.active_mode() == "deepseek"
+    result = panel.apply_preset("external", str(tmp_path))
+    assert calls == [("role", "both"), ("direct", False)] and result["reload"] is True
+    assert panel.upstream.active_mode() == "local"
 
 
-def test_sensitivity_refusal_names_the_level_the_user_could_declare_and_marking_unblocks_it(monkeypatch, tmp_path: Path):
-    """The panel answer for a too-sensitive folder carries `mark`; after mark_folder the same preset plans fine."""
+def test_plan_preset_external_is_not_refused_by_folder_sensitivity(monkeypatch, tmp_path: Path):
+    """The external preset runs locally, so a too-sensitive folder does not refuse it."""
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("TEST_PANEL_KEY", "k")
-    (tmp_path / "orchestrator.yaml").write_text(
-        "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n", encoding="utf-8")
     monkeypatch.setattr(panel, "direct_mode", lambda: True)
     monkeypatch.setattr(panel, "server_status", lambda: {"up": False})
     monkeypatch.setattr(panel, "port_open", lambda port: False)
-    refused = panel.guarded(panel.plan_preset, "deepseek", str(tmp_path))
-    assert refused["mark"] == "normal" and "private" in refused["error"]
-    panel.mark_folder("normal", str(tmp_path))
-    assert "error" not in panel.guarded(panel.plan_preset, "deepseek", str(tmp_path))
+    panel.mark_folder("private", str(tmp_path))
+    assert "error" not in panel.guarded(panel.plan_preset, "external", str(tmp_path))
     with pytest.raises(ValueError):
         panel.mark_folder("secret", str(tmp_path))
 
@@ -444,9 +432,9 @@ def test_default_model_follows_the_preset_and_the_users_own_choice_comes_back(mo
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     (tmp_path / "orchestrator.yaml").write_text("local_models: [claude-sonnet-5]\n", encoding="utf-8")
-    assert "claude-sonnet-5" in panel.sync_default_model("deepseek")
+    assert "claude-sonnet-5" in panel.sync_default_model("external")
     assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "claude-sonnet-5", "theme": "dark"}
-    assert panel.sync_default_model("gemini") == ""            # already ours: the backup of the user's value must survive
+    assert panel.sync_default_model("external") == ""          # already ours: the backup of the user's value must survive
     panel.sync_default_model("claude")
     assert json.loads(settings.read_text(encoding="utf-8")) == {"model": "sonnet", "theme": "dark"}
     assert panel.sync_default_model("claude") == ""
@@ -561,11 +549,11 @@ def test_a_used_up_orchestrator_budget_is_a_panel_issue_with_a_way_back_to_claud
 
 
 def test_escalation_pin_is_saved_and_read_back(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Pinning the main loop on `pro` writes the state file, keeps the mode and says so."""
+    """Pinning a provider on `pro` writes the state file, keeps the mode and says so."""
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
-    message = panel.set_escalation_control("pro")
+    message = panel.set_escalation_control("deepseek", "pro")
     assert (tmp_path / panel.escalation.MODE_FILE).is_file()
-    assert panel.escalation_control() == "pro"
+    assert panel.escalation_control("deepseek") == "pro"
     assert "pro" in message
 
 
@@ -573,18 +561,38 @@ def test_unknown_escalation_pin_is_rejected_and_writes_nothing(monkeypatch: pyte
     """A mode the switch does not offer raises ValueError and leaves no state file behind."""
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
     with pytest.raises(ValueError):
-        panel.set_escalation_control("bogus")
+        panel.set_escalation_control("deepseek", "bogus")
     assert not (tmp_path / panel.escalation.MODE_FILE).exists()
 
 
-def test_prices_status_reports_the_escalation_control_and_its_modes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """The switch starts on auto; after pinning flash the menu offers auto, flash and pro and shows flash in force."""
+def test_pinning_one_provider_leaves_another_on_auto(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """The per-provider switch is independent: pinning deepseek does not touch gemini."""
+    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
+    panel.set_escalation_control("deepseek", "pro")
+    assert panel.escalation_control("deepseek") == "pro"
+    assert panel.escalation_control("gemini") == "auto"
+
+
+def test_escalation_providers_are_the_upstreams_with_a_tier_choice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Only upstreams with an `escalation` block get a tier switch (kaggle, a single model, does not)."""
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path / "state"))
-    (tmp_path / "state").mkdir()
-    before = panel.prices_status()
-    assert before["control"] == "auto"
-    panel.set_escalation_control("flash")
-    after = panel.prices_status()
-    assert after["control"] == "flash"
-    assert [mode["name"] for mode in after["modes"]] == ["auto", "flash", "pro"]
+    (tmp_path / "orchestrator.yaml").write_text(
+        "upstreams:\n"
+        "  deepseek:\n    url: http://x\n    key_env: K\n    escalation: {expensive: pro}\n"
+        "  gemini:\n    url: http://x\n    key_env: K\n    escalation: {expensive: pro}\n"
+        "  kaggle:\n    url_env: X\n    key_env: K\n",
+        encoding="utf-8")
+    assert panel.escalation_providers() == ["deepseek", "gemini"]
+
+
+def test_escalation_modes_offer_auto_plus_the_provider_aliases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Gemini offers auto plus its three model aliases (flash, lite31, pro)."""
+    monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "orchestrator.yaml").write_text(
+        "upstreams:\n  gemini:\n    url: http://x\n    key_env: K\n    escalation: {expensive: pro}\n",
+        encoding="utf-8")
+    (tmp_path / "providers.yaml").write_text(
+        "providers:\n  gemini:\n    models:\n"
+        "      flash: {id: g-flash}\n      lite31: {id: g-lite}\n      pro: {id: g-pro}\n",
+        encoding="utf-8")
+    assert [m["name"] for m in panel.escalation_modes("gemini")] == ["auto", "flash", "lite31", "pro"]

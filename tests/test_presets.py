@@ -35,16 +35,14 @@ HEALTHY_CLAUDE_STATE = {
     "key_missing": False,
 }
 
-UPSTREAMS = ["openai", "ollama"]
+
+def test_preset_names_lists_claude_then_external():
+    names = presets.preset_names()
+
+    assert names == ["claude", "external"]
 
 
-def test_preset_names_lists_builtin_presets_before_upstreams():
-    names = presets.preset_names(UPSTREAMS)
-
-    assert names == ["claude", "local", "openai", "ollama"]
-
-
-@pytest.mark.parametrize("name", ["claude", "local", "openai"])
+@pytest.mark.parametrize("name", ["claude", "external"])
 def test_every_preset_from_claude_direct_returns_a_plan(name):
     plan = presets.preset_plan(name, CLAUDE_DIRECT_STATE)
 
@@ -52,7 +50,7 @@ def test_every_preset_from_claude_direct_returns_a_plan(name):
     assert isinstance(plan["summary"], list)
 
 
-@pytest.mark.parametrize("name", ["claude", "local", "openai"])
+@pytest.mark.parametrize("name", ["claude", "external"])
 def test_every_preset_from_router_state_returns_a_plan(name):
     plan = presets.preset_plan(name, ROUTER_LOCAL_STATE)
 
@@ -70,8 +68,8 @@ def test_claude_preset_switches_mode_role_and_direct():
     ]
 
 
-def test_local_preset_from_claude_direct_targets_local_both_via_router():
-    plan = presets.preset_plan("local", CLAUDE_DIRECT_STATE)
+def test_external_preset_from_claude_direct_targets_local_both_via_router():
+    plan = presets.preset_plan("external", CLAUDE_DIRECT_STATE)
 
     assert plan["steps"] == [
         {"action": "mode", "value": "local"},
@@ -80,16 +78,10 @@ def test_local_preset_from_claude_direct_targets_local_both_via_router():
     ]
 
 
-def test_local_preset_keeps_orchestrator_role_when_already_orchestrator():
-    plan = presets.preset_plan("local", {**ROUTER_LOCAL_STATE, "mode": "claude"})
+def test_external_preset_keeps_orchestrator_role_when_already_orchestrator():
+    plan = presets.preset_plan("external", {**ROUTER_LOCAL_STATE, "mode": "claude"})
 
     assert plan["steps"] == [{"action": "mode", "value": "local"}]
-
-
-def test_upstream_preset_sets_mode_and_keeps_role():
-    plan = presets.preset_plan("openai", ROUTER_LOCAL_STATE)
-
-    assert plan["steps"] == [{"action": "mode", "value": "openai"}]
 
 
 def test_direct_step_is_always_last_when_present():
@@ -106,9 +98,16 @@ def test_reload_is_true_when_a_direct_step_exists():
 
 
 def test_reload_is_false_when_no_direct_step_exists():
-    plan = presets.preset_plan("openai", ROUTER_LOCAL_STATE)
+    plan = presets.preset_plan("external", ROUTER_LOCAL_STATE)
 
     assert plan["reload"] is False
+
+
+def test_reload_is_true_when_leaving_claude_direct_for_external():
+    plan = presets.preset_plan("external", CLAUDE_DIRECT_STATE)
+
+    assert plan["steps"][-1] == {"action": "direct", "value": False}
+    assert plan["reload"] is True
 
 
 def test_preset_already_active_has_no_steps_and_summary_says_so():
@@ -118,21 +117,21 @@ def test_preset_already_active_has_no_steps_and_summary_says_so():
     assert plan["summary"] == ["Already active"]
 
 
-def test_local_needs_server_when_server_is_down():
-    plan = presets.preset_plan("local", CLAUDE_DIRECT_STATE)
+def test_external_needs_server_when_server_is_down():
+    plan = presets.preset_plan("external", CLAUDE_DIRECT_STATE)
 
     assert plan["needs_server"] is True
 
 
-def test_local_does_not_need_server_when_server_is_up():
+def test_external_does_not_need_server_when_server_is_up():
     running = dict(ROUTER_LOCAL_STATE, server_up=True)
 
-    plan = presets.preset_plan("local", running)
+    plan = presets.preset_plan("external", running)
 
     assert plan["needs_server"] is False
 
 
-def test_non_local_preset_never_needs_server():
+def test_claude_preset_never_needs_server():
     plan = presets.preset_plan("claude", CLAUDE_DIRECT_STATE)
 
     assert plan["needs_server"] is False
@@ -142,17 +141,17 @@ def test_non_local_preset_never_needs_server():
     ("current", "expected_name"),
     [
         (CLAUDE_DIRECT_STATE, "claude"),
-        (ROUTER_LOCAL_STATE, "local"),
+        (ROUTER_LOCAL_STATE, "external"),
         ({"direct": False, "mode": "local", "role": "both", "server_up": True,
-          "router_up": True}, "local"),
+          "router_up": True}, "external"),
         ({"direct": False, "mode": "openai", "role": "worker", "server_up": False,
-          "router_up": True}, "openai"),
+          "router_up": True}, "custom"),
         ({"direct": False, "mode": "custom", "role": "worker", "server_up": False,
           "router_up": True}, "custom"),
     ],
 )
 def test_current_preset_reports_the_matching_preset(current, expected_name):
-    detected = presets.current_preset(current, UPSTREAMS)
+    detected = presets.current_preset(current)
 
     assert detected == expected_name
 
@@ -170,16 +169,16 @@ def test_router_stopped_issue_fires_when_claude_is_routed_but_router_down():
     ]
 
 
-def test_router_needed_issue_fires_when_upstream_is_routed_but_router_down():
+def test_router_needed_issue_fires_when_external_is_routed_but_router_down():
     state = dict(
-        mode="openai", direct=False, router_up=False,
-        llama_installed=True, server_up=False, key_missing=False,
+        mode="local", direct=True, router_up=False,
+        llama_installed=True, server_up=True, key_missing=False,
     )
 
     issues = _ids_and_fixes(presets.issues(state))
 
     assert issues == [
-        {"id": "router_needed", "fix": "apply-preset openai"},
+        {"id": "router_needed", "fix": "apply-preset external"},
     ]
 
 

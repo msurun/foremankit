@@ -47,6 +47,8 @@ GUARD_SCRIPTS = (("guard_git.py", "Bash|PowerShell"), ("guard_destructive.py", "
                 ("guard_config.py", "Write|Edit|MultiEdit|NotebookEdit"))   # PreToolUse: commit gate, destructive commands, protected configs
 CHECKPOINT_HOOK_MARK = "auto_checkpoint.py"         # PostToolUse on delegate: auto-checkpoint after agent tasks
 GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
+PICKER_SLOTS = ("SONNET", "HAIKU", "OPUS", "FABLE")   # the native Claude Code picker slots that orchestrator.yaml `picker:` may re-point
+SLOT_ENV = tuple(f"ANTHROPIC_DEFAULT_{slot}_MODEL{suffix}" for slot in PICKER_SLOTS for suffix in ("", "_NAME"))
 PICKER_NAME = "ForemanKit (local / DeepSeek / Gemini)"
 TASK_ROUTER, TASK_SERVER = "ForemanKit: router 8081", "ForemanKit: llama-server 8080"   # VS Code tasks of earlier installs
 LOGON_TASK = "ForemanKit router"          # Windows Task Scheduler entry that starts the gateway at logon (replaces the VS Code task)
@@ -158,6 +160,25 @@ def find_claude() -> str | None:
     name = "claude.exe" if os.name == "nt" else "claude"
     bundled = sorted((Path.home() / ".vscode" / "extensions").glob(f"anthropic.claude-code-*/resources/native-binary/{name}"))
     return str(bundled[-1]) if bundled else None
+
+
+def picker_env(picker: dict) -> dict:
+    """Claude Code env for the picker: each native slot re-pointed to its routed id, and the custom entry's name."""
+    env = {}
+    for slot, entry in picker.items():
+        if slot == "custom":
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"] = entry["name"]
+        else:
+            env[f"ANTHROPIC_DEFAULT_{slot}_MODEL"] = entry["model"]
+            env[f"ANTHROPIC_DEFAULT_{slot}_MODEL_NAME"] = entry["name"]
+    return env
+
+
+def picker_settings(cfg: dict) -> tuple[str, dict]:
+    """Model id of the picker's custom entry and the picker env, from orchestrator.yaml `picker:` (env empty if absent)."""
+    picker = cfg.get("picker") or {}
+    model_id = (picker.get("custom") or {}).get("model") or (cfg.get("local_models") or ["claude-sonnet-5"])[0]
+    return model_id, picker_env(picker)
 
 
 def _hook_command(py: Path, script_name: str) -> str:
@@ -532,7 +553,7 @@ class Installer:
             return []
         entries = data.get("claudeCode.environmentVariables", [])
         names = {entry.get("name") for entry in entries if isinstance(entry, dict)}
-        found = sorted(names & set(GATEWAY_ENV))
+        found = sorted(names & set(GATEWAY_ENV + SLOT_ENV))
         return [f"VS Code env {', '.join(found)} still set in {path}"] if found else []
 
     def _leftover_tasks(self, path: Path) -> list[str]:
@@ -883,10 +904,14 @@ class Installer:
 
     @staticmethod
     # codecheck: allow too-many-parameters (the call sites and tests pass these positionally; the VS Code keys stay explicit)
-    def merged_vscode_settings(data: dict, base_url: str, model_id: str, remove: bool = False, tasks: bool = False) -> dict:
-        """Add (or remove) the three gateway entries in claudeCode.environmentVariables; other entries stay."""
-        values = dict(zip(GATEWAY_ENV, (base_url, model_id, PICKER_NAME)))
-        entries = [entry for entry in data.get("claudeCode.environmentVariables", []) if entry.get("name") not in values]
+    def merged_vscode_settings(data: dict, base_url: str, model_id: str, remove: bool = False, tasks: bool = False,
+                               extra: dict | None = None) -> dict:
+        """Add (or remove) the gateway entries and the picker entries in claudeCode.environmentVariables; others stay.
+
+        `extra` overrides or adds entries (the picker env); the picker slot names are always dropped first."""
+        values = {**dict(zip(GATEWAY_ENV, (base_url, model_id, PICKER_NAME))), **(extra or {})}
+        dropped = set(GATEWAY_ENV) | set(SLOT_ENV)
+        entries = [entry for entry in data.get("claudeCode.environmentVariables", []) if entry.get("name") not in dropped]
         if not remove:
             entries += [{"name": name, "value": value} for name, value in values.items()]
         merged = {**data, "claudeCode.environmentVariables": entries}
@@ -1016,12 +1041,13 @@ class Installer:
         entry on Windows, a folder-open VS Code task elsewhere). Claude Code reads the settings only when a window starts."""
         cfg = yaml_load(ROOT / "config" / "orchestrator.yaml")
         base_url = f"http://127.0.0.1:{cfg.get('port', 8081)}"
-        model_id = (cfg.get("local_models") or ["claude-sonnet-5"])[0]
+        model_id, extra = picker_settings(cfg)
         folder = self.vscode_user_dir()
         wanted = self.autostart_tasks(py)
         if wanted:
             self._record_auto_tasks_marker(folder / "settings.json")   # before the write: afterwards the key always exists
-        self.write_json(folder / "settings.json", lambda data: self.merged_vscode_settings(data, base_url, model_id, False, bool(wanted)))
+        self.write_json(folder / "settings.json",
+                        lambda data: self.merged_vscode_settings(data, base_url, model_id, False, bool(wanted), extra))
         if wanted:
             self.write_json(folder / "tasks.json", lambda data: self.merged_vscode_tasks(data, wanted, False, (TASK_SERVER,)))
         self.register_logon_task()

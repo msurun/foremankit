@@ -17,12 +17,14 @@ DEFAULT_ERRORS_TO_ESCALATE = 2
 DEFAULT_CLEAN_TO_FALL_BACK = 6
 DEFAULT_MIN_EXPENSIVE_S = 120.0
 
-# The panel's switch: `auto` leaves the hysteresis above in charge, the other two pin a tier until switched back.
+# The panel's per-provider switch: `auto` leaves the hysteresis above in charge; a named value pins that provider
+# alias (flash / pro; gemini also offers lite31) until switched back.
 AUTO = "auto"
 FLASH = "flash"
 PRO = "pro"
-MODES = (AUTO, FLASH, PRO)
-MODE_FILE = "escalation_mode.json"          # state dir: {"mode": auto|flash|pro}; missing file means auto
+LITE = "lite31"                              # gemini-only pin: cheaper than flash
+MODES = (AUTO, FLASH, PRO, LITE)
+MODE_FILE = "escalation_mode.json"          # state dir: {"<provider>": auto|flash|pro|lite31}; missing provider means auto
 FORCED_TIERS = {FLASH: CHEAP_TIER, PRO: EXPENSIVE_TIER}
 
 
