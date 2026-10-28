@@ -181,7 +181,7 @@ ERROR_BODY_CHARS = 200             # the body may echo the request: keep only a 
 
 
 def chat_completion(client: httpx.Client, request: ChatRequest) -> dict[str, Any]:
-    """POST /chat/completions. Returns {text, usage, finish_reason, timings}. Raises ProviderError."""
+    """POST /chat/completions. Returns {text, usage, finish_reason, timings, served_model}. Raises ProviderError."""
     response = _post_chat(client, request)
     _raise_for_status(response)
     return _parse_chat(response)
@@ -224,7 +224,8 @@ def _parse_chat(response: httpx.Response) -> dict[str, Any]:
     except (ValueError, KeyError, IndexError, TypeError) as error:
         raise ProviderError("malformed response") from error
     return {"text": text, "usage": normalize_usage(data.get("usage")), "finish_reason": choice.get("finish_reason"),
-            "timings": data.get("timings")}      # llama-server reports its own speed here; other servers do not
+            "timings": data.get("timings"),      # llama-server reports its own speed here; other servers do not
+            "served_model": data.get("model")}   # a router id (openrouter/free) is answered by a model it picks
 
 
 def list_models(client: httpx.Client, base_url: str, api_key: str | None, timeout: float = 15) -> list[str]:

@@ -136,15 +136,30 @@ providers:
     type: openai
     base_url: https://openrouter.ai/api/v1
     key_env: OPENROUTER_API_KEY
-    enabled: false            # 2026-10-08: rotating :free catalogue, 50 requests/day, trains on data; in no chain anyway
+    # 2026-10-08 disabled (the pinned :free model rotated away); 2026-10-27 back on through the router id
+    # openrouter/free, which picks any live free model by itself. Trains on data: `normal` tasks only.
+    enabled: true
     free: true
     trains_on_data: true       # VERIFY: many ":free" upstreams log/train on prompts
     timeout: 120
     limits: {rpm: 18, rpd: 45, tpd: null}      # ~20 rpm / 50 rpd (1000 rpd after 10 USD top-up); VERIFY
+    # The router may pick a reasoning model: with 400 tokens two of two test calls (2026-10-27) came back empty, so
+    # reasoning is kept low and hidden, and a headroom is added. Empty answers are still rejected by the caller.
+    thinking:
+      extra_by_level:
+        minimal: {reasoning: {effort: low, exclude: true}}
+        low: {reasoning: {effort: low, exclude: true}}
+        medium: {reasoning: {effort: low, exclude: true}}
+        high: {reasoning: {effort: low, exclude: true}}
+      headroom: {minimal: 3000, low: 3000, medium: 3000, high: 3000}
+      default_level: low
+    # The router also picked the safety classifier nemotron-3.5-content-safety in 2 of 5 test calls (answer
+    # "User Safety: safe"). A reply served by one of these is treated as a transient error: retried, then the chain goes on.
+    reject_served_models: [content-safety, guard, lyria]
     default_model: free
     models:
       free:
-        id: poolside/laguna-s-2.1:free  # present on /models 2026-10-07; VERIFY quality (":free" catalogue rotates; alt: cohere/north-mini-code:free)
+        id: openrouter/free            # router over the live :free catalogue; the served model is logged (served_model)
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   mistral:

@@ -38,6 +38,9 @@ def _preview_or_hint(result: dict[str, Any]) -> str:
 
 def _result_header(result: dict[str, Any]) -> str:
     where = f"{result['provider']}/{result['model']}" + (f" via {result['endpoint']}" if result.get("endpoint") else "")
+    served = result.get("served_model")
+    if served and served != result["model"]:
+        where += f" (served by {served})"
     dry = " [DRY RUN]" if result.get("dry_run") else ""
     return (f"← response from {where} in {result['latency_s']:.1f}s{dry}"
             f" | in={result['tokens_in']} (cache {result['cache_hit']}) out={result['tokens_out']} | ${result['cost_usd']:.4f}")

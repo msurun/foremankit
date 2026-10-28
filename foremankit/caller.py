@@ -29,6 +29,15 @@ HTTP_RATE_LIMITED = 429          # "slow down": the provider counts this as a ra
 HTTP_SERVER_ERROR = 500          # first 5xx code: the provider failed on its own side, the call may succeed elsewhere
 
 
+def reject_served_model(candidate: Candidate, reply: dict[str, Any]) -> None:
+    """Raise a transient ProviderError when a router answered with a model the provider lists in
+    `reject_served_models` (substrings): openrouter/free sometimes picks a safety classifier ("User Safety: safe")."""
+    served = str(reply.get("served_model") or "")
+    patterns = candidate.provider.cfg.get("reject_served_models") or []
+    if served and any(pattern in served for pattern in patterns):
+        raise ProviderError(f"router picked a rejected model: {served}", transient=True)
+
+
 def cut_off_in_code(answer: Answer) -> bool:
     """True when the model stopped at its token limit with a code block still open (``` or ~~~, any fence length)."""
     return answer.finish_reason == "length" and open_fence(answer.text) is not None
@@ -105,7 +114,9 @@ class Caller:
         attempt = 0
         while True:
             try:
-                return chat_completion(client, self._chat_request(candidate, ctx))
+                reply = chat_completion(client, self._chat_request(candidate, ctx))
+                reject_served_model(candidate, reply)
+                return reply
             except ProviderError as error:
                 if not self._worth_retrying(error) or attempt >= max_retries:
                     raise
@@ -142,7 +153,8 @@ class Caller:
         if not usage["prompt_tokens"] and not is_dry_run():
             usage["prompt_tokens"] = ctx.est_in  # provider omitted usage: estimate for quotas
         cost = 0.0 if is_dry_run() else budget.cost_usd(candidate.price, usage)
-        return Answer(reply["text"], reply.get("finish_reason"), usage, cost, latency_s, reply.get("timings") or {})
+        return Answer(reply["text"], reply.get("finish_reason"), usage, cost, latency_s, reply.get("timings") or {},
+                      served_model=reply.get("served_model"))
 
     def _record_usage(self, candidate: Candidate, answer: Answer) -> None:
         """Count the tokens against the quota, end a cooldown, feed the node's measured speed and the spend."""
@@ -207,7 +219,8 @@ class Caller:
                   "tokens_out": answer.usage["completion_tokens"], "cache_hit": answer.usage["cache_hit"],
                   "reasoning_tokens": answer.usage.get("reasoning_tokens", 0),
                   "cost_usd": round(answer.cost_usd, 6), "latency_s": round(answer.latency_s, 2), "path": path,
-                  "truncated": answer.finish_reason == "length", "continuations": answer.continuations}
+                  "truncated": answer.finish_reason == "length", "continuations": answer.continuations,
+                  "served_model": answer.served_model}
         if self.settings.get("log_prompts"):
             record["prompt"] = ctx.messages
         self.router.log.write(record)
@@ -217,7 +230,7 @@ class Caller:
         limit = int(self.settings.get("preview_chars", DEFAULT_PREVIEW_CHARS))
         text = answer.text
         return {"id": ctx.call_id, "provider": candidate.provider.name, "node": candidate.node or None,
-                "model": candidate.model_id, "endpoint": candidate.endpoint,
+                "model": candidate.model_id, "served_model": answer.served_model, "endpoint": candidate.endpoint,
                 "tokens_in": answer.usage["prompt_tokens"], "tokens_out": answer.usage["completion_tokens"],
                 "cache_hit": answer.usage["cache_hit"], "cost_usd": answer.cost_usd, "latency_s": answer.latency_s,
                 "path": path, "truncated": answer.finish_reason == "length", "dry_run": is_dry_run(),

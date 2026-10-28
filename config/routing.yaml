@@ -2,7 +2,7 @@
 # Entry syntax: "provider" (uses its default_model) or "provider:alias".
 
 chains:
-  # gemini_free and openrouter are disabled (providers.yaml): measured 2026-10-08 gemini_free failed 50 % of calls and
+  # gemini_free is disabled (providers.yaml): measured 2026-10-08 gemini_free failed 50 % of calls and
   # the free clouds together handled ~8k tokens (worth < 1 cent); Groq/Cerebras/Mistral stay as the backup when DeepSeek is blocked.
   # Order: free providers -> DeepSeek (preferred paid, skipped while unreachable) -> paid Gemini (last resort).
   # bulk_code: the local LLM sits after the free clouds and before the paid ones (measured 2026-10-10: Q4_K_XL / IQ1_M passed
@@ -11,15 +11,19 @@ chains:
   # in fewer rounds than the free clouds, which saves Claude tokens spent on supervising retries; free clouds are the fallback.
   # 2026-10-24: gemini:lite31 (gemini-3.1-flash-lite) passed 13/14 of the bulk-code bench at 0.017 USD vs 14/14 at 0.040 USD for
   # gemini:flash (benchmarks/cloud_code_results.jsonl), so it goes first among the Gemini fallbacks.
-  bulk_code:    ["deepseek:flash", mistral, groq, llm, "gemini:lite31", "gemini:flash"]
+  # 2026-10-27: openrouter (router id openrouter/free) added after groq in bulk_code, quick and summarize; place to be
+  # confirmed by cloud_code_bench (the served model changes per call, so its pass rate is a mix).
+  # 2026-10-27 (owner): bulk_code goes to every free source first (clouds, then the local pool), DeepSeek flash only
+  # after them; this reverses the 2026-10-11 "DeepSeek first" choice above.
+  bulk_code:    [mistral, groq, openrouter, llm, "deepseek:flash", "gemini:lite31", "gemini:flash"]
   data_script:  ["deepseek:flash", "gemini:flash"]
   hard_code:    ["deepseek:pro", "gemini:pro"]
   long_context: ["deepseek:flash", "gemini:flash"]
   # `llm` is the pool of local-LLM nodes (config/nodes.yaml, this machine included). When the chain reaches it, the router
   # expands it into the nodes that are on, answer, and accept the task's data level, the one expected to FINISH first
   # coming first (measured tok/s per node, busy ones later). Off or unreachable nodes are skipped (parallel probe).
-  quick:        [groq, cerebras, llm, "gemini:flash"]
-  summarize:    [groq, cerebras, llm, "gemini:flash"]
+  quick:        [groq, cerebras, openrouter, llm, "gemini:flash"]
+  summarize:    [groq, cerebras, openrouter, llm, "gemini:flash"]
   # review: a second model reads code that is already written (delegate review=true, `foremankit review`). Only own hardware
   # (the pool `llm`) or a PAID model: free clouds review superficially and may train on the code. The author's own
   # source is skipped. A slow node is used last (llm.kinds.review + max_seconds), so the fast Legion or a paid flash answers first.

@@ -130,3 +130,4 @@ class Answer:
     latency_s: float = 0.0
     timings: dict[str, Any] = field(default_factory=dict)   # llama-server's exact speed report, when present
     continuations: int = 0   # how many extra requests finished an answer that stopped at its token limit
+    served_model: str | None = None   # the model that really answered (differs from the id behind a router)
