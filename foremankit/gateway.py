@@ -255,18 +255,14 @@ def upstream_headers(request: Request, local: bool) -> dict[str, str]:
     return headers
 
 
-def side_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Headers for a side request to the cloud: context-1m beta entries removed, the beta header dropped when empty."""
-    kept: dict[str, str] = {}
-    for name, value in headers.items():
-        if name.lower() != "anthropic-beta":
-            kept[name] = value
-            continue
-        entries = [entry.strip() for entry in value.split(",")]
-        betas = [entry for entry in entries if entry and not entry.startswith("context-1m")]
-        if betas:
-            kept[name] = ",".join(betas)
-    return kept
+def side_body(data: dict[str, Any], cfg: dict[str, Any]) -> bytes:
+    """Body for a side request sent to the cloud: the side-request model, and `thinking: disabled` replaced by
+    `between_tools`, because the cloud answers 400 ('To turn thinking off on this model, send "thinking":
+    {"type": "between_tools"} instead of {"type": "disabled"}') for the Claude side-request model."""
+    shaped = {**data, "model": cfg["side_request_model"]}
+    if isinstance(shaped.get("thinking"), dict) and shaped["thinking"].get("type") == "disabled":
+        shaped["thinking"] = {"type": "between_tools"}
+    return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
 
 
 def parse_body(body: bytes) -> dict[str, Any] | None:
@@ -328,7 +324,7 @@ def send_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> byte
     call.local = False
     call.side = True
     call.note = f" (side request without tools -> cloud as {cfg['side_request_model']})"
-    return json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
+    return side_body(data, cfg)
 
 
 def spill_to_cloud(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> bytes:
@@ -399,8 +395,6 @@ async def relay(request: Request, call: Call, cfg: dict[str, Any],
 
     `route` = (url, headers) overrides the local/cloud choice (used for an external orchestrator)."""
     url, headers = route or (target_url(request, cfg, call.local), upstream_headers(request, call.local))
-    if call.side:
-        headers = side_headers(headers)
     call.beta = next((value for name, value in headers.items() if name.lower() == "anthropic-beta"), "")
     try:
         response = await client.send(client.build_request(request.method, url, headers=headers,
@@ -874,9 +868,9 @@ async def side_to_cloud_first(request: Request, data: dict[str, Any], cfg: dict[
     """Answer a toolless side request (auto-mode safety check, titles) from the cloud; None when it failed or refused."""
     url = target_url(request, cfg, local=False)
     call = Call(request.url.path, data.get("model"), False, time.time(), route="side:cloud")
-    body = json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
+    body = side_body(data, cfg)
     try:
-        resp = await client.send(client.build_request("POST", url, headers=side_headers(upstream_headers(request, False)),
+        resp = await client.send(client.build_request("POST", url, headers=upstream_headers(request, False),
                                                       content=body, timeout=cfg["side_cloud_timeout_s"]))
     except httpx.HTTPError:
         call.log(502)
