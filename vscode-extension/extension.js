@@ -13,6 +13,7 @@ const PYTHON = process.platform === 'win32'
 const POLL_MS = 4000;
 const WORKERS_POLL_MS = 12000;
 const LIVE_POLL_MS = 1000;
+const GPU_POLL_MS = 1000;
 const DELEGATIONS_POLL_MS = 8000;
 const MODEL_NAMES_POLL_MS = 6 * 3600 * 1000;   // which model names the providers list now (renamed models show up as a problem)
 const LIVE_FRESH_MS = 4000;
@@ -76,6 +77,17 @@ function readSlots() {
   });
 }
 
+// One nvidia-smi sample: GPU load and VRAM of the first card. null when there is no NVIDIA driver or card.
+function readGpu() {
+  return new Promise((resolve) => {
+    const query = ['--query-gpu=utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'];
+    cp.execFile('nvidia-smi', query, { timeout: 1500, windowsHide: true }, (error, stdout) => {
+      const [util, used, total] = error ? [] : stdout.split(/\r?\n/)[0].split(',').map((v) => parseFloat(v));
+      resolve(Number.isFinite(util) ? { util, used, total } : null);
+    });
+  });
+}
+
 function workspaceDir() {
   const folders = vscode.workspace.workspaceFolders;
   return folders && folders.length ? folders[0].uri.fsPath : '';
@@ -107,8 +119,9 @@ class Panel {
     this.workersTimer = setInterval(() => this.pushWorkers(), WORKERS_POLL_MS);
     this.liveTimer = setInterval(() => this.pushLive(), LIVE_POLL_MS);
     this.delegationsTimer = setInterval(() => this.pushDelegations(), DELEGATIONS_POLL_MS);
+    this.gpuTimer = setInterval(() => this.pushGpu(), GPU_POLL_MS);
     this.pushDelegations();
-    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.modelNamesTimer); clearInterval(this.pairTimer); });
+    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.gpuTimer); clearInterval(this.modelNamesTimer); clearInterval(this.pairTimer); });
     this.refreshModelNames();
     this.modelNamesTimer = setInterval(() => this.refreshModelNames(), MODEL_NAMES_POLL_MS);
     this.pushStatus();
@@ -124,6 +137,7 @@ class Panel {
   async pushDelegations() { if (this.view && this.view.visible) this.post({ type: 'delegations', data: await backend(['delegations']) }); }
   async pushFirewall() { this.post({ type: 'firewall', data: await backend(['pair-firewall-status']) }); }
   async pushLive() { if (this.view && this.view.visible) this.post({ type: 'live', data: { gateway: readLive(), slot: await readSlots() } }); }
+  async pushGpu() { if (this.view && this.view.visible) this.post({ type: 'gpu', data: await readGpu() }); }
   async pushWorkers() { if (this.view && this.view.visible) this.post({ type: 'workers', data: await backend(['workers']) }); }
   async pushModels() { this.post({ type: 'models', data: await backend(['models']) }); }
 
@@ -302,6 +316,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="row head"><span class="dot" id="headDot"></span><b id="headText">ForemanKit</b></div>
 <div id="liveLine" class="info" style="display:none"></div>
 <div id="ctxWrap" style="display:none"><div class="bar"><div class="fill" id="ctxFill"></div></div><div class="info" id="ctxText"></div></div>
+<div id="gpuWrap" style="display:none"><svg id="gpuChart" viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%;height:46px;background:rgba(128,128,128,.15);border-radius:3px"><polyline id="gpuLine" fill="none" stroke="var(--vscode-progressBar-background)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline id="vramLine" fill="none" stroke="var(--vscode-charts-orange, #d29922)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="info" id="gpuText"></div></div>
 <div id="error" class="err"></div>
 <div id="issues"></div>
 <h3>Who orchestrates Claude Code</h3>
@@ -396,6 +411,21 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
    text = 'idle - last answer ' + g.tps.toFixed(1) + ' tok/s (' + g.tokens + ' tokens)';
   }
   line.style.display = text ? 'block' : 'none'; line.textContent = text;
+ }
+ const GPU_SAMPLES = 60; const gpuHistory = []; const vramHistory = [];   // 60 samples every 1 s = the last minute
+ // Polyline points for one history array: newest sample at the right edge, y = 40 - 0.4 * value.
+function gpuPoints(history) {
+  const step = 100 / (GPU_SAMPLES - 1); const offset = (GPU_SAMPLES - history.length) * step;
+  return history.map((v, i) => (offset + i * step).toFixed(1) + ',' + (40 - 0.4 * v).toFixed(1)).join(' ');
+}
+function showGpu(gpu) {
+  $('gpuWrap').style.display = gpu ? 'block' : 'none';
+  if (!gpu) { gpuHistory.length = 0; vramHistory.length = 0; return; }
+  gpuHistory.push(gpu.util); if (gpuHistory.length > GPU_SAMPLES) gpuHistory.shift();
+  vramHistory.push(100 * gpu.used / gpu.total); if (vramHistory.length > GPU_SAMPLES) vramHistory.shift();
+  $('gpuLine').setAttribute('points', gpuPoints(gpuHistory));
+  $('vramLine').setAttribute('points', gpuPoints(vramHistory));
+  $('gpuText').textContent = 'GPU ' + Math.round(gpu.util) + '% (blue line), VRAM ' + Math.round(gpu.used) + ' / ' + Math.round(gpu.total) + ' MiB (orange line), last minute';
  }
  const money = (v) => '$' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2));
  function showDelegations(d) {
@@ -647,7 +677,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  $('refresh').onclick = () => send({ type: 'refresh' });
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
- window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'busy') { busy = e.data.value; if (lastStatus) showPresets(lastStatus.preset); } if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
+ window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'busy') { busy = e.data.value; if (lastStatus) showPresets(lastStatus.preset); } if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'gpu') showGpu(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
   if (e.data.type === 'firewall') showFirewall(e.data.data); if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
 </script></body></html>`;
 
