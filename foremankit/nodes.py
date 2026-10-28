@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any
 
-from .config import REPO_DIR, _read_yaml, config_dir, state_dir
+from .config import REPO_DIR, _read_yaml, config_dir, refresh_live_env, state_dir
 from .providers import Endpoint
 
 LEVELS = ("normal", "internal", "private")        # data sensitivity, least to most confidential
@@ -258,6 +258,7 @@ def _remote_endpoints(name: str, entry: dict[str, Any], lab: _Lab) -> list[Endpo
     """One endpoint per address of every kind of link; the 2nd, 3rd ... address of a kind get a #number.
     A node with its own `key_env` sends THAT key (no header when the variable is unset), so the shared lab key
     never travels to a server outside the lab (e.g. a tunnelled notebook)."""
+    refresh_live_env()   # the Kaggle tunnel and key saved in the panel reach a long-running MCP server too
     port = int(lab.reader.get(entry, "port", DEFAULT_LLM_PORT))
     key = os.environ.get(entry["key_env"]) if entry.get("key_env") else lab.key
     endpoints = []

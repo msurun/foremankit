@@ -206,7 +206,7 @@ class Panel {
     await this.applyPreset(name);
   }
 
-  configArgs({ action, role, name, url, accept, priority, model, fields, enabled, category, period, value }) {
+  configArgs({ action, role, name, url, accept, priority, model, fields, enabled, category, period, value, key }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
       budgetSet: ['budget-set', period, '--name', category, '--value', String(value)],
@@ -220,6 +220,8 @@ class Panel {
       workerAdd: ['worker-add', '--name', name, '--url', url, '--accept', accept, '--priority', String(priority || 10)],
       workerRemove: ['worker-remove', '--name', name],
       profileSet: ['profile-set', '--model', model, '--fields', fields],
+      kaggleSet: ['kaggle-set', '--url', url || '', '--key', key || ''],
+      kaggleTest: ['kaggle-test'],
     };
     return table[action];
   }
@@ -229,7 +231,7 @@ class Panel {
     if (!args) return;
     const answer = await backend(args);
     const text = 'ForemanKit: ' + (answer.message || answer.error);
-    if (message.action === 'workerTest') vscode.window.showInformationMessage(text);
+    if (message.action === 'workerTest' || message.action === 'kaggleTest') vscode.window.showInformationMessage(text);
     else vscode.window.setStatusBarMessage(text, 6000);
     await this.pushStatus();
     await this.pushWorkers();
@@ -323,6 +325,14 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="presetChoice"></div>
 <div class="info" id="escalationRow" style="display:none"><b>Model per provider (DeepSeek, Gemini)</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
 <div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Choose the model of DeepSeek and Gemini with the selectors above (auto = flash, pro after errors). External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
+<details><summary class="info" id="kaggleSummary">Kaggle notebook</summary>
+<div class="info">Every notebook session prints a new address and key: paste both here (saved to .env, the running router uses them on its next call).</div>
+<div class="grid">
+<label>address <input id="kaggleUrl" placeholder="https://name.trycloudflare.com"></label>
+<label>key <input id="kaggleKey" type="password" placeholder="sk-... (empty = keep the saved key)" autocomplete="off"></label>
+</div>
+<div class="row"><button id="kaggleSave">Save</button><button class="secondary" id="kaggleTest">Test</button></div>
+</details>
 <h3>Helpers (delegation)</h3>
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
 <details><summary class="info">Which helpers</summary>
@@ -490,7 +500,7 @@ function showGpu(gpu) {
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showKaggle(s.kaggle); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -621,6 +631,11 @@ function showGpu(gpu) {
   $('costSummary').textContent = 'Costs (' + short(b.orchestrator || {}) + ' now)';
   headCost = 'orch ' + short(b.orchestrator || {}) + ' | agents ' + short(b.delegation || {}); renderHead();
  }
+ function showKaggle(k) {
+  if (!k) return;
+  if (document.activeElement !== $('kaggleUrl')) $('kaggleUrl').value = k.url || '';
+  $('kaggleSummary').textContent = 'Kaggle notebook (' + (k.url ? k.url.split('//').pop().split('/')[0] : 'no address') + ', key ' + (k.key_set ? 'set' : 'missing') + ')';
+ }
  function showPrices(info) {
   const box = $('prices'); if (!info) return; box.innerHTML = '';
   const add = (text, cls) => { const d = document.createElement('div'); d.className = cls || 'info'; d.textContent = text; box.appendChild(d); };
@@ -664,7 +679,9 @@ function showGpu(gpu) {
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });
- $('workerAddToggle').onclick = () => { $('workerForm').style.display = 'block'; };
+ $('kaggleSave').onclick = () => { send({ type: 'config', action: 'kaggleSet', url: $('kaggleUrl').value.trim(), key: $('kaggleKey').value.trim() }); $('kaggleKey').value = ''; };
+ $('kaggleTest').onclick = () => send({ type: 'config', action: 'kaggleTest' });
+ $('workerAddToggle').onclick =() => { $('workerForm').style.display = 'block'; };
  $('workerCancel').onclick = () => { $('workerForm').style.display = 'none'; };
  $('workerSave').onclick = () => { send({ type: 'config', action: 'workerAdd', name: $('w_name').value.trim(), url: $('w_url').value.trim(),
   accept: $('w_accept').value, priority: Number($('w_priority').value) || 10 }); $('workerForm').style.display = 'none'; };

@@ -33,7 +33,7 @@ from foremankit import (
     providers,
     upstream,
 )
-from foremankit.config import _read_yaml, config_dir, load_env, state_dir
+from foremankit.config import _read_yaml, config_dir, load_env, refresh_live_env, state_dir
 from foremankit.gateway_trim import (
     is_main_loop,
     request_chars,
@@ -831,6 +831,7 @@ def external_target(body: bytes, cfg: dict):
 
 async def handle(request: Request) -> Response:
     """Forward one request to the local llama-server or the cloud and stream the answer back."""
+    refresh_live_env()   # a Kaggle address/key saved in the panel applies to this request, no router restart
     body, cfg = await request.body(), settings()
     target = external_target(body, cfg)
     if target:

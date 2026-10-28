@@ -219,11 +219,11 @@ providers:
     enabled: false
     free: true
     trains_on_data: false      # our own disposable notebook, deleted after the session
-    timeout: 900               # ~6 tok/s: a full tool-calling turn takes minutes
+    timeout: 600               # TPU ~130 tok/s (first req slower); GPU 2xT4 ~6 tok/s -> 1500 tok reply ~250s; 600s headroom
     default_model: main
     models:
       main:
-        id: qwen3.8:27b
+        id: qwen3.8-27b          # served name in kaggle-tpu-lab (qwen38-27b/README.md)
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   llm:

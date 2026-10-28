@@ -59,18 +59,17 @@ nodes:
                                # so the speed is learned from real calls; the written numbers are the 35B Q4_K_XL profile (64k ctx)
     speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 150}
   kaggle:
-    # Free Kaggle notebook serving Ollama (kaggle/, the GPU lane) behind a Cloudflare QUICK tunnel. Two things about it:
-    #   - the URL changes with every session, so point this node at the new one WITHOUT editing this file:
-    #       $env:FOREMANKIT_NODE_KAGGLE_LAN = "https://<new-name>.trycloudflare.com"
-    #   - the URL is the ROOT only (never .../v1): the router appends /v1/chat/completions itself.
+    # Free Kaggle notebook as a stop-gap: TPU v5e-8 (qwen3.8-27B, vllm-tpu) or GPU 2xT4 (qwen3.6-35B-A3B, llama-server).
+    # The URL changes every session; the node uses the same env var for both:
+    #   $env:FOREMANKIT_NODE_KAGGLE_LAN = "https://<new-name>.trycloudflare.com"   (ROOT only, never .../v1)
     hostname: kaggle-notebook  # not a machine of the lab: it is never "me"
-    priority: 5                # after both laptops: a free stop-gap, never preferred over our own hardware
+    priority: 5                # after both laptops: free stop-gap, never preferred over our own hardware
     lan: ["https://ipaq-walks-apache-deer.trycloudflare.com"]
-    preferred_models: ["qwen3.8:27b"]
-    # The prompts cross Cloudflare and land on a disposable notebook, so public data only by default. Raise to
+    preferred_models: ["qwen3.8-27b", "qwen3.6-35b"]   # TPU: qwen3.8-27b (vLLM served name); GPU: qwen3.6-35b (llama-server)
+    # Prompts cross Cloudflare to a disposable notebook: public data only by default. Raise to
     # `internal` only after deciding that plant/process data may leave our hardware.
     accept: normal
-    key_env: KAGGLE_LLM_KEY    # its own throwaway token; the shared lab key is never sent outside the lab
-    learn: true                # unknown accelerator, restarted every session: learn the speed from real calls
-    speed: {prompt_tps: 100, gen_tps: 6, expected_output_cap: 1500, max_seconds: 900}
-    max_concurrent: 1          # Ollama queues one request per loaded model unless OLLAMA_NUM_PARALLEL says more
+    key_env: KAGGLE_LLM_KEY    # the key the notebook prints at launch (new every session); the lab key never leaves the lab
+    learn: true                # restarted every session: learn the speed from real calls; router quickly adapts from measurements
+    speed: {prompt_tps: 1000, gen_tps: 50, expected_output_cap: 1500, max_seconds: 300}  # TPU ~10k/130 tok/s, GPU ~200/6 tok/s; learn: true adjusts
+    max_concurrent: 4          # vLLM --max-num-seqs 4 (TPU/GPU); llama-server default 1, ignored when it is used

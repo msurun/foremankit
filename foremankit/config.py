@@ -41,6 +41,59 @@ def load_env() -> None:
             load_dotenv(candidate, override=False)
 
 
+# Variables the panel rewrites while the router runs (the Kaggle notebook gets a new tunnel and key every session).
+LIVE_ENV_VARS = ("FOREMANKIT_NODE_KAGGLE_LAN", "KAGGLE_LLM_KEY")
+_live_stamp: dict[str, float] = {}
+
+
+def refresh_live_env() -> None:
+    """Copy LIVE_ENV_VARS from the repo .env into the environment when that file changed since the last call.
+
+    load_env() runs once per process and never overrides, so a running router would keep the old Kaggle address.
+    The first call only records the file time (load_env already read it); a later change wins over the environment.
+    """
+    path = REPO_DIR / ".env"
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return
+    previous = _live_stamp.setdefault(str(path), stamp)
+    if stamp == previous:
+        return
+    _live_stamp[str(path)] = stamp
+    values = read_env_file(path)
+    for name in LIVE_ENV_VARS:
+        if values.get(name):
+            os.environ[name] = values[name]
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """The NAME=value pairs of a .env file (comments and blank lines skipped, surrounding quotes removed)."""
+    if not path.is_file():
+        return {}
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, sep, value = line.partition("=")
+        if sep and not name.lstrip().startswith("#"):
+            values[name.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def write_env_values(path: Path, values: dict[str, str]) -> None:
+    """Set NAME=value lines in a .env file: an existing line is replaced in place, a missing one appended; the other
+    lines and comments stay. Refuses values with line breaks (they would inject extra variables)."""
+    if any("\n" in value or "\r" in value for value in values.values()):
+        raise ValueError("a .env value cannot contain a line break")
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    pending = dict(values)
+    for index, line in enumerate(lines):
+        name = line.partition("=")[0].strip()
+        if "=" in line and name in pending:
+            lines[index] = f"{name}={pending.pop(name)}"
+    lines += [f"{name}={value}" for name, value in pending.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     """Read a YAML file and return its contents as a dictionary, or empty dict if missing."""
     if not path.is_file():

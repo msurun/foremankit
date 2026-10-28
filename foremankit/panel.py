@@ -38,6 +38,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import httpx
@@ -45,7 +46,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from foremankit.config import _read_yaml, config_dir, load_env, state_dir
+from foremankit.config import _read_yaml, config_dir, load_env, read_env_file, state_dir, write_env_values
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
 from foremankit import budget, escalation, model_watch, pairing, presets, pricing, upstream
@@ -58,6 +59,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LLAMA = ROOT / "llama"
 SERVER_URL = os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080")
 PROBE_TIMEOUT_S = 1.0
+KAGGLE_URL_VAR, KAGGLE_KEY_VAR = "FOREMANKIT_NODE_KAGGLE_LAN", "KAGGLE_LLM_KEY"   # orchestrator.yaml upstreams.kaggle
 CONTEXT_FRESH_S = 600          # the gateway's context counter older than this is not shown
 PROFILE_FIELDS = ("ctx", "tg_tok_s", "ncmoe", "threads", "kv_cache", "reasoning", "think_budget", "temp", "manual")
 # manual launch parameters: name -> (type, lowest, highest); None allowed for ncmoe (dense model or --fit decides)
@@ -135,7 +137,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(), "kaggle": kaggle_status(),
             "thinking": get_thinking()}
 
 
@@ -491,6 +493,53 @@ def check_generation(name: str, url: str, key: str | None, seconds: float) -> st
     except OSError as problem:
         return f"{name}: reachable, but generation failed ({problem})"
     return f"{name}: OK. Reachable in {seconds * 1000:.0f} ms, generated {used} tokens in {time.monotonic() - started:.1f} s"
+
+
+def kaggle_status() -> dict[str, Any]:
+    """The Kaggle notebook address and whether its key is set, as the repo .env holds them (never the key itself)."""
+    values = read_env_file(ROOT / ".env")
+    url = values.get(KAGGLE_URL_VAR) or os.getenv(KAGGLE_URL_VAR) or ""
+    return {"url": url, "key_set": bool(values.get(KAGGLE_KEY_VAR) or os.getenv(KAGGLE_KEY_VAR))}
+
+
+def set_kaggle(url: str, key: str) -> str:
+    """Save the address and key the Kaggle notebook printed (new every session) into the repo .env; an empty key keeps
+    the old one. The running router and MCP server pick them up on their next call (config.refresh_live_env)."""
+    address = _checked_kaggle_url(url)
+    values = {KAGGLE_URL_VAR: address}
+    if key.strip():
+        if any(char.isspace() for char in key.strip()):
+            raise ValueError("the Kaggle key cannot contain spaces")
+        values[KAGGLE_KEY_VAR] = key.strip()
+    write_env_values(ROOT / ".env", values)
+    return f"Kaggle address saved: {address}" + ("" if key.strip() else " (key unchanged)")
+
+
+def _checked_kaggle_url(url: str) -> str:
+    """The notebook root address (trailing / and /v1 removed); ValueError unless it is a plain https URL."""
+    address = url.strip().rstrip("/")
+    address = address[:-3].rstrip("/") if address.endswith("/v1") else address
+    parts = urllib.parse.urlsplit(address)
+    if parts.scheme != "https" or not parts.hostname or any(char.isspace() for char in address):
+        raise ValueError("the Kaggle address must look like https://<name>.trycloudflare.com")
+    return address
+
+
+def test_kaggle() -> str:
+    """Ask the Kaggle notebook for its model list with the saved key; one line saying whether address and key work."""
+    state = kaggle_status()
+    if not state["url"]:
+        return "Kaggle: no address saved yet"
+    key = read_env_file(ROOT / ".env").get(KAGGLE_KEY_VAR) or os.getenv(KAGGLE_KEY_VAR)
+    try:
+        seconds, status = timed_get(state["url"] + "/v1/models", key)
+    except OSError as problem:
+        return f"Kaggle: no connection to {state['url']} ({problem}). Is the notebook still running?"
+    if status in (401, 403):
+        return f"Kaggle: reachable, but the key was refused (HTTP {status}); paste the key from this session's banner"
+    if status != 200:
+        return f"Kaggle: reachable in {seconds * 1000:.0f} ms but answered HTTP {status}"
+    return f"Kaggle: OK, address and key work ({seconds * 1000:.0f} ms)"
 
 
 def set_worker_enabled(name: str, enabled: bool) -> str:
@@ -1055,6 +1104,8 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
         "profile-set": lambda: set_profile(args.model, json.loads(args.fields)),
         "worker-add": lambda: add_worker(args.name, args.url, args.accept, args.priority),
         "worker-remove": lambda: remove_worker(args.name),
+        "kaggle-set": lambda: set_kaggle(args.url, args.key),
+        "kaggle-test": test_kaggle,
     }
 
 
@@ -1069,7 +1120,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -1084,6 +1135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--accept", default="internal")
     parser.add_argument("--priority", type=int, default=10)
     parser.add_argument("--value", default="", help="budget-set: the amount, empty = no cap")
+    parser.add_argument("--key", default="", help="kaggle-set: the notebook's API key, empty = keep the saved one")
     parser.add_argument("--levels", default="", help="thinking: comma list like low=false,high=true")
     return parser
 
@@ -1123,7 +1175,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}

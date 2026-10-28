@@ -121,20 +121,19 @@ upstreams:
     models: {opus: pro, sonnet: flash, haiku: flash}
     escalation: {expensive: pro, errors: 2, clean: 6, min_expensive_s: 120}
   kaggle:
-    # The free Kaggle GPU notebook (qwen3.8:27b) as the orchestrator once the Claude limit is spent: ~30 free GPU hours
-    # a week, 9 h per session. The Cloudflare quick tunnel changes with every session, so the address is read from the
-    # environment - the SAME variable as nodes.yaml, so one line serves both the orchestrator and the delegated pool:
+    # The free Kaggle notebook as orchestrator once the Claude limit is spent: TPU (qwen3.8-27B, vllm-tpu, ~22 min to URL,
+    # ~10k tok/s prefill, ~20 h/week) or GPU 2xT4 (qwen3.6-35B-A3B, llama-server, ~10 min build, ~200/6 tok/s).
+    # The Cloudflare quick tunnel and the key change every session: same env vars as nodes.yaml (one line for both orchestrator and pool):
     #   FOREMANKIT_NODE_KAGGLE_LAN=https://<new-name>.trycloudflare.com     (root only, never .../v1)
-    # The notebook serves Ollama, which speaks the OpenAI API only; format: openai translates every request and answer
-    # into the Anthropic Messages API Claude Code expects (foremankit/openai_bridge.py).
+    #   KAGGLE_LLM_KEY=sk-...                                               (printed by the notebook banner)
+    # Both notebooks speak the Anthropic Messages API (/v1/messages), so no format: openai bridge.
     url_env: FOREMANKIT_NODE_KAGGLE_LAN
     key_env: KAGGLE_LLM_KEY
-    format: openai                   # absent = the endpoint already speaks the Anthropic Messages API
     ceiling: internal                # our own account and disposable notebook, but the prompts DO leave this machine
-    context: 32000                   # must match OLLAMA_CONTEXT_LENGTH in the notebook: Ollama silently truncates more
+    context: 250000                  # both notebooks serve 262144 (the model maximum); headroom for the reply
     tools_keep: *keep_tools
     schema: {}
-    models: {opus: main, sonnet: main, haiku: main}   # provider aliases (providers.yaml `kaggle`) -> qwen3.8:27b
+    models: {opus: main, sonnet: main, haiku: main}   # provider aliases (providers.yaml `kaggle`) -> qwen3.8-27b
     # No escalation block: the notebook has one model, so cheap/expensive would cost the same.
 
 # Per-session choice without the panel switch: a model name in the Claude Code picker goes to the upstream. DeepSeek and
@@ -159,7 +158,7 @@ model_picker:
     - {model: claude-haiku-5-5, label: "Haiku 5.5", description: "Anthropic"}
     - {model: fm-deepseek, label: "DeepSeek", description: "External (model: panel selector)", behaves_as: claude-sonnet-5-5}
     - {model: fm-gemini, label: "Gemini", description: "External (model: panel selector)", behaves_as: claude-sonnet-5-5}
-    - {model: fm-kaggle, label: "Kaggle", description: "External, Qwen on Kaggle (32k context)", behaves_as: claude-sonnet-5-5}
+    - {model: fm-kaggle, label: "Kaggle", description: "External, Qwen on Kaggle TPU/GPU (250k context)", behaves_as: claude-sonnet-5-5}
     - {model: claude-sonnet-5, label: "Local LLM", description: "llama.cpp on this machine", behaves_as: claude-sonnet-5-5}
 
 # Tool inputs / shell commands matching these globs (or stems) are refused for every external orchestrator
