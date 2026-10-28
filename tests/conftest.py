@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +30,21 @@ def no_real_task_scheduler(monkeypatch, tmp_path):
     """install.py must never touch the real Task Scheduler entry or the real VS Code extensions folder from a test."""
     monkeypatch.setenv("FOREMANKIT_NO_SCHEDULER", "1")
     monkeypatch.setenv("FOREMANKIT_VSCODE_EXTENSIONS", str(tmp_path / "vscode-extensions"))
+
+
+def _settings_digest(path: Path) -> str | None:
+    """SHA-256 of a file's bytes, or None when the file is missing."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_claude_settings_untouched():
+    """The test run must never change the developer's real ~/.claude/settings.json."""
+    path = Path.home() / ".claude" / "settings.json"
+    before = _settings_digest(path)
+    yield
+    if _settings_digest(path) != before:
+        pytest.fail("tests changed the real ~/.claude/settings.json: sandbox CLAUDE_HOME / FOREMANKIT_CLAUDE_SETTINGS")
 
 
 @pytest.fixture(autouse=True)

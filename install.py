@@ -175,20 +175,7 @@ def picker_env(picker: dict) -> dict:
     return env
 
 
-def model_picker_block(cfg: dict) -> dict:
-    """The Claude Code `modelPicker` settings value built from orchestrator.yaml `model_picker:` ({} if absent)."""
-    spec = cfg.get("model_picker") or {}
-    options = [{("behavesAs" if key == "behaves_as" else key): value for key, value in row.items()}
-               for row in spec.get("options") or []]
-    return {"options": options, "replaceBuiltInOptions": bool(spec.get("replace_built_in"))} if options else {}
-
-
-def merged_claude_settings(data: dict, block: dict) -> dict:
-    """Return `data` with `modelPicker` set to `block`, or without the key when `block` is empty."""
-    merged = {key: value for key, value in data.items() if key != "modelPicker"}
-    if block:
-        merged["modelPicker"] = block
-    return merged
+from foremankit.picker_guard import merged_claude_settings, model_picker_block  # noqa: E402  (shared with the gateway's picker guard)
 
 
 def picker_settings(cfg: dict) -> tuple[str, dict]:

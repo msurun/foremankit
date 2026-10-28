@@ -28,6 +28,7 @@ from foremankit import (
     context_stop,
     escalation,
     openai_bridge,
+    picker_guard,
     pricing,
     provider_schema,
     providers,
@@ -930,6 +931,7 @@ app = Starlette(routes=[Route("/{path:path}", handle,
 def main() -> None:
     """Console entry point: serve on 127.0.0.1 at the configured port."""
     load_env()
+    picker_guard.start(settings)   # router mode: nothing may wipe the external rows from the /model picker
     uvicorn.run(app, host="127.0.0.1", port=int(settings()["port"]), log_level="warning")
 
 
