@@ -298,12 +298,16 @@ def test_delegations_with_no_log_are_empty(tmp_path: Path, monkeypatch):
 
 
 def sandboxed_installer(tmp_path: Path, monkeypatch) -> Path:
-    """Point the installer module used by the panel at a temporary VS Code user folder."""
+    """Point the installer module used by the panel at a temporary VS Code user folder.
+
+    It also points CLAUDE_HOME at a temporary folder so ~/.claude/settings.json is never touched.
+    """
     install = panel.load_installer()
     vscode = tmp_path / "vscode"
     vscode.mkdir()
     monkeypatch.setattr(install.Installer, "vscode_user_dir", staticmethod(lambda: vscode))
     monkeypatch.setattr(install, "STATE_DIR", tmp_path / "install-state")
+    monkeypatch.setattr(install, "CLAUDE_HOME", tmp_path / "claude")
     monkeypatch.setenv("FOREMANKIT_CONFIG_DIR", str(tmp_path))
     write_orchestrator_yaml(tmp_path)
     monkeypatch.setattr(panel, "run_quick", lambda action, *a: "ok")
