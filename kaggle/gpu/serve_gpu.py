@@ -36,8 +36,8 @@ REPO_URL = "https://github.com/ggml-org/llama.cpp.git"
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 CLOUDFLARED_PATH = Path("/tmp/cloudflared")
 MODEL_DIR = "/tmp/models"
-DEFAULT_HF_REPO = "unsloth/Qwen3.6-35B-A3B-GGUF"
-DEFAULT_HF_FILE = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+DEFAULT_HF_REPO = "unsloth/Qwen3.8-27B-GGUF"
+DEFAULT_HF_FILE = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
 
 
 def log_tail(path: Path) -> str:

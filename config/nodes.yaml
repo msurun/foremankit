@@ -59,7 +59,7 @@ nodes:
                                # so the speed is learned from real calls; the written numbers are the 35B Q4_K_XL profile (64k ctx)
     speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 150}
   kaggle:
-    # Free Kaggle notebook as a stop-gap: TPU v5e-8 (qwen3.8-27B, vllm-tpu) or GPU 2xT4 (qwen3.6-35B-A3B, llama-server).
+    # Free Kaggle notebook as a stop-gap: TPU v5e-8 (qwen3.8-27B, vllm-tpu) or GPU 2xT4 (qwen3.8-27B, llama-server).
     # The URL changes every session; the node uses the same env var for both:
     #   $env:FOREMANKIT_NODE_KAGGLE_LAN = "https://<new-name>.trycloudflare.com"   (ROOT only, never .../v1)
     hostname: kaggle-notebook  # not a machine of the lab: it is never "me"
