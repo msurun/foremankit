@@ -13,16 +13,15 @@ def format_result(result: dict[str, Any]) -> str:
     """Render one delegation result: header, file, warnings, verify/review outcome and a preview."""
     lines = [_result_header(result), f"file: {result['path']}"]
     if result.get("truncated"):
-        lines.append("INCOMPLETE: the answer is still cut off at max_output_tokens after the automatic continuations. "
-                     f"Finish it: send the same task again with continue_from=\"{result['id']}\" "
-                     "(same kind, sensitivity, system_hint and context_files), or split the task")
+        lines.append(f"INCOMPLETE: still cut off; resend the same call with continue_from=\"{result['id']}\" or split it")
     lines += ["NOTE: " + note for note in result.get("notes") or []]
     if result.get("verify"):
         lines.append(_verify_line(result["verify"]))
     if result.get("review"):
         lines += format_review(result["review"])
     if result.get("skipped"):
-        lines.append("not used (tried first): " + "; ".join(result["skipped"]))
+        # names only: the reasons are in the call log, and the free-first chains skip several sources per call
+        lines.append("skipped: " + ", ".join(entry.split("(", 1)[0] for entry in result["skipped"]))
     lines.append(_preview_or_hint(result))
     return "\n".join(lines)
 

@@ -28,11 +28,8 @@ OFF_NOTICE = (
     "foremankit delegation is switched OFF by the user. Do all the work yourself. Do not call the foremankit delegate tool "
     "or hand work to cheaper helper models, and do not mention, suggest or ask about delegation in your replies (no "
     "'delegating' lines, no helper summaries).")
-NUDGE_CONTEXT = (
-    "foremankit reminder: this session has written about {lines} lines itself (Write, Edit and shell scripts) since its last "
-    "delegation. Tests, documentation, self-contained new files and mechanical edits across several files belong to "
-    "foremankit (delegate with `verify`, one file per call, several calls in parallel) or to a Haiku agent; keep "
-    "integration, debugging on live systems and decisions yourself. Delegate before you write the next such file.")
+# Kept to one short line: it lands in the orchestrator's context every ~80 written lines.
+NUDGE_CONTEXT = "foremankit: ~{lines} lines written yourself; send tests, docs and new files to bulk-supervisor."
 NUDGE_MESSAGE = {
     "en": "foremankit: ~{lines} lines written without delegating (tests, docs and standalone files can go to cheaper models).",
     "pl": "foremankit: ok. {lines} linii napisanych bez delegowania (testy, dokumentacja i osobne pliki mogą iść do tańszych modeli).",

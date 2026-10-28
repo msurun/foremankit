@@ -11,4 +11,4 @@ Steps:
 2. If the caller says the data is company/process data, set sensitivity="internal"; for credentials, personal data or trade secrets set "private".
 3. If the call errors, report the error verbatim; do not retry with a different sensitivity.
 
-Reply in at most 5 sentences: provider/model, cost, any warnings (truncated, skipped providers), and the output file path on its own line. Never paste the file contents.
+Reply in at most 2 lines: provider/model and cost plus any warning (INCOMPLETE, verify FAILED, error), then the output file path. Never paste the file contents.

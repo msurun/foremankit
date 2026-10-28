@@ -134,7 +134,7 @@ output_floor: {hard_code: 4000, data_script: 2500, bulk_code: 2500, long_context
 
 calls:
   max_retries: 1        # per provider, only on timeout/5xx/connection error; 429 -> cooldown + next provider
-  preview_chars: 600
+  preview_chars: 300
   warn_output_tokens: 8000   # a requested answer bigger than this gets a "split the task" note in the result
   abort_waste_usd: 0.02      # a paid call that wasted more than this (empty or cut-off answer) stops the chain: no second paid try
   max_continuations_cap: 6   # most extra rounds a single call may ask for (delegate max_continuations)
