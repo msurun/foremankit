@@ -9,7 +9,7 @@
   python install.py --restore-original   # exact bytes of CLAUDE.md, settings.json and the agent files
                                          # as they were before the first install (legacy: earliest backup)
 
-Only touches: ./.venv, ~/.claude/agents/{opus-advisor,delegator,bulk-supervisor}.md, the foremankit block in
+Only touches: ./.venv, ~/.claude/agents/{opus-advisor,delegator,delegator-deepseek,bulk-supervisor,bulk-supervisor-deepseek}.md, the foremankit block in
 ~/.claude/CLAUDE.md, the notify hook entries in ~/.claude/settings.json, and the user-scope MCP entry
 "foremankit". With --local-orchestrator also the VS Code user settings.json / tasks.json. Every modified file is
 backed up first.
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CLAUDE_HOME = Path.home() / ".claude"
 BEGIN, END = "<!-- BEGIN foremankit -->", "<!-- END foremankit -->"
-AGENTS = ("opus-advisor.md", "delegator.md", "bulk-supervisor.md")
+AGENTS = ("opus-advisor.md", "delegator.md", "delegator-deepseek.md", "bulk-supervisor.md", "bulk-supervisor-deepseek.md")
 MCP_NAME = "foremankit"
 KEYS = ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
         "MISTRAL_API_KEY", "CEREBRAS_API_KEY", "LLAMACPP_URL", "OLLAMA_LOCAL_URL",
