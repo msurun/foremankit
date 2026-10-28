@@ -17,7 +17,7 @@ from .config import check_config, load_config, load_env
 from .nodes import Node, build_nodes
 from .outputs import resolve_out_dir
 from .outcomes import build_outcome
-from .postcheck import ReviewStage, VerifyRun, make_verify_spec
+from .postcheck import ReviewStage, make_verify_spec, verify_with_handoffs
 from .probing import Prober
 from .providers import NodeProbe, Provider, normalize_toggle
 from .records import ReviewJob, RouterEnv, RouterError, TaskRequest, TaskTooLarge
@@ -106,7 +106,7 @@ class Router:
         spec = make_verify_spec(self.routing, request)   # refuse a bad request before any model is paid
         result = self.run_chain(request)
         if spec:
-            VerifyRun(self, result, spec).execute()
+            result = verify_with_handoffs(self, result, request, spec)
         if request.review:
             self.reviewer.run(result, request, spec)
         if not result.get("dry_run"):

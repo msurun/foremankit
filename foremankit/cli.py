@@ -267,7 +267,7 @@ def cmd_delegate(router: Router, args: argparse.Namespace) -> int:
     result = router.delegate(args.task, args.kind, args.sensitivity, context_files=args.files,
                              system_hint=args.hint, max_output_tokens=args.max_output_tokens,
                              escalate=args.escalate, allow_cost=args.allow_cost, verify=args.verify,
-                             verify_target=args.verify_target, review=args.review)
+                             verify_target=args.verify_target, verify_cwd=args.verify_cwd, review=args.review)
     print(format_result(result))
     return 0
 
@@ -458,6 +458,8 @@ def _add_delegate_parser(sub: Any) -> None:
                           help='check command, e.g. "python -m pytest tests/x.py -q" (needs --verify-target)')
     delegate.add_argument("--verify-target", default="",
                           help="the file the answer is written to and the check runs against")
+    delegate.add_argument("--verify-cwd", default="",
+                          help="folder inside the project the check runs in; --verify and --verify-target are relative to it")
 
 
 def build_parser() -> argparse.ArgumentParser:

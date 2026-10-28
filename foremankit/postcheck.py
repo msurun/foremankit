@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from .router import Router
 
 DEFAULT_VERIFY_ROUNDS = 2
+DEFAULT_HANDOFFS = 0              # routing.yaml verify.handoffs: other sources tried after the author gives up
+HANDOFF_FAILURE_CHARS = 3000      # how much of the last failure the next source sees
 DEFAULT_VERIFY_TIMEOUT_S = 300.0
 OUTPUT_TAIL_CHARS = 1500
 COST_FIELDS = ("tokens_in", "tokens_out", "cost_usd", "latency_s")
@@ -34,9 +36,39 @@ def make_verify_spec(routing: dict[str, Any], request: TaskRequest) -> VerifySpe
     if not request.verify:
         return None
     allowed = (routing.get("verify") or {}).get("allowed_commands") or []
-    tokens = verify_module.split_command(request.verify, allowed)
-    path = verify_module.check_target(request.verify_target, Path.cwd())
-    return VerifySpec(request.verify, request.verify_target, tokens, path)
+    folder = verify_module.check_folder(request.verify_cwd, Path.cwd())
+    tokens = verify_module.split_command(request.verify, allowed, folder)
+    path = verify_module.check_target(request.verify_target, folder)
+    return VerifySpec(request.verify, request.verify_target, tokens, path, folder)
+
+
+def handoff_task(task: str, spec: VerifySpec, failure: str) -> str:
+    """The task for the next source after the previous one could not make the check pass."""
+    return (f"{task}\n\nAn earlier attempt by another model failed the check `{spec.command}` with this output "
+            f"(do not repeat its mistakes):\n\n{failure[-HANDOFF_FAILURE_CHARS:]}")
+
+
+def verify_with_handoffs(router: Router, result: dict[str, Any], request: TaskRequest,
+                         spec: VerifySpec) -> dict[str, Any]:
+    """Run the check; while the author's code still fails it, hand the task with the last failure to the next source of
+    the chain (routing.yaml verify.handoffs times; the sources that failed are excluded). Returns the last result."""
+    settings = router.routing.get("verify") or {}
+    run, failed = VerifyRun(router, result, spec), []
+    run.execute()
+    for _ in range(int(settings.get("handoffs", DEFAULT_HANDOFFS))):
+        if run.report["passed"] or run.failure is None:
+            break
+        retry = replace(request, task=handoff_task(request.task, spec, run.failure))
+        try:
+            following = router.run_chain(retry, exclude=(*failed, result["_cand"].key))
+        except (RouterError, netguard.PrivacyError):
+            break
+        failed.append(result["_cand"].key)
+        fold_costs(following, result)
+        result, run = following, VerifyRun(router, following, spec)
+        run.execute()
+    result["verify"]["handed_off_from"] = failed
+    return result
 
 
 class VerifyRun:
@@ -53,6 +85,7 @@ class VerifyRun:
         self.swap = verify_module.FileSwap(spec.path)
         self.report: dict[str, Any] = {"command": spec.command, "target": spec.target, "fix_rounds": 0,
                                        "passed": False, "output_tail": ""}
+        self.failure: str | None = None   # the last output the author's code failed with (None: passed or not its fault)
 
     def execute(self) -> None:
         """Adds result["verify"] and folds the cost of the fix calls into the result."""
@@ -67,7 +100,7 @@ class VerifyRun:
 
     def _check_until_done(self) -> None:
         for attempt in range(self.max_rounds + 1):
-            failure = self._write_and_run()
+            failure = self.failure = self._write_and_run()
             if failure is None or attempt == self.max_rounds:
                 return
             if not self._ask_for_fix(failure, attempt + 1):
@@ -82,7 +115,7 @@ class VerifyRun:
             return None
         self.swap.write(code)
         try:
-            passed, output = verify_module.run_command(self.spec.tokens, Path.cwd(), self.timeout_s)
+            passed, output = verify_module.run_command(self.spec.tokens, self.spec.cwd, self.timeout_s)
         except verify_module.VerifyError as error:
             self.report["output_tail"] = str(error)
             return None

@@ -10,7 +10,11 @@ you: the task, the target file (absolute path), the check command, the sensitivi
 Steps:
 1. Call `delegate` once: kind="bulk_code", the task text as given, `sensitivity` as given (default "normal"),
    `context_files` as given, `verify` = the check command, `verify_target` = the target file relative to the project
-   folder. foremankit already sends check failures back to the model and keeps the file only if the check passes.
+   folder. When the venv lives in a sub-folder (a repo inside the project folder), pass `verify_cwd` = that sub-folder
+   and write `verify`/`verify_target` relative to it (e.g. verify_cwd="ForemanKit", verify=".venv/Scripts/python -m
+   pytest -q tests/test_x.py"). Use forward slashes, no `.exe`, no `&&` (no shell). Always put the source of the module
+   under test in `context_files`. foremankit already sends check failures back to the model, then to the next model of
+   the chain, and keeps the file only if the check passes.
 2. If the result says `verify: PASSED`: run the check command once yourself with Bash to confirm, then report.
 3. If it says `verify: FAILED`, INCOMPLETE or an error:
    - INCOMPLETE: call `delegate` again with the SAME arguments plus `continue_from=<id>` (once).

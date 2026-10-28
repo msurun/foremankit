@@ -54,6 +54,7 @@ class TaskRequest:
     allow_cost: bool = False
     verify: str = ""
     verify_target: str = ""
+    verify_cwd: str = ""          # folder (inside the project) the check runs in; command and target are relative to it
     review: bool = False
     continue_from: str = ""       # id of a cut-off answer in .agent-out to finish (same task, same model)
     max_continuations: int = 0    # extra continuation rounds for this call (0 = routing.yaml calls.max_continuations)
@@ -66,6 +67,7 @@ class VerifySpec:
     target: str
     tokens: list[str]
     path: Path
+    cwd: Path
 
 
 @dataclass(frozen=True)

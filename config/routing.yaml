@@ -153,7 +153,8 @@ reference:
 # failures go back to the same model (max_rounds times). The file is only left changed when the command passes.
 # The command comes from an agent, so it must START with one of these prefixes; it runs without a shell, in the project folder.
 verify:
-  max_rounds: 2
+  max_rounds: 1       # fix rounds on the SAME model (was 2; 2026-10-28: codestral failed 2 rounds in a row and nobody else tried)
+  handoffs: 2         # 2026-10-28: then the task + last failure goes to the next source of the chain (failed ones excluded)
   timeout_s: 300
   conventions: true   # 2026-10-11: after the command passes, a .py target must also pass `foremankit check` (config/conventions.md); the author fixes it, not Claude
   allowed_commands:

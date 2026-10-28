@@ -36,10 +36,42 @@ def check_target(target: str, project: Path) -> Path:
     return path
 
 
-def split_command(command: str, allowed_prefixes: list[str]) -> list[str]:
+def check_folder(folder: str, project: Path) -> Path:
+    """The folder the check runs in: `project` itself when empty, else a relative, existing, unprotected folder inside it."""
+    if not folder:
+        return project
+    if Path(folder).is_absolute():
+        raise VerifyError("verify_cwd must be a path relative to the project folder")
+    path = (project / folder).resolve()
+    if path != project.resolve() and project.resolve() not in path.parents:
+        raise VerifyError(f"verify_cwd {folder!r} is outside the project folder")
+    if not path.is_dir():
+        raise VerifyError(f"verify_cwd {folder!r} is not a folder")
+    if any(part in FORBIDDEN_NAMES for part in path.relative_to(project.resolve()).parts):
+        raise VerifyError(f"verify_cwd {folder!r} points at a protected folder")
+    return path
+
+
+def normalize_program(program: str, project: Path | None) -> str:
+    """The program token as the allow-list spells it: no `.exe` suffix, and an absolute path inside `project` made
+    relative to it (agents often paste `C:/.../.venv/Scripts/python.exe`). Paths outside the project stay absolute,
+    so they still match no prefix."""
+    if program.lower().endswith(".exe"):
+        program = program[:-len(".exe")]
+    if project is not None and Path(program).is_absolute():
+        try:
+            program = Path(program).resolve().relative_to(project.resolve()).as_posix()
+        except ValueError:
+            pass
+    return program
+
+
+def split_command(command: str, allowed_prefixes: list[str], project: Path | None = None) -> list[str]:
     """The command as a token list, or VerifyError when it does not start with an allowed prefix.
-    Backslashes are turned into slashes first so Windows paths survive shlex."""
+    Backslashes are turned into slashes first so Windows paths survive shlex; the program is normalized (normalize_program)."""
     tokens = shlex.split(command.replace("\\", "/"))
+    if tokens:
+        tokens[0] = normalize_program(tokens[0], project)
     for prefix in allowed_prefixes:
         wanted = shlex.split(prefix.replace("\\", "/"))
         if wanted and [token.lower() for token in tokens[:len(wanted)]] == [word.lower() for word in wanted]:
