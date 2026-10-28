@@ -15,7 +15,9 @@ chains:
   # confirmed by cloud_code_bench (the served model changes per call, so its pass rate is a mix).
   # 2026-10-27 (owner): bulk_code goes to every free source first (clouds, then the local pool), DeepSeek flash only
   # after them; this reverses the 2026-10-11 "DeepSeek first" choice above.
-  bulk_code:    [mistral, groq, openrouter, llm, "deepseek:flash", "gemini:lite31", "gemini:flash"]
+  # 2026-10-28: gpt-oss-120b first (cerebras: 900k tokens/day, groq: 90k), codestral after them (pass@1 17 %, it
+  # invents APIs in tests); mistral keeps its place for inputs too big for groq (413).
+  bulk_code:    [cerebras, groq, mistral, openrouter, llm, "deepseek:flash", "gemini:lite31", "gemini:flash"]
   data_script:  ["deepseek:flash", "gemini:flash"]
   hard_code:    ["deepseek:pro", "gemini:pro"]
   long_context: ["deepseek:flash", "gemini:flash"]
@@ -95,7 +97,7 @@ reasoning:
   # Effort level sent to providers that support it (providers.yaml -> `thinking`). Gemini 3.x cannot turn
   # reasoning off, "minimal" is the floor. Levels: minimal < low < medium < high.
   kinds:
-    bulk_code:    minimal    # mechanical: boilerplate, tests, docs, refactors
+    bulk_code:    medium     # 2026-10-28: was minimal; tests need the code understood. Paid models stay off, local Qwen too (on only at high)
     quick:        minimal
     summarize:    minimal
     long_context: low        # find patterns in big inputs, mostly summarising

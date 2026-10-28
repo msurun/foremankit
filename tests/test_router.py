@@ -137,7 +137,7 @@ def test_hidden_thinking_tokens_are_billed_and_get_headroom(monkeypatch, make_ro
 
 
 @pytest.mark.parametrize("kind,sens,escalate,expected", [
-    ("bulk_code", "normal", False, "minimal"), ("quick", "normal", False, "minimal"),
+    ("bulk_code", "normal", False, "medium"), ("quick", "normal", False, "minimal"),
     ("summarize", "normal", False, "minimal"), ("long_context", "normal", False, "low"),
     ("data_script", "normal", False, "medium"), ("hard_code", "normal", False, "high"),
     ("quick", "internal", False, "low"),          # internal floor

@@ -125,6 +125,12 @@ providers:
     free: true
     trains_on_data: false      # VERIFY
     timeout: 60
+    # 2026-10-28: gpt-oss takes reasoning_effort low|medium|high (API default medium, "minimal" does not exist). It thinks
+    # fast here, so it gets one step MORE than the task level: bulk_code (medium) -> high, quick/summarize (minimal) -> low.
+    thinking:
+      param: reasoning_effort
+      level_map: {minimal: low, low: medium, medium: high}
+      headroom: {low: 1000, medium: 2000, high: 6000}   # high with 3000 came back empty once in 8 (bench 2026-10-28)
     limits: {rpm: 25, rpd: 900, tpd: 90000}    # VERIFY (per-model, tokens/day is the tight one)
     default_model: main
     models:
@@ -188,6 +194,12 @@ providers:
     free: true
     trains_on_data: false      # VERIFY
     timeout: 60
+    # 2026-10-28: gpt-oss takes reasoning_effort low|medium|high (API default medium, "minimal" does not exist). It thinks
+    # fast here, so it gets one step MORE than the task level: bulk_code (medium) -> high, quick/summarize (minimal) -> low.
+    thinking:
+      param: reasoning_effort
+      level_map: {minimal: low, low: medium, medium: high}
+      headroom: {low: 1000, medium: 2000, high: 6000}   # high with 3000 came back empty once in 8 (bench 2026-10-28)
     limits: {rpm: 25, rpd: 900, tpd: 900000}   # VERIFY
     default_model: main
     models:
