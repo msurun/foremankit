@@ -19,6 +19,10 @@ main_loop_tools: [Agent, Task]
 # Subagents that carry tools stay local. false = send everything for local_models to the local model, as before.
 side_requests_to_cloud: true
 side_request_model: claude-sonnet-5-5
+# Seconds the cloud gets for a side request before it falls back to side_fallback_upstream.
+side_cloud_timeout_s: 20
+# Upstream for side requests when the cloud fails; never the busy Kaggle main model.
+side_fallback_upstream: deepseek
 
 # The tuned local model has far less context (32k) than Claude Code's auto-compact window (100k, per model), so a
 # local session that grows is spilled to the cloud instead of hitting "context exceeded": the request goes untouched

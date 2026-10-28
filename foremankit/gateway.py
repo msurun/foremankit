@@ -55,6 +55,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "cloud_url": "https://api.anthropic.com", "port": 8081, "prompt_file": "orchestrator.md", "language": "English",
             "main_loop_tools": ["Agent", "Task"], "trim": {},
             "side_requests_to_cloud": True, "side_request_model": "claude-sonnet-5-5",
+            "side_cloud_timeout_s": 20, "side_fallback_upstream": "deepseek",
             "overflow_to_cloud": True, "overflow_ratio": 0.70,
             "no_code": True,
             "context_stop": {},
@@ -829,17 +830,53 @@ def external_target(body: bytes, cfg: dict):
     return external if external and serves_picker_entry(body, cfg) else None
 
 
+async def side_to_cloud_first(request: Request, data: dict[str, Any], cfg: dict[str, Any]) -> Response | None:
+    """Answer a toolless side request (auto-mode safety check, titles) from the cloud; None when it failed or refused."""
+    url = target_url(request, cfg, local=False)
+    call = Call(request.url.path, data.get("model"), False, time.time(), route="side:cloud")
+    body = json.dumps({**data, "model": cfg["side_request_model"]}, ensure_ascii=False).encode("utf-8")
+    try:
+        resp = await client.send(client.build_request("POST", url, headers=upstream_headers(request, False),
+                                                      content=body, timeout=cfg["side_cloud_timeout_s"]))
+    except httpx.HTTPError:
+        call.log(502)
+        return None
+    call.log(resp.status_code)
+    if resp.status_code >= 400:
+        return None
+    return Response(content=resp.content, status_code=resp.status_code, headers=_response_headers(resp))
+
+
+def side_fallback_target(cfg: dict[str, Any], current: tuple[str, dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+    """The fast external upstream for side requests when the cloud fails; `current` when it is undeclared or keyless."""
+    name = cfg.get("side_fallback_upstream")
+    up = {**((cfg.get("upstreams") or {}).get(name) or {}), "name": name}
+    return (name, up) if name and external_refusal(name, up) is None else current
+
+
+async def handle_external_request(request: Request, body: bytes, data: dict[str, Any] | None, cfg: dict[str, Any],
+                                  target: tuple[str, dict[str, Any]], side: bool) -> Response:
+    """External-mode request: a toolless side request is tried on the cloud first, then on the fallback upstream."""
+    if side:
+        answer = await side_to_cloud_first(request, data, cfg)
+        if answer is not None:
+            return answer
+        target = side_fallback_target(cfg, target)
+    return await handle_external(request, body, cfg, target)
+
+
 async def handle(request: Request) -> Response:
     """Forward one request to the local llama-server or the cloud and stream the answer back."""
     refresh_live_env()   # a Kaggle address/key saved in the panel applies to this request, no router restart
     body, cfg = await request.body(), settings()
+    data = parse_body(body)
+    side = bool(cfg["side_requests_to_cloud"] and is_toolless_message(request.url.path, data))
     target = external_target(body, cfg)
     if target:
-        return await handle_external(request, body, cfg, target)
-    data = parse_body(body)
+        return await handle_external_request(request, body, data, cfg, target, side)
     model = data.get("model") if data else None
     call = Call(request.url.path, model, model in cfg["local_models"], time.time())
-    reason = refusal() if call.local else None
+    reason = refusal() if call.local and not side else None
     if reason:
         call.log(503)
         return switched_off(reason)

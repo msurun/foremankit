@@ -51,6 +51,7 @@ class FakeUpstreamResponse:
     """Stands in for an httpx streaming response: a status, headers and a small JSON body."""
     status_code = 200
     headers = {"content-type": "application/json"}
+    content = b"{}"
 
     async def aiter_raw(self):
         yield b"{}"
@@ -275,11 +276,12 @@ def test_a_tooled_messages_request_is_sent_with_the_sonnet_alias(
     assert sent_model(fake_upstream[-1]) == "ds-pro"
 
 
-def test_a_toolless_messages_request_is_sent_with_the_cheap_alias(
+def test_a_toolless_messages_request_goes_to_the_cloud_first(
         gateway_dirs: Path, fake_upstream: list):
     use_mode("deepseek")
     post("/v1/messages", toolless_request())
-    assert sent_model(fake_upstream[-1]) == "ds-flash"
+    assert len(fake_upstream) == 1
+    assert sent_model(fake_upstream[0]) == "claude-sonnet-5-5"
 
 
 def test_a_main_loop_request_carries_tools_and_the_external_prompt(
