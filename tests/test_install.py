@@ -102,7 +102,8 @@ def test_snapshot_copies_existing_tracked_files_and_records_which_existed(sandbo
     snapshot = read_snapshot(state_dir)
     copied_claude_md = (state_dir / "files" / CLAUDE_MD).read_bytes()
     assert snapshot["existed"] == {CLAUDE_MD: True, SETTINGS_JSON: True, OPUS_ADVISOR: False,
-                                   DELEGATOR: False, "foremankit-reference.md": False}
+                                   DELEGATOR: False, "agents/bulk-supervisor.md": False,
+                                   "foremankit-reference.md": False}
     assert copied_claude_md == CLAUDE_MD_BYTES
 
 

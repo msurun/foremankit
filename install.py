@@ -9,7 +9,7 @@
   python install.py --restore-original   # exact bytes of CLAUDE.md, settings.json and the agent files
                                          # as they were before the first install (legacy: earliest backup)
 
-Only touches: ./.venv, ~/.claude/agents/{opus-advisor,delegator}.md, the foremankit block in
+Only touches: ./.venv, ~/.claude/agents/{opus-advisor,delegator,bulk-supervisor}.md, the foremankit block in
 ~/.claude/CLAUDE.md, the notify hook entries in ~/.claude/settings.json, and the user-scope MCP entry
 "foremankit". With --local-orchestrator also the VS Code user settings.json / tasks.json. Every modified file is
 backed up first.
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CLAUDE_HOME = Path.home() / ".claude"
 BEGIN, END = "<!-- BEGIN foremankit -->", "<!-- END foremankit -->"
-AGENTS = ("opus-advisor.md", "delegator.md")
+AGENTS = ("opus-advisor.md", "delegator.md", "bulk-supervisor.md")
 MCP_NAME = "foremankit"
 KEYS = ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
         "MISTRAL_API_KEY", "CEREBRAS_API_KEY", "LLAMACPP_URL", "OLLAMA_LOCAL_URL",
@@ -63,7 +63,8 @@ STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 # user's files back exactly as they were. TRACKED lists those files, relative to CLAUDE_HOME; the
 # forward slashes are part of the snapshot keys and of the copied layout under STATE_DIR/"files".
 STATE_DIR = Path.home() / ".config" / "foremankit" / "install-state"
-TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/delegator.md", REFERENCE_NAME)
+TRACKED = ("CLAUDE.md", "settings.json", "agents/opus-advisor.md", "agents/delegator.md", "agents/bulk-supervisor.md",
+           REFERENCE_NAME)
 # Runtime leftovers of the gateway: its context counter sits next to the install snapshot, its logs in the temp
 # folder (llama/Start-Router.ps1 writes router.log and router.err there). --purge deletes them; TEMP_DIR is a
 # constant so that tests never touch the real temp folder.
