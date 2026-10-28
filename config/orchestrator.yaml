@@ -82,7 +82,7 @@ trim:
 # External orchestrators: Gemini Pro / DeepSeek Pro instead of Claude when the weekly Claude limit is spent.
 # Switch with `foremankit orchestrator use deepseek|gemini|claude|local` (state file orchestrator_mode), then restart
 # Claude Code with ANTHROPIC_BASE_URL pointing at this gateway (`foremankit orchestrator env`). The endpoint must speak
-# the Anthropic Messages API: DeepSeek has one; for Gemini run a translating proxy (LiteLLM) and put its URL here.
+# the Anthropic Messages API: DeepSeek has one; Gemini uses its OpenAI-compatible endpoint with `format: openai`.
 # An OpenAI-compatible endpoint (Ollama, llama-server's /v1/chat/completions, vLLM) is used with `format: openai`,
 # which makes the gateway translate both ways; a rotating address comes from `url_env` instead of `url`.
 # Model ids and URLs below are placeholders to verify against the provider's current docs.
@@ -95,6 +95,7 @@ trim:
 #            instead of `url`. Unset = the switch is refused with that variable named.
 #   format:  openai = the endpoint speaks /chat/completions and the gateway translates both ways; absent = it speaks
 #            the Anthropic Messages API itself.
+#   chat_path: optional chat-completions path for format: openai when the endpoint has no /v1 segment (default /v1/chat/completions).
 #   context: window in tokens (the session-length hint uses it). trim: optional gateway_trim overrides (default none).
 upstreams:
   deepseek:
@@ -109,8 +110,10 @@ upstreams:
     # a clean run. errors/clean/min_expensive_s tune the hysteresis (foremankit/escalation.py).
     escalation: {expensive: pro, errors: 2, clean: 6, min_expensive_s: 120}
   gemini:
-    url: http://127.0.0.1:4000
-    key_env: LITELLM_MASTER_KEY
+    url: https://generativelanguage.googleapis.com/v1beta/openai   # Google's OpenAI-compatible endpoint, no proxy needed
+    key_env: GEMINI_API_KEY
+    format: openai
+    chat_path: /chat/completions     # Google serves .../v1beta/openai/chat/completions (no /v1 segment)
     ceiling: internal
     context: 1000000
     tools_keep: *keep_tools

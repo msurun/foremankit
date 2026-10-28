@@ -798,10 +798,13 @@ def external_body(call: Call, data: dict[str, Any], up: dict[str, Any], cfg: dic
 
 
 def external_url(request: Request, up: dict[str, Any], openai: bool) -> str:
-    """The upstream address for this request: mapped to the chat-completions path for an OpenAI endpoint, query kept."""
+    """The upstream address for this request: mapped to the chat-completions path for an OpenAI endpoint (or its
+    `chat_path` override), the client query (Anthropic's `?beta=true`) dropped for an OpenAI endpoint, which rejects
+    unknown parameters, kept otherwise."""
     base = (upstream.upstream_url(up) or "").rstrip("/")
-    path = (openai_bridge.openai_path(request.url.path) or request.url.path) if openai else request.url.path
-    query = f"?{request.url.query}" if request.url.query else ""
+    mapped = openai_bridge.openai_path(request.url.path) if openai else None
+    path = (up.get("chat_path") or mapped) if mapped else request.url.path
+    query = f"?{request.url.query}" if request.url.query and not mapped else ""
     return f"{base}{path}{query}"
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -204,6 +205,34 @@ def asgi_request(headers: list[tuple[bytes, bytes]]) -> Request:
     """Build a Starlette Request from a minimal ASGI scope carrying the given headers."""
     scope = {"type": "http", "headers": headers, "method": "POST", "path": "/v1/messages", "query_string": b""}
     return Request(scope)
+
+
+def test_an_openai_upstream_with_chat_path_maps_messages_to_that_path():
+    """An OpenAI upstream with `chat_path` sends /v1/messages to that path (Gemini has no /v1 segment)."""
+    up = {"url": "https://g.example/v1beta/openai", "chat_path": "/chat/completions"}
+    request = SimpleNamespace(url=SimpleNamespace(path="/v1/messages", query=""))
+    assert gateway.external_url(request, up, True) == "https://g.example/v1beta/openai/chat/completions"
+
+
+def test_an_openai_upstream_without_chat_path_maps_messages_to_v1_chat_completions():
+    """Without `chat_path` the OpenAI upstream keeps the default /v1/chat/completions path."""
+    up = {"url": "https://g.example/v1beta/openai"}
+    request = SimpleNamespace(url=SimpleNamespace(path="/v1/messages", query=""))
+    assert gateway.external_url(request, up, True) == "https://g.example/v1beta/openai/v1/chat/completions"
+
+
+def test_an_openai_upstream_drops_the_anthropic_beta_query():
+    """An OpenAI endpoint gets no `?beta=true` (Google rejects it as an unknown parameter)."""
+    up = {"url": "https://g.example/v1beta/openai", "chat_path": "/chat/completions"}
+    request = SimpleNamespace(url=SimpleNamespace(path="/v1/messages", query="beta=true"))
+    assert gateway.external_url(request, up, True) == "https://g.example/v1beta/openai/chat/completions"
+
+
+def test_an_anthropic_upstream_keeps_the_query():
+    """A native Anthropic upstream keeps the client query string."""
+    up = {"url": "https://d.example/anthropic"}
+    request = SimpleNamespace(url=SimpleNamespace(path="/v1/messages", query="beta=true"))
+    assert gateway.external_url(request, up, False) == "https://d.example/anthropic/v1/messages?beta=true"
 
 
 def test_external_headers_replace_the_client_credentials_with_the_provider_key(gateway_dirs: Path):
