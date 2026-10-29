@@ -160,6 +160,17 @@ def test_apply_hooks_with_none_also_installs_the_guards() -> None:
         assert script_name in commands
 
 
+def test_night_hook_installs_a_stop_entry_and_uninstall_removes_it() -> None:
+    """_apply_night adds one Stop entry that names night_continue.py and removes it on uninstall."""
+    hooks: dict = {}
+
+    INSTALL._apply_night(hooks, PY, False)
+    assert any("night_continue.py" in cmd for cmd in commands_of(hooks.get("Stop", [])))
+
+    INSTALL._apply_night(hooks, PY, True)
+    assert "Stop" not in hooks or not any("night_continue.py" in cmd for cmd in commands_of(hooks["Stop"]))
+
+
 def test_apply_hooks_remove_then_none_leaves_an_empty_dict() -> None:
     """Removing every group after a full install leaves nothing behind."""
     hooks: dict = {}

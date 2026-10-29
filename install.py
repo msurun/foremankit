@@ -46,6 +46,7 @@ GUARD_HOOK_MARK = "orchestrator_guard.py"           # PreToolUse on every tool: 
 GUARD_SCRIPTS = (("guard_git.py", "Bash|PowerShell"), ("guard_destructive.py", "Bash|PowerShell"),
                 ("guard_config.py", "Write|Edit|MultiEdit|NotebookEdit"))   # PreToolUse: commit gate, destructive commands, protected configs
 CHECKPOINT_HOOK_MARK = "auto_checkpoint.py"         # PostToolUse on delegate: auto-checkpoint after agent tasks
+NIGHT_HOOK_MARK = "night_continue.py"               # Stop: keeps an unattended night run going
 GATEWAY_ENV = "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
 PICKER_SLOTS = ("SONNET", "HAIKU", "OPUS", "FABLE")   # the native Claude Code picker slots that orchestrator.yaml `picker:` may re-point
 SLOT_ENV = tuple(f"ANTHROPIC_DEFAULT_{slot}_MODEL{suffix}" for slot in PICKER_SLOTS for suffix in ("", "_NAME"))
@@ -247,6 +248,12 @@ def _apply_nudge(hooks: dict, py: Path, remove: bool) -> None:
         _update_event(hooks, event, NUDGE_HOOK_MARK, None if remove else entry)
 
 
+def _apply_night(hooks: dict, py: Path, remove: bool) -> None:
+    """Night-run continuer: Stop, no matcher."""
+    entry = {"hooks": [{"type": "command", "command": _hook_command(py, "night_continue.py")}]}
+    _update_event(hooks, "Stop", NIGHT_HOOK_MARK, None if remove else entry)
+
+
 def _apply_guard(hooks: dict, py: Path, remove: bool) -> None:
     """Orchestrator guard: PreToolUse on every tool; it only acts while Gemini/DeepSeek orchestrate Claude Code."""
     entry = {"hooks": [{"type": "command", "command": _hook_command(py, "orchestrator_guard.py")}]}
@@ -264,7 +271,7 @@ def _apply_hooks(hooks: dict, py: Path, remove: bool, only: str | None) -> None:
     """Add or remove, in `hooks`, every hook group that `only` selects (None selects all of them)."""
     groups = (("notify", _apply_notify), ("session", _apply_session),
               ("checkpoint", _apply_checkpoint), ("nudge", _apply_nudge), ("guard", _apply_guard),
-              ("guards", _apply_guards))
+              ("guards", _apply_guards), ("night", _apply_night))
     for name, apply in groups:
         if only in (None, name):
             apply(hooks, py, remove)
@@ -546,7 +553,7 @@ class Installer:
         if data is None:
             return []
         text = json.dumps(data)
-        marks = (HOOK_MARK, SESSION_HOOK_MARK, CHECKPOINT_HOOK_MARK, NUDGE_HOOK_MARK, GUARD_HOOK_MARK)
+        marks = (HOOK_MARK, SESSION_HOOK_MARK, CHECKPOINT_HOOK_MARK, NUDGE_HOOK_MARK, GUARD_HOOK_MARK, NIGHT_HOOK_MARK)
         found = [mark for mark in marks if mark in text]
         return [f"hook {', '.join(found)} still registered in {path}"] if found else []
 
