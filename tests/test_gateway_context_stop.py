@@ -20,6 +20,7 @@ WINDOW_TOKENS = 10_000      # the pinned context window of the fake llama-server
 STOP_FILL = 45_000          # user text characters: above the 0.90 ratio (~36_000 chars)
 SMALL_FILL = 1_000
 NEAR_FILL = 37_000          # between the 0.90 and 0.95 thresholds (~36_000 and ~38_000 chars)
+OVERFLOW_FILL = 30_000      # 70-85 % of the window: above the 0.70 spill line, below the 0.85 stop (~34_000 chars)
 # `tools_keep` must keep the Agent tool: the shaping drops every tool it does not name, and the stop only gates
 # requests that still carry tools (a tool-less request would be a side request).
 TRIM_YAML = "trim:\n  enabled: true\n  tools_keep: [Agent]\n"
@@ -157,6 +158,34 @@ def test_the_same_near_fill_is_stopped_at_the_default_ratio(config_dir: Path, fi
     assert isinstance(result, Response)
     assert "context stop" in call.note
     assert len(handoff_files(config_dir)) == 1
+
+
+def set_local_driver(config_dir: Path) -> None:
+    """Record that the local model drives the main loop."""
+    (config_dir / "state").mkdir(exist_ok=True)
+    (config_dir / "state" / "driver.json").write_text(
+        json.dumps({"local": True, "model": "x", "time": time.time()}), encoding="utf-8")
+
+
+def test_an_overflowing_main_loop_request_stays_local_when_local_drives(config_dir: Path,
+                                                                        fixed_window: int) -> None:
+    """Between the 0.70 spill line and the 0.85 stop, a main-loop request is not spilled while the local model drives."""
+    (config_dir / "orchestrator.yaml").write_text(TRIM_YAML + "cloud_when_local: false\n", encoding="utf-8")
+    set_local_driver(config_dir)
+    call, result = prepare(OVERFLOW_FILL, config_dir)
+    assert isinstance(result, bytes) and not isinstance(result, Response)
+    assert call.local is True
+    assert "does not fit" not in call.note
+
+
+def test_an_overflowing_main_loop_request_still_spills_when_cloud_when_local(config_dir: Path,
+                                                                            fixed_window: int) -> None:
+    """With cloud_when_local true the same overflowing main-loop request is still spilled to the cloud."""
+    (config_dir / "orchestrator.yaml").write_text(TRIM_YAML + "cloud_when_local: true\n", encoding="utf-8")
+    set_local_driver(config_dir)
+    call, _ = prepare(OVERFLOW_FILL, config_dir)
+    assert call.local is False
+    assert "does not fit" in call.note
 
 
 def test_an_external_orchestrator_request_is_stopped_with_the_handoff(config_dir: Path, fixed_window: int) -> None:

@@ -82,7 +82,7 @@ def test_policy_defaults_when_block_is_missing() -> None:
     result = policy({})
 
     assert result["enabled"] is True
-    assert result["ratio"] == 0.90
+    assert result["ratio"] == 0.85
     assert result["chars_per_token"] == 4
     assert result["dir"] == ""
 

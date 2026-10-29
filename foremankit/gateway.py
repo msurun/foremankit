@@ -272,6 +272,11 @@ def overflow_stop(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> Resp
     return handback_done_response(data, OVERFLOW_STOP_TEXT)
 
 
+def keeps_main_loop_local(data: dict[str, Any], cfg: dict[str, Any]) -> bool:
+    """True when an overflowing main-loop request stays on the local model (cloud_when_local off, local model drives)."""
+    return not is_subagent(data) and not cfg["cloud_when_local"] and driver.local_drives()
+
+
 def describe_side_request(data: dict[str, Any]) -> str:
     """One short line about a request that is not the main loop (tools, streaming, size, first words of the system
     prompt), so the log shows what kind of side request (subagent, auto-mode check, title) reaches the local model."""
@@ -451,7 +456,8 @@ def target_url(request: Request, cfg: dict[str, Any], local: bool) -> str:
 def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict[str, Any]) -> bytes | Response:
     """Body for the upstream call, or a synthetic stop answer: cloud requests lose the write tools when the no-code
     policy applies, side requests go to the cloud, local requests shaped, a full window answered with a handoff instead
-    of another turn, an oversized one spilled there."""
+    of another turn, an oversized one spilled there (except a main-loop one while the local model drives with
+    cloud_when_local off: it stays local and the context stop handles it)."""
     if data is None:
         return body
     if not call.local:
@@ -469,7 +475,7 @@ def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict
                                     {"mode": "local", "model": shaped.get("model", ""), "window": window}, cfg)
     if stopped is not None:
         return stopped
-    if overflows(shaped, cfg):
+    if overflows(shaped, cfg) and not keeps_main_loop_local(data, cfg):
         return overflow_stop(call, data, cfg) or spill_to_cloud(call, data, cfg)
     return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
 

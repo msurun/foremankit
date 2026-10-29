@@ -41,7 +41,8 @@ overflow_ratio: 0.70
 no_code: true
 
 # 2026-10-29: while the local model drives the main loop, its subagents never reach the Anthropic cloud: Haiku/Opus
-# subagent ids are served locally, and an overflowing subagent is stopped instead of spilled. true = the old behaviour.
+# subagent ids are served locally, and an overflowing subagent is stopped instead of spilled. The main loop is not
+# spilled either: it stays local and the context_stop ratio ends it. true = the old behaviour.
 cloud_when_local: false
 
 # HARD context stop: a hook (hooks/session_length_reminder.py) only ASKS the model to hand over at 85 %, and a degraded
@@ -50,10 +51,10 @@ cloud_when_local: false
 # never asking the model. It is checked BEFORE the 0.70 spill, so a session at >= ratio stops instead of growing on;
 # between overflow_ratio and ratio the spill still keeps it alive on the cloud. Only requests that carry tools are gated
 # (side requests such as session titles never are). Applies to local and to every external orchestrator (its `context`).
-# ratio: 0.90 default, 0.95 also sensible. dir: handoff folder, empty = <state dir>/handoffs.
+# ratio: 0.85 default, 0.90 and 0.95 also sensible. dir: handoff folder, empty = <state dir>/handoffs.
 context_stop:
   enabled: true
-  ratio: 0.90
+  ratio: 0.85
   chars_per_token: 4        # rough size: request_chars(data) // this
   dir: ""                   # handoff-YYYYmmdd-HHMMSS.md; empty = state dir /handoffs
 

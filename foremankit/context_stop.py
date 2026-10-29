@@ -18,7 +18,7 @@ from foremankit.gateway_trim import request_chars
 
 DEFAULTS: dict[str, Any] = {
     "enabled": True,
-    "ratio": 0.90,
+    "ratio": 0.85,
     "chars_per_token": 4,
     "dir": "",
 }
