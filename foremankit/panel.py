@@ -16,6 +16,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
                    pair lab computers: show a code here, find hosts, join with a code (foremankit/pairing.py)
     delegation-set true|false --name paid|free|local|all    switch delegation (everything on Claude when all is off)
     delegations    delegated tasks, who did them and what they cost (today, last days)
+    night-run on|off|status [--hours N --max N]    unattended local work until the deadline or the continue limit
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
     thinking --levels low=false,high=true    quick actions executed here (router-direct/-normal edit the VS Code
                             settings: the window must be reloaded afterwards)
@@ -54,6 +55,8 @@ from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
 from foremankit.gateway import LOCAL_ROLE_FILE, ORCHESTRATOR_FILE, local_role, orchestrator_target
+from foremankit.driver import local_drives
+from foremankit.night_run import read_night, start_night, stop_night
 
 ROOT = Path(__file__).resolve().parents[1]
 LLAMA = ROOT / "llama"
@@ -137,7 +140,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(), "kaggle": kaggle_status(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "night": night_status(),"orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(), "kaggle": kaggle_status(),
             "thinking": get_thinking()}
 
 
@@ -395,6 +398,66 @@ def set_delegation(target: str, enabled: bool) -> str:
     changed = delegation_module.set_switch(StateStore(), target, "on" if enabled else "off")
     return f"delegation {'on' if enabled else 'off'}: {', '.join(changed)}" + (
         "" if enabled or target != "all" else " (everything runs on Claude now)")
+
+
+NIGHT_HOURS = 8
+NIGHT_MAX_CONTINUES = 20
+NIGHT_DONE_FILE = "DONE"        # a file of this name in the state folder ends the night run (the agent writes it when done)
+NIGHT_TEXT = {
+    "en": {"title": "Night run", "hours": "hours", "max": "max continues", "on": "Night run: ON, {count}/{max}, until {until}",
+           "off": "Night run: OFF", "started": "night run on until {until}, up to {max} continues", "stopped": "night run off"},
+    "pl": {"title": "Nocny przebieg", "hours": "godzin", "max": "maks. kontynuacji", "on": "Nocny przebieg: WŁ., {count}/{max}, do {until}",
+           "off": "Nocny przebieg: WYŁ.", "started": "nocny przebieg włączony do {until}, najwyżej {max} kontynuacji", "stopped": "nocny przebieg wyłączony"},
+}
+
+
+def night_lang() -> str:
+    """Language of the night-run texts: FOREMANKIT_LANG when it is en or pl, English otherwise."""
+    lang = os.getenv("FOREMANKIT_LANG", "en").strip().lower()
+    return lang if lang in NIGHT_TEXT else "en"
+
+
+def _until_text(until: float) -> str:
+    """The deadline as local HH:MM."""
+    return time.strftime("%H:%M", time.localtime(until))
+
+
+def night_status() -> dict[str, Any]:
+    """The night-run switch: enabled, continues used of the limit, deadline, whether this computer drives, and the label."""
+    state = read_night() or {}
+    texts = NIGHT_TEXT[night_lang()]
+    enabled = bool(state.get("enabled"))
+    count, limit = int(state.get("count", 0)), int(state.get("max_continues", NIGHT_MAX_CONTINUES))
+    until = float(state.get("until", 0.0))
+    line = texts["on"].format(count=count, max=limit, until=_until_text(until)) if enabled else texts["off"]
+    return {"enabled": enabled, "count": count, "max_continues": limit, "until": until,
+            "driver_local": local_drives(), "line": line, "texts": texts}
+
+
+def set_night(enabled: bool, hours: float = NIGHT_HOURS, max_continues: int = NIGHT_MAX_CONTINUES) -> str:
+    """Switch the night run on for `hours` from now with at most `max_continues` continues, or off.
+
+    A DONE file left by an earlier run is removed first, so it cannot stop the new run at once."""
+    texts = NIGHT_TEXT[night_lang()]
+    if not enabled:
+        stop_night()
+        return texts["stopped"]
+    if hours <= 0 or max_continues < 1:
+        raise ValueError("hours and max must be positive")
+    done = state_dir() / NIGHT_DONE_FILE
+    done.unlink(missing_ok=True)
+    until = time.time() + hours * 3600
+    start_night(until=until, max_continues=max_continues, done_file=str(done))
+    return texts["started"].format(until=_until_text(until), max=max_continues)
+
+
+def night_command(args: argparse.Namespace) -> str:
+    """`night-run on|off|status` from the command line; status answers with the label line."""
+    if args.action == "status":
+        return night_status()["line"]
+    if args.action not in ("on", "off"):
+        raise ValueError("night-run needs on, off or status")
+    return set_night(args.action == "on", args.hours, args.max_continues)
 
 
 def set_role(role: str) -> str:
@@ -1104,6 +1167,7 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
         "profile-set": lambda: set_profile(args.model, json.loads(args.fields)),
         "worker-add": lambda: add_worker(args.name, args.url, args.accept, args.priority),
         "worker-remove": lambda: remove_worker(args.name),
+        "night-run": lambda: night_command(args),
         "kaggle-set": lambda: set_kaggle(args.url, args.key),
         "kaggle-test": test_kaggle,
     }
@@ -1120,7 +1184,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "night-run", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -1137,6 +1201,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--value", default="", help="budget-set: the amount, empty = no cap")
     parser.add_argument("--key", default="", help="kaggle-set: the notebook's API key, empty = keep the saved one")
     parser.add_argument("--levels", default="", help="thinking: comma list like low=false,high=true")
+    parser.add_argument("--hours", type=float, default=NIGHT_HOURS, help="night-run on: hours until the run stops")
+    parser.add_argument("--max", dest="max_continues", type=int, default=NIGHT_MAX_CONTINUES, help="night-run on: continue limit")
     return parser
 
 
@@ -1175,7 +1241,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test", "night-run"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}
