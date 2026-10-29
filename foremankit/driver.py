@@ -14,9 +14,9 @@ from foremankit.config import state_dir
 DRIVER_FILE = "driver.json"
 
 
-def write_driver(local: bool, model: str) -> None:
-    """Record whether the local model drives the main loop; an OSError is swallowed so a request never fails."""
-    record = {"local": bool(local), "model": model, "time": time.time()}
+def write_driver(local: bool, model: str, kind: str = "local") -> None:
+    """Record who drives the main loop: `kind` is "local" or "external:<mode>"; an OSError is swallowed."""
+    record = {"local": bool(local), "model": model, "kind": kind, "time": time.time()}
     try:
         (state_dir() / DRIVER_FILE).write_text(json.dumps(record), encoding="utf-8")
     except OSError:
@@ -36,3 +36,14 @@ def local_drives() -> bool:
     """True only when the last main-loop request was driven by the local model."""
     record = read_driver()
     return bool(record and record.get("local") is True)
+
+
+def drives_kind() -> str | None:
+    """The kind of the last driver ("local" or "external:<mode>"), else None; a local record without kind is "local"."""
+    record = read_driver()
+    if not record:
+        return None
+    kind = record.get("kind")
+    if isinstance(kind, str) and kind:
+        return kind
+    return "local" if record.get("local") is True else None

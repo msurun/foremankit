@@ -154,6 +154,29 @@ def test_a_subagent_does_not_record_the_driver(config_dir: Path, tmp_path: Path)
     assert gateway.driver.read_driver() is None
 
 
+def test_an_external_main_loop_request_overwrites_a_stale_local_driver(config_dir: Path, tmp_path: Path) -> None:
+    """A Kaggle main-loop request replaces a stale local=true record with its kind, and the local flag reads false."""
+    set_driver(tmp_path, local=True)
+    data = {"model": "claude-sonnet-5", "tools": [{"name": "Agent"}]}
+    call = gateway.Call("/v1/messages", "claude-sonnet-5", False, time.time(), route="external:kaggle")
+    gateway.record_external_main_loop(call, data, gateway.settings())
+    assert gateway.driver.drives_kind() == "external:kaggle"
+    assert gateway.driver.local_drives() is False
+
+
+def test_an_external_side_request_does_not_record_the_driver(config_dir: Path, tmp_path: Path) -> None:
+    """A tool-less side request sent to an external upstream leaves driver.json untouched."""
+    call = gateway.Call("/v1/messages", "claude-haiku-5-5", False, time.time(), route="external:kaggle")
+    gateway.record_external_main_loop(call, {"model": "claude-haiku-5-5", "tools": []}, gateway.settings())
+    assert gateway.driver.read_driver() is None
+
+
+def test_a_local_record_without_kind_reads_as_local(config_dir: Path, tmp_path: Path) -> None:
+    """Old driver.json files lack "kind": a local=true record reads as "local"."""
+    set_driver(tmp_path, local=True)
+    assert gateway.driver.drives_kind() == "local"
+
+
 def test_a_haiku_subagent_is_served_locally_when_local_drives(config_dir: Path, tmp_path: Path) -> None:
     """With cloud_when_local false and the local model driving, a claude-haiku subagent is localised."""
     cloud_when_local_off(config_dir)

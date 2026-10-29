@@ -201,6 +201,21 @@ def test_an_external_orchestrator_request_is_stopped_with_the_handoff(config_dir
     assert len(files) == 1 and " via deepseek" in files[0].read_text(encoding="utf-8")
 
 
+def test_an_over_ratio_external_main_loop_request_is_cut_and_continues(config_dir: Path, fixed_window: int) -> None:
+    """A Kaggle-style main-loop request over the ratio is virtually cleared: it is forwarded with a handoff, not stopped."""
+    cfg = gateway.settings()
+    up = {"name": "kaggle", "url": "https://example.invalid", "context": WINDOW_TOKENS,
+          "tools_keep": ["Agent", "Read"], "schema": {}, "models": {"sonnet": "flash"}}
+    call = gateway.Call("/v1/messages", "claude-sonnet-5", False, time.time(), route="external:kaggle")
+    data = {**make_request(0), "messages": long_turns(STOP_FILL)}
+    result = gateway.prepare_external(call, data, up, cfg)
+    assert isinstance(result, bytes) and not isinstance(result, Response)
+    sent = json.loads(result)
+    assert sent["messages"][0]["content"].startswith("handoff: ")
+    assert "virtual clear" in call.note
+    assert len(handoff_files(config_dir)) == 1
+
+
 def test_context_stop_response_reports_the_external_mode_in_the_handoff(config_dir: Path) -> None:
     """The stop decision alone (no request shaping) uses `where` for the handoff model line."""
     cfg = gateway.settings()

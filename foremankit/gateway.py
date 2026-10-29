@@ -275,10 +275,22 @@ def localize_cloud_subagent(call: Call, data: dict[str, Any], cfg: dict[str, Any
     call.note = f" (cloud subagent model {model} served locally: local orchestrator drives)"
 
 
+def is_recorded_main_loop(call: Call, data: dict[str, Any] | None, cfg: dict[str, Any]) -> bool:
+    """True for a main-loop request: it spawns subagents, is no subagent and no tool-less side request."""
+    return (data is not None and is_main_loop(data, cfg["main_loop_tools"]) and not is_subagent(data)
+            and not is_toolless_message(call.path, data))
+
+
 def record_main_loop(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> None:
     """Remember whether the local model drives the main loop (subagents and side requests do not count)."""
-    if is_main_loop(data, cfg["main_loop_tools"]) and not is_subagent(data) and not is_toolless_message(call.path, data):
+    if is_recorded_main_loop(call, data, cfg):
         driver.write_driver(call.local, str(data.get("model")))
+
+
+def record_external_main_loop(call: Call, data: dict[str, Any] | None, cfg: dict[str, Any]) -> None:
+    """Remember that an external orchestrator drives the main loop, so a stale local record never survives it."""
+    if is_recorded_main_loop(call, data, cfg):
+        driver.write_driver(False, str(data.get("model")), kind=call.route)
 
 
 def overflow_stop(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> Response | None:
@@ -859,9 +871,38 @@ def plain_content(content: Any) -> Any:
             else block for block in blocks]
 
 
+def _as_blocks(content: Any) -> list[dict[str, Any]]:
+    """A message content as a block list; a string becomes one text block."""
+    return content if isinstance(content, list) else [{"type": "text", "text": content}]
+
+
+def fold_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turn system messages into user turns. Qwen/vLLM chat templates answer 500 "System message must be at the
+    beginning" to a system message anywhere else, and Claude Code puts them mid-conversation. Each one becomes a user
+    message, merged into the neighbouring user message when it is one, so no two folded turns are split apart."""
+    folded: list[dict[str, Any]] = []
+    from_system: list[bool] = []
+    for message in messages:
+        system = message.get("role") == "system"
+        if system:
+            text = system_text(message.get("content"))
+            if not text:
+                continue
+            message = {"role": "user", "content": [{"type": "text", "text": text}]}
+        if folded and folded[-1].get("role") == "user" and message.get("role") == "user" and (system or from_system[-1]):
+            folded[-1] = {**folded[-1], "content": _as_blocks(folded[-1]["content"]) + _as_blocks(message["content"])}
+            from_system[-1] = True
+        else:
+            folded.append(message)
+            from_system.append(system)
+    return folded
+
+
 def plain_request(data: dict[str, Any]) -> dict[str, Any]:
-    """The request without the Claude-only parts: unknown content block types as text, tool-search flags removed."""
-    messages = [{**message, "content": plain_content(message.get("content"))} for message in data.get("messages") or []]
+    """The request without the Claude-only parts: unknown content block types as text, tool-search flags removed,
+    system messages folded into user turns."""
+    plain = [{**message, "content": plain_content(message.get("content"))} for message in data.get("messages") or []]
+    messages = fold_system_messages(plain)
     tools = [{key: value for key, value in tool.items() if key not in TOOL_FIELDS_DROPPED} for tool in data.get("tools") or []]
     shaped = {**data, "messages": messages}
     return {**shaped, "tools": tools} if tools else shaped
@@ -884,6 +925,8 @@ def prepare_external(call: Call, data: dict[str, Any], up: dict[str, Any],
     shaped, call.note = shape_external(data, up, cfg)
     call.provider_model = shaped.get("model", "")
     where = {"mode": mode, "model": shaped.get("model", ""), "window": context_window(up, cfg)}
+    if is_recorded_main_loop(call, data, cfg):
+        shaped = virtual_clear_body(call, shaped, where, cfg)
     stopped = context_stop_response(call, shaped, where, cfg)
     if stopped is not None:
         call.log(200)
@@ -908,6 +951,7 @@ async def handle_external(request: Request, body: bytes, cfg: dict[str, Any],
     if answer is not None:
         return answer
     if data is not None and request.url.path == "/v1/messages":
+        record_external_main_loop(call, data, cfg)
         prepared = external_body(call, data, up, cfg)
         if isinstance(prepared, Response):
             return prepared
