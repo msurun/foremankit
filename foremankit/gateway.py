@@ -193,6 +193,55 @@ def context_stop_response(call: Call, data: dict[str, Any],
     return JSONResponse(context_stop.message_json(text, model, stop))
 
 
+HANDBACK_TOOL = "SubagentHandback"
+
+
+def is_subagent(data: dict[str, Any]) -> bool:
+    """True when the request carries the handback tool: only a Claude Code subagent has it."""
+    return any(isinstance(tool, dict) and tool.get("name") == HANDBACK_TOOL for tool in data.get("tools") or [])
+
+
+def without_spawn_tools(data: dict[str, Any], spawn_tools: list[str]) -> dict[str, Any]:
+    """A copy of the request with the subagent-spawning tools (Agent, Task) removed; the other tools stay."""
+    tools = [tool for tool in data.get("tools") or [] if not (isinstance(tool, dict) and tool.get("name") in spawn_tools)]
+    return {**data, "tools": tools}
+
+
+def _blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """The content blocks of a message as a list (a plain string content has none)."""
+    content = message.get("content")
+    return [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
+
+
+def handed_back(data: dict[str, Any]) -> bool:
+    """True when the last message returns a successful result for the SubagentHandback call just made."""
+    messages = data.get("messages") or []
+    if len(messages) < 2 or messages[-1].get("role") != "user" or messages[-2].get("role") != "assistant":
+        return False
+    handback_ids = {block.get("id") for block in _blocks(messages[-2])
+                    if block.get("type") == "tool_use" and block.get("name") == HANDBACK_TOOL}
+    return any(block.get("type") == "tool_result" and not block.get("is_error")
+               and block.get("tool_use_id") in handback_ids for block in _blocks(messages[-1]))
+
+
+def handback_done_response(data: dict[str, Any]) -> Response:
+    """A synthetic end_turn answer that closes the subagent run, without calling the model."""
+    text = "Report delivered; run finished."
+    model = str(data.get("model", ""))
+    stop = {"tokens": request_chars(data) // 4}
+    if data.get("stream"):
+        return Response(context_stop.sse_bytes(text, model, stop), media_type="text/event-stream")
+    return JSONResponse(context_stop.message_json(text, model, stop))
+
+
+def guard_subagent(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | Response:
+    """Ends a subagent run after its handback, else strips the spawn tools so it cannot start more subagents."""
+    if handed_back(data):
+        call.note = " (subagent handed back: run ended)"
+        return handback_done_response(data)
+    return without_spawn_tools(data, cfg["main_loop_tools"])
+
+
 def describe_side_request(data: dict[str, Any]) -> str:
     """One short line about a request that is not the main loop (tools, streaming, size, first words of the system
     prompt), so the log shows what kind of side request (subagent, auto-mode check, title) reaches the local model."""
@@ -379,6 +428,10 @@ def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict
         return orchestrator_no_code(data, cfg) or body
     if cfg["side_requests_to_cloud"] and is_toolless_message(call.path, data):
         return send_to_cloud(call, data, cfg)
+    if is_subagent(data):
+        data = guard_subagent(call, data, cfg)
+        if isinstance(data, Response):
+            return data
     shaped, call.note = shape_local(data, cfg)
     window = int(server_window(cfg) or cfg.get("context_tokens") or 0)
     stopped = context_stop_response(call, shaped,

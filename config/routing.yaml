@@ -19,7 +19,8 @@ chains:
   # invents APIs in tests); mistral keeps its place for inputs too big for groq (413).
   bulk_code:    [cerebras, groq, mistral, openrouter, llm, "deepseek:flash", "gemini:lite31", "gemini:flash"]
   data_script:  ["deepseek:flash", "gemini:flash"]
-  hard_code:    ["deepseek:pro", "gemini:pro"]
+  # 2026-10-29: free sources after the paid ones, so hard_code still has a route when paid ones are skipped (local orchestrator)
+  hard_code:    ["deepseek:pro", "gemini:pro", mistral, cerebras, openrouter]
   long_context: ["deepseek:flash", "gemini:flash"]
   # `llm` is the pool of local-LLM nodes (config/nodes.yaml, this machine included). When the chain reaches it, the router
   # expands it into the nodes that are on, answer, and accept the task's data level, the one expected to FINISH first
@@ -118,6 +119,7 @@ budget:
   monthly_usd: 5.0      # delegated work per month (= the USD 5 loaded on Gemini 2026-10-07)
   orchestrator_daily_usd: 1     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
   orchestrator_monthly_usd: 5.0   # same, per month (remove the line for no monthly cap)
+  local_orchestrator_paid: false   # 2026-10-29: night run with the local orchestrator spent the daily cap on hard_code
   per_call_usd: 0.10    # a paid call whose WORST-CASE cost is above this is refused unless allow_cost=true is passed
                         # (2026-10-10: two calls of ~0.30 USD each returned unusable cut-off output)
   # tokens/char ratio used for the pre-call worst-case cost estimate

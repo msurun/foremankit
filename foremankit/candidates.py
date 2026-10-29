@@ -9,6 +9,7 @@ from .delegation import category_of, is_switched_off
 from .nodes import Node
 from .providers import Provider, endpoint_busy, pick_model
 from .records import CallContext, Candidate
+from .upstream import active_mode
 
 if TYPE_CHECKING:
     from .router import Router
@@ -124,9 +125,18 @@ class CandidateBuilder:
 
     def _cost_problem(self, candidate: Candidate, ctx: CallContext, state: dict[str, Any], now: float) -> str | None:
         budget_cfg = self.router.routing.get("budget") or {}
+        if self._paid_off_for_local(ctx, budget_cfg):
+            return ("paid sources are off while the local orchestrator drives (budget.local_orchestrator_paid; "
+                    "pass allow_cost=true to override)")
         worst_case = budget.worst_case_usd(candidate.price, ctx.est_in, candidate.send_max)
         per_call = float(budget_cfg.get("per_call_usd") or 0)
         if per_call and worst_case > per_call and not ctx.allow_cost:
             return (f"worst-case cost ~${worst_case:.3f} is above the per-call cap ${per_call:.2f} "
                     f"(split the task or pass allow_cost=true)")
         return budget.check(state, budget_cfg, now, worst_case) or None
+
+    @staticmethod
+    def _paid_off_for_local(ctx: CallContext, budget_cfg: dict[str, Any]) -> bool:
+        """True when the local orchestrator drives Claude Code and the owner turned paid sources off for it."""
+        return (not ctx.allow_cost and budget_cfg.get("local_orchestrator_paid", True) is False
+                and active_mode() == "local")
