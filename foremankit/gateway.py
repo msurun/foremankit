@@ -34,6 +34,7 @@ from foremankit import (
     provider_schema,
     providers,
     upstream,
+    virtual_clear,
 )
 from foremankit.config import _read_yaml, config_dir, load_env, refresh_live_env, state_dir
 from foremankit.gateway_trim import (
@@ -193,6 +194,22 @@ def context_stop_response(call: Call, data: dict[str, Any],
     if data.get("stream"):
         return Response(context_stop.sse_bytes(text, model, stop), media_type="text/event-stream")
     return JSONResponse(context_stop.message_json(text, model, stop))
+
+
+def virtual_clear_body(call: Call, shaped: dict[str, Any], where: dict[str, Any],
+                       cfg: dict[str, Any]) -> dict[str, Any]:
+    """Main-loop body with an earlier cut reapplied, or cut now when the prompt is over the stop ratio (virtual_clear.py)."""
+    key = virtual_clear.session_key(shaped)
+    trimmed = virtual_clear.reapply(shaped, state_dir()) or shaped
+    stop = context_stop.stop_at(trimmed, int(where.get("window") or 0), context_stop.policy(cfg))
+    cut = virtual_clear.choose_cut(trimmed["messages"]) if stop is not None else None
+    if cut is None or cut < 2:    # cut 0-1 would point the marker into the handoff prefix, not the raw body
+        return trimmed
+    text = context_stop.handoff_markdown(trimmed, stop, where)
+    path = context_stop.write_handoff(context_stop.folder(context_stop.policy(cfg), state_dir()), text)
+    virtual_clear.save_marker(state_dir(), key, trimmed["messages"][cut], text)
+    call.note += f" (virtual clear: cut at message {cut}, handoff {path.name})"
+    return virtual_clear.apply_cut(trimmed, text, cut)
 
 
 HANDBACK_TOOL = "SubagentHandback"
@@ -471,8 +488,10 @@ def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict
     shaped, note = shape_local(data, cfg)
     call.note += note
     window = int(server_window(cfg) or cfg.get("context_tokens") or 0)
-    stopped = context_stop_response(call, shaped,
-                                    {"mode": "local", "model": shaped.get("model", ""), "window": window}, cfg)
+    where = {"mode": "local", "model": shaped.get("model", ""), "window": window}
+    if keeps_main_loop_local(data, cfg):
+        shaped = virtual_clear_body(call, shaped, where, cfg)
+    stopped = context_stop_response(call, shaped, where, cfg)
     if stopped is not None:
         return stopped
     if overflows(shaped, cfg) and not keeps_main_loop_local(data, cfg):

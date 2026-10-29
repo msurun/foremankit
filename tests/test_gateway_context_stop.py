@@ -210,3 +210,35 @@ def test_context_stop_response_reports_the_external_mode_in_the_handoff(config_d
     assert result is not None
     files = handoff_files(config_dir)
     assert len(files) == 1 and " via deepseek" in files[0].read_text(encoding="utf-8")
+
+
+def long_turns(total_chars: int) -> list[dict[str, Any]]:
+    """Alternating user/assistant text turns, ending with a user message, adding up to about `total_chars`."""
+    messages: list[dict[str, Any]] = []
+    per_turn = total_chars // 12
+    for i in range(12):
+        role = "user" if i % 2 == 0 else "assistant"
+        messages.append({"role": role, "content": f"{i:02d}" + "x" * per_turn})
+    return messages
+
+
+def test_a_long_local_conversation_is_cut_into_a_handoff(config_dir: Path, fixed_window: int) -> None:
+    """Over the ratio, the upstream body is trimmed and starts with a handoff user message; the second request reuses the cut."""
+    (config_dir / "orchestrator.yaml").write_text(TRIM_YAML + "cloud_when_local: false\n", encoding="utf-8")
+    set_local_driver(config_dir)
+    cfg = gateway.settings()
+    data = {**make_request(0), "messages": long_turns(STOP_FILL)}
+    body = json.dumps(data).encode("utf-8")
+    first = gateway.prepare_body(gateway.Call("/v1/messages", "claude-sonnet-5", True, time.time()), data, body, cfg)
+    assert isinstance(first, bytes)
+    sent = json.loads(first)
+    assert sent["messages"][0]["role"] == "user"
+    assert sent["messages"][0]["content"].startswith("handoff: ")
+    assert len(sent["messages"]) < len(data["messages"])
+    assert len(handoff_files(config_dir)) == 1
+
+    call = gateway.Call("/v1/messages", "claude-sonnet-5", True, time.time())
+    again = gateway.prepare_body(call, data, body, cfg)
+    assert json.loads(again)["messages"] == sent["messages"]
+    assert "virtual clear" not in call.note
+    assert len(handoff_files(config_dir)) == 1
