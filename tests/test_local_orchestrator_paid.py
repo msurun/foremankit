@@ -1,6 +1,7 @@
 """While the local orchestrator drives Claude Code, paid sources are refused unless the caller passes allow_cost."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,8 @@ RULE = "local orchestrator"
 
 def _set_mode(monkeypatch, tmp_path: Path, mode: str) -> None:
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
-    (tmp_path / "orchestrator_mode").write_text(mode, encoding="utf-8")
+    local = mode == "local"
+    (tmp_path / "driver.json").write_text(json.dumps({"local": local, "model": "x", "time": 0}), encoding="utf-8")
 
 
 def _cost_problem(router, allow_cost: bool = False, paid_flag: bool | None = None) -> str | None:

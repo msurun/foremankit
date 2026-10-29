@@ -40,6 +40,10 @@ overflow_ratio: 0.70
 # the `local` mode are not affected. false = the orchestrator may write code itself again.
 no_code: true
 
+# 2026-10-29: while the local model drives the main loop, its subagents never reach the Anthropic cloud: Haiku/Opus
+# subagent ids are served locally, and an overflowing subagent is stopped instead of spilled. true = the old behaviour.
+cloud_when_local: false
+
 # HARD context stop: a hook (hooks/session_length_reminder.py) only ASKS the model to hand over at 85 %, and a degraded
 # local model ignores it. At `ratio` of the model window the gateway stops the turn itself: it answers "stopped, handoff
 # written" (a normal tool-less assistant message, no tool_use) and writes a handoff drafted from the request body alone,

@@ -110,3 +110,99 @@ def test_an_error_handback_does_not_end_the_run(config_dir: Path, fixed_window: 
     call, result = run(data, config_dir)
     assert isinstance(result, bytes)
     assert "subagent handed back" not in call.note
+
+
+def haiku_subagent(model: str = "claude-haiku-5-5") -> dict[str, Any]:
+    """A subagent request for a cloud model id, with the handback tool and a small prompt."""
+    return {"model": model, "system": "s", "messages": [{"role": "user", "content": "go"}],
+            "tools": [{"name": "Read"}, {"name": gateway.HANDBACK_TOOL}]}
+
+
+def cloud_when_local_off(config_dir: Path) -> None:
+    """Write cloud_when_local: false into the temp orchestrator config."""
+    (config_dir / "orchestrator.yaml").write_text(TRIM_YAML + "cloud_when_local: false\n", encoding="utf-8")
+
+
+def context_stop_off(config_dir: Path) -> None:
+    """Disable the context-stop policy so only the overflow branch decides."""
+    with (config_dir / "orchestrator.yaml").open("a", encoding="utf-8") as fh:
+        fh.write("context_stop:\n  enabled: false\n")
+
+
+def set_driver(tmp_path: Path, local: bool) -> None:
+    """Record who drives the main loop in the temp state dir."""
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "driver.json").write_text(
+        json.dumps({"local": local, "model": "x", "time": time.time()}), encoding="utf-8")
+
+
+def test_a_main_loop_request_records_the_driver(config_dir: Path, tmp_path: Path) -> None:
+    """A main-loop request writes driver.json with the local flag of its call."""
+    data = {"model": "claude-sonnet-5", "tools": [{"name": "Agent"}]}
+    cfg = gateway.settings()
+    gateway.record_main_loop(gateway.Call("/v1/messages", "claude-sonnet-5", True, time.time()), data, cfg)
+    assert gateway.driver.read_driver()["local"] is True
+    gateway.record_main_loop(gateway.Call("/v1/messages", "claude-opus-5", False, time.time()),
+                             {**data, "model": "claude-opus-5"}, cfg)
+    assert gateway.driver.local_drives() is False
+
+
+def test_a_subagent_does_not_record_the_driver(config_dir: Path, tmp_path: Path) -> None:
+    """A subagent request is not the main loop: driver.json stays absent."""
+    gateway.record_main_loop(gateway.Call("/v1/messages", "claude-haiku-5-5", False, time.time()),
+                             subagent_request([]), gateway.settings())
+    assert gateway.driver.read_driver() is None
+
+
+def test_a_haiku_subagent_is_served_locally_when_local_drives(config_dir: Path, tmp_path: Path) -> None:
+    """With cloud_when_local false and the local model driving, a claude-haiku subagent is localised."""
+    cloud_when_local_off(config_dir)
+    set_driver(tmp_path, local=True)
+    cfg = gateway.settings()
+    call = gateway.Call("/v1/messages", "claude-haiku-5-5", False, time.time())
+    gateway.localize_cloud_subagent(call, haiku_subagent(), cfg)
+    assert call.local is True and "served locally" in call.note
+
+
+def test_a_haiku_subagent_goes_to_cloud_when_opus_drives(config_dir: Path, tmp_path: Path) -> None:
+    """A cloud driver keeps the subagent in the cloud."""
+    cloud_when_local_off(config_dir)
+    set_driver(tmp_path, local=False)
+    call = gateway.Call("/v1/messages", "claude-haiku-5-5", False, time.time())
+    gateway.localize_cloud_subagent(call, haiku_subagent(), gateway.settings())
+    assert call.local is False
+
+
+def test_a_haiku_subagent_goes_to_cloud_when_cloud_when_local_is_on(config_dir: Path, tmp_path: Path) -> None:
+    """cloud_when_local true (the default) keeps the subagent in the cloud even while local drives."""
+    set_driver(tmp_path, local=True)
+    call = gateway.Call("/v1/messages", "claude-haiku-5-5", False, time.time())
+    gateway.localize_cloud_subagent(call, haiku_subagent(), gateway.settings())
+    assert call.local is False
+
+
+def test_an_overflowing_subagent_is_stopped_when_local_drives(config_dir: Path, tmp_path: Path,
+                                                              fixed_window: None) -> None:
+    """Over the local window the subagent gets the stop answer, not a spill, while local drives."""
+    cloud_when_local_off(config_dir)
+    context_stop_off(config_dir)
+    set_driver(tmp_path, local=True)
+    data = subagent_request([])
+    data["messages"][0]["content"] = "x" * 60_000
+    call, result = run(data, config_dir)
+    assert isinstance(result, Response)
+    assert gateway.OVERFLOW_STOP_TEXT in json.loads(result.body)["content"][0]["text"]
+    assert call.local is True
+
+
+def test_an_overflowing_subagent_still_spills_when_not_local(config_dir: Path, tmp_path: Path,
+                                                             fixed_window: None) -> None:
+    """With a cloud driver the overflowing subagent is spilled to the cloud as before."""
+    cloud_when_local_off(config_dir)
+    context_stop_off(config_dir)
+    set_driver(tmp_path, local=False)
+    data = subagent_request([])
+    data["messages"][0]["content"] = "x" * 60_000
+    call, result = run(data, config_dir)
+    assert isinstance(result, bytes)
+    assert call.local is False

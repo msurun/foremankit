@@ -9,7 +9,7 @@ from .delegation import category_of, is_switched_off
 from .nodes import Node
 from .providers import Provider, endpoint_busy, pick_model
 from .records import CallContext, Candidate
-from .upstream import active_mode
+from . import driver
 
 if TYPE_CHECKING:
     from .router import Router
@@ -139,4 +139,4 @@ class CandidateBuilder:
     def _paid_off_for_local(ctx: CallContext, budget_cfg: dict[str, Any]) -> bool:
         """True when the local orchestrator drives Claude Code and the owner turned paid sources off for it."""
         return (not ctx.allow_cost and budget_cfg.get("local_orchestrator_paid", True) is False
-                and active_mode() == "local")
+                and driver.local_drives())

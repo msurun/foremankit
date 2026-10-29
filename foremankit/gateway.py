@@ -26,6 +26,7 @@ from starlette.routing import Route
 from foremankit import (
     budget,
     context_stop,
+    driver,
     escalation,
     openai_bridge,
     picker_guard,
@@ -59,6 +60,7 @@ DEFAULTS = {"local_models": ["claude-sonnet-5"], "local_url": "http://127.0.0.1:
             "side_cloud_timeout_s": 20, "side_fallback_upstream": "deepseek",
             "overflow_to_cloud": True, "overflow_ratio": 0.70,
             "no_code": True,
+            "cloud_when_local": True,
             "context_stop": {},
             "thinking_by_effort": {"low": False, "medium": False, "high": True, "xhigh": True, "max": True}}
 DEFAULT_ROLE = "worker"      # a fresh machine only takes delegated tasks; Claude Code goes to the local model after an explicit choice
@@ -224,9 +226,12 @@ def handed_back(data: dict[str, Any]) -> bool:
                and block.get("tool_use_id") in handback_ids for block in _blocks(messages[-1]))
 
 
-def handback_done_response(data: dict[str, Any]) -> Response:
+HANDBACK_DONE_TEXT = "Report delivered; run finished."
+OVERFLOW_STOP_TEXT = "Context window of the local model is full: stop now and report what you have."
+
+
+def handback_done_response(data: dict[str, Any], text: str = HANDBACK_DONE_TEXT) -> Response:
     """A synthetic end_turn answer that closes the subagent run, without calling the model."""
-    text = "Report delivered; run finished."
     model = str(data.get("model", ""))
     stop = {"tokens": request_chars(data) // 4}
     if data.get("stream"):
@@ -240,6 +245,31 @@ def guard_subagent(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> dic
         call.note = " (subagent handed back: run ended)"
         return handback_done_response(data)
     return without_spawn_tools(data, cfg["main_loop_tools"])
+
+
+def localize_cloud_subagent(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> None:
+    """With the local model driving and cloud_when_local off, a cloud-model subagent (Haiku/Opus id) is served locally."""
+    model = str(data.get("model", ""))
+    if cfg["cloud_when_local"] or not is_subagent(data) or not driver.local_drives():
+        return
+    if model in cfg["local_models"] or not model.startswith("claude-"):
+        return
+    call.local = True
+    call.note = f" (cloud subagent model {model} served locally: local orchestrator drives)"
+
+
+def record_main_loop(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> None:
+    """Remember whether the local model drives the main loop (subagents and side requests do not count)."""
+    if is_main_loop(data, cfg["main_loop_tools"]) and not is_subagent(data) and not is_toolless_message(call.path, data):
+        driver.write_driver(call.local, str(data.get("model")))
+
+
+def overflow_stop(call: Call, data: dict[str, Any], cfg: dict[str, Any]) -> Response | None:
+    """A stop answer instead of a spill when a subagent overflows the local window while the local model drives."""
+    if not is_subagent(data) or cfg["cloud_when_local"] or not driver.local_drives():
+        return None
+    call.note = " (subagent overflows the local window: stopped, not spilled)"
+    return handback_done_response(data, OVERFLOW_STOP_TEXT)
 
 
 def describe_side_request(data: dict[str, Any]) -> str:
@@ -432,14 +462,15 @@ def prepare_body(call: Call, data: dict[str, Any] | None, body: bytes, cfg: dict
         data = guard_subagent(call, data, cfg)
         if isinstance(data, Response):
             return data
-    shaped, call.note = shape_local(data, cfg)
+    shaped, note = shape_local(data, cfg)
+    call.note += note
     window = int(server_window(cfg) or cfg.get("context_tokens") or 0)
     stopped = context_stop_response(call, shaped,
                                     {"mode": "local", "model": shaped.get("model", ""), "window": window}, cfg)
     if stopped is not None:
         return stopped
     if overflows(shaped, cfg):
-        return spill_to_cloud(call, data, cfg)
+        return overflow_stop(call, data, cfg) or spill_to_cloud(call, data, cfg)
     return json.dumps(shaped, ensure_ascii=False).encode("utf-8")
 
 
@@ -965,6 +996,9 @@ async def handle(request: Request) -> Response:
         return await handle_external_request(request, body, data, cfg, target, side)
     model = data.get("model") if data else None
     call = Call(request.url.path, model, model in cfg["local_models"], time.time())
+    if data is not None:
+        localize_cloud_subagent(call, data, cfg)
+        record_main_loop(call, data, cfg)
     reason = refusal() if call.local and not side else None
     if reason:
         call.log(503)
