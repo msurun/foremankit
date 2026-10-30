@@ -57,7 +57,7 @@ nodes:
     lan: [Neuron]              # the plain name resolves on the home LAN; add a fixed IP here if it ever does not
     learn: true                # this laptop is switched between models (start-llama.ps1 menu: 35B MoE ~28 tok/s, 4-7B dense 60+),
                                # so the speed is learned from real calls; the written numbers are the 35B Q4_K_XL profile (64k ctx)
-    speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 150}
+    speed: {prompt_tps: 230, gen_tps: 28, expected_output_cap: 1500, max_seconds: 300}  # 2026-10-30 trial: was 150
   kaggle:
     # Free Kaggle notebook as a stop-gap: TPU v5e-8 (qwen3.8-27B, vllm-tpu) or GPU 2xT4 (qwen3.8-27B, llama-server).
     # The URL changes every session; the node uses the same env var for both:
