@@ -202,6 +202,20 @@ def test_handoff_keeps_only_the_last_three_user_texts() -> None:
     assert "request-4" in text
 
 
+def test_handoff_skips_harness_injected_user_texts() -> None:
+    data = request_with_messages(
+        user_message("build the catalogue view"),
+        user_message("# Environment update\n - Primary working directory: C:/repo"),
+        user_message("<system-reminder>notice</system-reminder>"),
+    )
+
+    text = full_handoff(data)
+
+    assert "build the catalogue view" in text
+    assert "Environment update" not in text
+    assert "system-reminder" not in text
+
+
 def test_handoff_keeps_the_last_assistant_text() -> None:
     data = request_with_messages(
         assistant_message("first answer"),

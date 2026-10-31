@@ -29,6 +29,14 @@ _LAST_USER_MESSAGES = 3
 _LAST_TOOLS_SHOWN = 25
 _LAST_FILES_SHOWN = 25
 _USER_TEXT_CUT = 500
+# Prefixes of harness-injected user text; such turns say nothing about what the user asked.
+_HARNESS_PREFIXES = (
+    "# Environment update",
+    "<system-reminder>",
+    "<task-notification>",
+    "<local-command-caveat>",
+    "<command-name>",
+)
 _ASSISTANT_TEXT_CUT = 1000
 _HINT_CUT = 160
 _APPROX_CHARS_PER_TOKEN = 4
@@ -306,11 +314,16 @@ def _header_section(stop: dict[str, Any], where: dict[str, Any], now: float | No
     return "\n".join(["# Handoff - context stop", "", f"- when: {moment}", model_line])
 
 
+def _is_harness_text(text: str) -> bool:
+    """True for text the harness injected into a user turn (environment updates, reminders)."""
+    return text.lstrip().startswith(_HARNESS_PREFIXES)
+
+
 def _user_section(messages: list[dict[str, Any]]) -> str:
     """The up-to-three last user text blocks, oldest first."""
     texts: list[str] = []
     for message in messages:
-        texts.extend(_text_blocks(message, "user"))
+        texts.extend(text for text in _text_blocks(message, "user") if not _is_harness_text(text))
     kept = [_cut(text, _USER_TEXT_CUT) for text in texts[-_LAST_USER_MESSAGES:]]
     return "\n".join(["## What was asked (last user messages)", "", _bullet_list(kept)])
 
