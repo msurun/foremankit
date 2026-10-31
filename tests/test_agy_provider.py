@@ -163,3 +163,10 @@ def test_an_over_long_prompt_raises_provider_error_without_running(chat_request:
     with pytest.raises(ProviderError, match="prompt too long"):
         agy_provider.agy_completion(long_request, "agy", runner=runner)
     assert runner.calls == []
+
+
+def test_an_empty_reply_is_an_error_so_the_chain_moves_on(chat_request):
+    stdout = json.dumps({"status": "SUCCESS", "response": "   ", "usage": {}})
+    runner = FakeRunner(FakeCompletedProcess(stdout))
+    with pytest.raises(ProviderError, match="empty reply"):
+        agy_provider.agy_completion(chat_request, "agy", runner=runner)

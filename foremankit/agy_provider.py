@@ -14,6 +14,9 @@ from .providers import ChatRequest, ProviderError, ProviderTimeout, normalize_us
 
 MAX_PROMPT_CHARS = 24000        # the Windows command line is limited to ~32k characters
 ERROR_CHARS = 200
+# agy is an agent: left alone it often writes the files itself and answers in prose. Delegation needs the text.
+REPLY_RULE = ("Put the complete answer in this reply as text (code in fenced blocks). Do not create, edit or run "
+              "files and do not use tools; anything you write to disk is lost.")
 RATE_LIMIT_TEXT = re.compile(r"quota|rate.?limit|too many requests|\b429\b|exhausted", re.IGNORECASE)
 
 
@@ -30,7 +33,10 @@ def agy_completion(request: ChatRequest, binary: str, runner=subprocess.run) -> 
     data = _parse_json(process.stdout)
     if process.returncode != 0 or data.get("status") != "SUCCESS":
         _raise_agy_error(data, process.stderr)
-    return {"text": data.get("response") or "", "usage": normalize_usage(_openai_usage(data.get("usage") or {})),
+    text = data.get("response") or ""
+    if not text.strip():   # the agent did its work through tools (or only thought): nothing to hand back, try the next source
+        raise ProviderError("agy returned an empty reply")
+    return {"text": text, "usage": normalize_usage(_openai_usage(data.get("usage") or {})),
             "finish_reason": "stop", "timings": None, "served_model": request.model_id}
 
 
