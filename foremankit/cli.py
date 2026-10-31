@@ -289,11 +289,29 @@ def cmd_delegation(router: Router, args: argparse.Namespace) -> int:
 
 
 def cmd_supervisor(router: Router, args: argparse.Namespace) -> int:
-    """Show or choose who supervises bulk_code: the Claude Haiku agent or the Antigravity CLI (`foremankit supervise`)."""
-    from foremankit.delegation import set_supervisor, supervisor_mode
-    if args.choice in ("haiku", "agy"):
+    """Show or choose who supervises bulk_code (haiku, agy, auto), or `choose` one task's supervisor (auto mode)."""
+    from foremankit.delegation import SUPERVISORS, set_supervisor, supervisor_mode
+    if args.choice == "choose":
+        return _supervisor_choose(router, args)
+    if args.choice in SUPERVISORS:
         set_supervisor(router.store, args.choice)
     print(f"supervisor: {supervisor_mode(router.store.load())}")
+    return 0
+
+
+def _supervisor_choose(router: Router, args: argparse.Namespace) -> int:
+    """Print `agy|haiku <reason>` for one task: the heuristic of supervisor_choice.py with the real agy switch and config."""
+    from foremankit.delegation import is_switched_off
+    from foremankit.supervisor_choice import TaskFacts, auto_settings, decide_supervisor
+    if not (args.task_file and args.target and args.check):
+        print("supervisor choose needs --task-file, --target (once per file) and --check", file=sys.stderr)
+        return 2
+    agy = router.providers.get("agy")
+    agy_on = agy is not None and agy.cfg.get("enabled", True) is not False and not is_switched_off(router.store.load(), "agy")
+    task = Path(args.task_file).read_text(encoding="utf-8")
+    facts = TaskFacts(task, args.target, args.check, args.context_lines, args.sensitivity, agy_on)
+    who, reason = decide_supervisor(facts, auto_settings(router.routing))
+    print(f"{who} {reason}")
     return 0
 
 
@@ -429,8 +447,13 @@ def _add_node_parsers(sub: Any) -> None:
     delegation = sub.add_parser("delegation", help="delegation [paid|free|local|all] [on|off|status]: switch a whole source category")
     delegation.add_argument("target", nargs="?", default="all", choices=[*CATEGORIES, "all"])
     delegation.add_argument("action", nargs="?", default="status", choices=["on", "off", "status"])
-    supervisor = sub.add_parser("supervisor", help="supervisor [haiku|agy|status]: who supervises bulk_code")
-    supervisor.add_argument("choice", nargs="?", default="status", choices=["haiku", "agy", "status"])
+    supervisor = sub.add_parser("supervisor", help="supervisor [haiku|agy|auto|status|choose]: who supervises bulk_code")
+    supervisor.add_argument("choice", nargs="?", default="status", choices=["haiku", "agy", "auto", "status", "choose"])
+    supervisor.add_argument("--task-file", help="choose: the task text")
+    supervisor.add_argument("--target", action="append", default=[], help="choose: a file the task writes (repeatable)")
+    supervisor.add_argument("--check", help="choose: the check command")
+    supervisor.add_argument("--context-lines", type=int, default=0, help="choose: lines of context the task needs")
+    supervisor.add_argument("--sensitivity", default="normal", choices=["normal", "internal", "private"], help="choose")
     supervise = sub.add_parser("supervise", help="agy does one task on one file and runs the check itself (no Claude in the loop)")
     supervise.add_argument("--task-file", required=True)
     supervise.add_argument("--target", required=True)

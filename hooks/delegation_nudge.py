@@ -9,7 +9,8 @@ Registered by install.py for two events:
   reminder to the model's context and a one-line message for the user, then waits for another such amount before it
   repeats. A call to the `delegate` tool or to an agent resets the count.
 * UserPromptSubmit: while the supervisor switch is "agy" (panel or `foremankit supervisor agy`) it tells the model to send
-  bulk_code to `foremankit supervise` through Bash instead of the bulk-supervisor (Haiku) agent.
+  bulk_code to `foremankit supervise` through Bash instead of the bulk-supervisor (Haiku) agent; in "auto" it tells the
+  model to ask `foremankit supervisor choose` per task first.
 * UserPromptSubmit: while ALL delegation categories are off (panel switch or `foremankit delegation all off`) it tells
   the model to do the work itself and not to mention delegation at all.
 
@@ -35,9 +36,20 @@ AGY_SUPERVISOR_NOTICE = (
     "write the task to a file and run from the project folder, via Bash: foremankit supervise --task-file <task.md> "
     "--target <file> --check \"<allowed check command>\" [--sensitivity internal]. One file per command, independent ones in "
     "parallel; it prints one line PASS|FAIL <target> <s>s <tail> (exit 0 = PASS, 1-3 min). Never for private data.")
+AUTO_SUPERVISOR_NOTICE = (
+    "foremankit: the SUPERVISOR is AUTO. For each bulk_code task (tests, docs, new files) first run, via Bash from the "
+    "project folder: foremankit supervisor choose --task-file <task.md> --target <file> [--target <file2>] "
+    "--check \"<allowed check command>\" [--context-lines N] [--sensitivity internal|private]. It prints agy <reason> or "
+    "haiku <reason>. agy: run foremankit supervise --task-file <task.md> --target <file> --check \"<check>\" via Bash, one "
+    "command per file (several in parallel with run_in_background; PASS|FAIL line, 1-3 min). haiku: use the "
+    "bulk-supervisor agent. Never agy for private data.")
+AUTO_NUDGE_CONTEXT = ("foremankit: ~{lines} lines written yourself; send tests, docs and new files to a supervisor: "
+                      "`foremankit supervisor choose` (Bash) says agy or haiku (bulk-supervisor).")
 AGY_NUDGE_CONTEXT = "foremankit: ~{lines} lines written yourself; send tests, docs and new files to `foremankit supervise` (Bash)."
 # Kept to one short line: it lands in the orchestrator's context every ~80 written lines.
 NUDGE_CONTEXT = "foremankit: ~{lines} lines written yourself; send tests, docs and new files to bulk-supervisor."
+SUPERVISOR_NOTICE = {"agy": AGY_SUPERVISOR_NOTICE, "auto": AUTO_SUPERVISOR_NOTICE}
+NUDGE_CONTEXTS = {"haiku": NUDGE_CONTEXT, "agy": AGY_NUDGE_CONTEXT, "auto": AUTO_NUDGE_CONTEXT}
 NUDGE_MESSAGE = {
     "en": "foremankit: ~{lines} lines written without delegating (tests, docs and standalone files can go to cheaper models).",
     "pl": "foremankit: ok. {lines} linii napisanych bez delegowania (testy, dokumentacja i osobne pliki mogą iść do tańszych modeli).",
@@ -72,9 +84,15 @@ def delegation_off(folder: Path) -> bool:
     return not agy_on and all(toggles.get(f"delegation:{category}") == "off" for category in CATEGORIES)
 
 
+def supervisor_mode(folder: Path) -> str:
+    """The supervisor switch (`toggles.supervisor` of state.json): "agy" or "auto"; anything else means the Haiku agent."""
+    value = load_json(folder / "state.json").get("toggles", {}).get("supervisor")
+    return value if value in ("agy", "auto") else "haiku"
+
+
 def supervisor_is_agy(folder: Path) -> bool:
-    """True when the supervisor switch (`toggles.supervisor` of state.json) is "agy"; anything else means the Haiku agent."""
-    return load_json(folder / "state.json").get("toggles", {}).get("supervisor") == "agy"
+    """True when the supervisor switch is "agy"."""
+    return supervisor_mode(folder) == "agy"
 
 
 def lines_of(text: object) -> int:
@@ -186,10 +204,10 @@ def run() -> int:
     if event.get("hook_event_name") == "UserPromptSubmit":
         if off:
             emit(OFF_NOTICE, "UserPromptSubmit")
-        elif supervisor_is_agy(folder):
-            emit(AGY_SUPERVISOR_NOTICE, "UserPromptSubmit")
+        elif supervisor_mode(folder) != "haiku":
+            emit(SUPERVISOR_NOTICE[supervisor_mode(folder)], "UserPromptSubmit")
     elif not off:
-        nudge(event, folder, AGY_NUDGE_CONTEXT if supervisor_is_agy(folder) else NUDGE_CONTEXT)
+        nudge(event, folder, NUDGE_CONTEXTS[supervisor_mode(folder)])
     return 0
 
 

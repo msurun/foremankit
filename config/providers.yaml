@@ -223,6 +223,8 @@ providers:
     limits: {rpm: 10, rpd: null, tpd: null}   # VERIFY: the AI Pro quota in Antigravity is reported as low
     default_model: flash
     models:
+      # Only Gemini 3.8 Flash stays on this subscription: Claude 4.6 and GPT-OSS leave Antigravity on 2026-11-02 and the
+      # Claude 5.5 / Gemini 4 Argon models are not offered to this (Jio partner) account. Re-check `agy models`.
       flash:                                   # `agy models` 2026-10-31
         id: gemini-3.8-flash-medium
         price: {input_miss: 0, input_hit: 0, output: 0}
@@ -231,12 +233,6 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
       flash_high:
         id: gemini-3.8-flash-high
-        price: {input_miss: 0, input_hit: 0, output: 0}
-      sonnet:
-        id: claude-sonnet-4-6
-        price: {input_miss: 0, input_hit: 0, output: 0}
-      opus:
-        id: claude-opus-4-6-thinking
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   kaggle:

@@ -131,7 +131,7 @@ def test_the_supervisor_switch_defaults_to_haiku_and_round_trips(tmp_path):
     assert supervisor_mode(store.load()) == "haiku"
     assert set_supervisor(store, "agy") == "agy" and supervisor_mode(store.load()) == "agy"
     set_supervisor(store, "haiku")
-    assert supervisor_mode(store.load()) == "haiku" and SUPERVISORS == ("haiku", "agy")
+    assert supervisor_mode(store.load()) == "haiku" and SUPERVISORS == ("haiku", "agy", "auto")
 
 
 def test_a_bad_supervisor_value_is_rejected(tmp_path):

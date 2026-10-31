@@ -276,3 +276,18 @@ def test_agy_only_delegation_is_not_treated_as_switched_off(tmp_path: Path) -> N
     write_toggles(tmp_path, {**all_delegation_off(), "delegation:agy": "on", "supervisor": "agy"})
     out, _ = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1"}, tmp_path)
     assert "switched OFF" not in out and "foremankit supervise" in out
+
+
+def test_the_auto_supervisor_notice_tells_claude_to_ask_choose_first(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {"supervisor": "auto"})
+    out, code = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1"}, tmp_path)
+    assert code == 0 and "SUPERVISOR is AUTO" in out
+    assert "foremankit supervisor choose" in out and "foremankit supervise" in out and "bulk-supervisor" in out
+
+
+def test_the_nudge_context_points_at_choose_when_the_supervisor_is_auto(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {"supervisor": "auto"})
+    transcript = write_transcript(tmp_path / "t.jsonl", [("Write", {"content": write_text_lines(THRESHOLD + 2)})])
+    event = {"hook_event_name": "PostToolUse", "session_id": "s1", "transcript_path": str(transcript)}
+    out, _ = run_hook(event, tmp_path)
+    assert "supervisor choose" in out

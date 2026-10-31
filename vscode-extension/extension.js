@@ -341,7 +341,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled</label><span class="q" data-for="tip4">?</span><div class="tip" id="tip4">off = everything runs on the orchestrator</div>
 <details><summary class="info">Which helpers</summary>
 <div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
-<div class="info">Supervisor: <label><input type="radio" name="supervisor" id="supHaiku" value="haiku"> Haiku agent</label> <label><input type="radio" name="supervisor" id="supAgy" value="agy"> Antigravity (agy runs commands itself)</label></div>
+<div class="info">Supervisor: <label><input type="radio" name="supervisor" id="supHaiku" value="haiku"> Haiku agent</label> <label><input type="radio" name="supervisor" id="supAgy" value="agy"> Antigravity (agy runs commands itself)</label> <label><input type="radio" name="supervisor" id="supAuto" value="auto"> Auto (agy for multi-file/test-heavy tasks)</label></div>
 <div class="info"><label><input type="checkbox" id="delegAgy"> Antigravity (Google AI Pro; internal data allowed, never private)</label></div>
 </details>
 <h3>Night run<span class="q" data-for="tip9">?</span></h3>
@@ -501,7 +501,7 @@ function showGpu(gpu) {
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
  }
  function showSupervisor(mode) {
-  const id = mode === 'agy' ? 'supAgy' : 'supHaiku';
+  const id = { agy: 'supAgy', auto: 'supAuto' }[mode] || 'supHaiku';
   if (document.activeElement !== $(id)) $(id).checked = true;
  }
  function showNight(n) {
@@ -696,7 +696,7 @@ function showGpu(gpu) {
  $('pairFirewall').onclick = () => send({ type: 'pair', action: 'firewall' });
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
- for (const id of ['supHaiku', 'supAgy']) $(id).onchange = () => send({ type: 'config', action: 'supervisorSet', value: $(id).value });
+ for (const id of ['supHaiku', 'supAgy', 'supAuto']) $(id).onchange = () => send({ type: 'config', action: 'supervisorSet', value: $(id).value });
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local'], ['delegAgy', 'agy']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
 $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });

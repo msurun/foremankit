@@ -14,7 +14,7 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     worker-enable true|false --name N    let the router use a worker or not
     pair-host | pair-state | pair-find | pair-join --ip I --port P --code C [--replace]
                    pair lab computers: show a code here, find hosts, join with a code (foremankit/pairing.py)
-    supervisor-set haiku|agy    who supervises bulk_code (Claude Haiku agent or Antigravity `foremankit supervise`)
+    supervisor-set haiku|agy|auto    who supervises bulk_code (Claude Haiku agent, Antigravity `foremankit supervise`, or auto per task)
     delegation-set true|false --name paid|free|local|agy|all    switch delegation (everything on Claude when all is off)
     delegations    delegated tasks, who did them and what they cost (today, last days)
     night-run on|off|status [--hours N --max N]    unattended local work until the deadline or the continue limit
@@ -395,12 +395,12 @@ def delegation_switches() -> dict[str, bool]:
 
 
 def supervisor_choice() -> str:
-    """Who supervises bulk_code: "haiku" (the Claude Haiku agent) or "agy" (`foremankit supervise`, Antigravity CLI)."""
+    """Who supervises bulk_code: "haiku" (the Claude Haiku agent), "agy" (`foremankit supervise`, Antigravity CLI) or "auto"."""
     return delegation_module.supervisor_mode(StateStore().load())
 
 
 def set_supervisor_choice(value: str) -> str:
-    """Choose the supervisor ("haiku" or "agy"); the nudge hook tells Claude which one to call."""
+    """Choose the supervisor ("haiku", "agy" or "auto"); the nudge hook tells Claude which one to call."""
     try:
         chosen = delegation_module.set_supervisor(StateStore(), value)
     except ValueError as problem:

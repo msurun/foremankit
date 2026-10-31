@@ -75,7 +75,7 @@ def set_switch(store: StateStore, target: str, value: str) -> list[str]:
         raise ValueError(f"Invalid value: {value!r}. Must be 'on' or 'off'.")
 
     if target == "all":
-        targets_to_update = [c for c in CATEGORIES if value == _VALUE_OFF or c not in DEFAULT_OFF]
+        targets_to_update = [name for name in CATEGORIES if value == _VALUE_OFF or name not in DEFAULT_OFF]
     else:
         targets_to_update = [target]
 
@@ -103,18 +103,19 @@ def describe(state: dict) -> str:
     return "\n".join(lines)
 
 
-SUPERVISORS = ("haiku", "agy")   # who supervises bulk_code: the Claude Haiku agent, or the Antigravity CLI (`foremankit supervise`)
+SUPERVISORS = ("haiku", "agy", "auto")   # who supervises bulk_code: the Claude Haiku agent, the Antigravity CLI
+                                         # (`foremankit supervise`), or "auto": chosen per task (supervisor_choice.py)
 _SUPERVISOR_KEY = "supervisor"
 
 
 def supervisor_mode(state: dict) -> str:
-    """The chosen supervisor, "haiku" (default) or "agy"."""
+    """The chosen supervisor: "haiku" (default), "agy" or "auto" (per task)."""
     value = state.get("toggles", {}).get(_SUPERVISOR_KEY)
     return value if value in SUPERVISORS else "haiku"
 
 
 def set_supervisor(store: StateStore, value: str) -> str:
-    """Choose the supervisor; raises ValueError for anything but "haiku" or "agy"."""
+    """Choose the supervisor; raises ValueError for anything but "haiku", "agy" or "auto"."""
     if value not in SUPERVISORS:
         raise ValueError(f"Invalid supervisor: {value!r}. Must be one of {SUPERVISORS}.")
 
