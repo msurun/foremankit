@@ -164,7 +164,9 @@ def test_a_resume_uses_only_the_source_that_wrote_the_partial(monkeypatch, make_
     lost_groq_key(monkeypatch)
     with pytest.raises(RouterError):
         make_router(cfg).delegate("explain", kind="quick", continue_from=first["id"], max_continuations=1)
-    assert mock.hosts() == {"api.groq.com"}
+    # the local pool is tried first for quick (routing trial), so only remote hosts are compared
+    remote_hosts = {host for host in mock.hosts() if host.startswith("api.")}
+    assert remote_hosts == {"api.groq.com"}
 
 
 # ------------------------------------------------------------------ (7) each attempt keeps its own partial file

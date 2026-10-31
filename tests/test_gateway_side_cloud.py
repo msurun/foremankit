@@ -27,8 +27,16 @@ class FakeResponse:
         self.headers = {"content-type": "application/json"}
         self.content = content
 
+    @property
+    def text(self) -> str:
+        """The body as text, as httpx exposes it."""
+        return self.content.decode("utf-8", "replace")
+
     async def aiter_raw(self):
         yield self.content
+
+    async def aread(self):
+        return self.content
 
     async def aclose(self):
         return None
@@ -78,12 +86,12 @@ def _write_yaml(config: Path, upstreams: dict) -> None:
     (config / "orchestrator.yaml").write_text(json.dumps(body), encoding="utf-8")
 
 
-def send_through_gateway(path: str, data: dict):
+def send_through_gateway(path: str, data: dict, extra_headers: tuple = ()):
     """One POST with a JSON body through gateway.handle, as Claude Code would; returns the gateway's response."""
     import asyncio
     body = json.dumps(data).encode("utf-8")
     scope = {"type": "http", "method": "POST", "path": path, "query_string": b"",
-             "headers": [(b"content-type", b"application/json"), (b"x-api-key", b"user-key")]}
+             "headers": [(b"content-type", b"application/json"), (b"x-api-key", b"user-key"), *extra_headers]}
 
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}
@@ -137,6 +145,47 @@ def test_a_worker_role_toolless_request_goes_to_the_cloud_not_503(gateway_dirs: 
     response = send_through_gateway("/v1/messages", MESSAGE)
     assert response.status_code == 200
     assert urls(sent)[0].startswith("https://api.anthropic.com/v1/messages")
+
+
+CFG = {"side_request_model": "claude-sonnet-5-5"}
+
+
+def test_side_body_maps_disabled_thinking_to_between_tools_and_sets_the_model():
+    data = {**MESSAGE, "thinking": {"type": "disabled"}}
+    assert json.loads(gateway.side_body(data, CFG)) == {**MESSAGE, "model": "claude-sonnet-5-5",
+                                                       "thinking": {"type": "between_tools"}}
+
+
+def test_side_body_leaves_enabled_thinking_unchanged():
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+    assert json.loads(gateway.side_body({**MESSAGE, "thinking": thinking}, CFG))["thinking"] == thinking
+
+
+def test_side_body_adds_no_thinking_when_there_is_none():
+    assert "thinking" not in json.loads(gateway.side_body(MESSAGE, CFG))
+
+
+def test_a_local_toolless_request_with_disabled_thinking_reaches_the_cloud_as_between_tools(gateway_dirs: Path,
+                                                                                           sent: list):
+    _plan["https://api.anthropic.com"] = FakeResponse(200)
+    send_through_gateway("/v1/messages", {**MESSAGE, "thinking": {"type": "disabled"}})
+    sent_body = json.loads(sent[0].content)
+    assert urls(sent)[0].startswith("https://api.anthropic.com/v1/messages")
+    assert sent_body["thinking"] == {"type": "between_tools"} and sent_body["model"] == "claude-sonnet-5-5"
+
+
+def test_a_cloud_400_on_a_local_side_request_is_recorded_with_its_beta_header(gateway_dirs: Path, sent: list,
+                                                                             monkeypatch):
+    monkeypatch.setattr(gateway, "external_target", lambda body, cfg: None)
+    _plan["https://api.anthropic.com"] = FakeResponse(400, b'{"error": "bad beta"}')
+    beta = (b"anthropic-beta", b"context-1m-2025-08-07,prompt-caching-2024-07-31")
+    response = send_through_gateway("/v1/messages", MESSAGE, (beta,))
+    assert response.status_code == 400
+    records = list((gateway.state_dir() / gateway.ERRORS_DIR).glob("*-400.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    assert record["route"] == "side:cloud" and record["status"] == 400
+    assert record["anthropic_beta"] == "context-1m-2025-08-07,prompt-caching-2024-07-31"
 
 
 def test_a_request_with_tools_in_external_mode_goes_to_kaggle_unchanged(gateway_dirs: Path, sent: list):

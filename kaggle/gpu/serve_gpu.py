@@ -63,7 +63,7 @@ def server_command(binary: Path, model: Path, key: str, env: Mapping[str, str]) 
         "--host", "127.0.0.1",
         "--port", str(PORT),
         "-ngl", "99",
-        "--ctx-size", env.get("FOREMANKIT_CTX_SIZE", "262144"),   # the model's native maximum
+        "--ctx-size", env.get("FOREMANKIT_CTX_SIZE", "200000"),   # VRAM on 2x T4 is nearly full at 262144; 200000 matches the gateway window and leaves room for speculative decoding
         "--cache-type-k", env.get("FOREMANKIT_KV_TYPE", "q8_0"),   # halves the KV cache: room for 262k on 2x T4
         "--cache-type-v", env.get("FOREMANKIT_KV_TYPE", "q8_0"),
         "--parallel", env.get("FOREMANKIT_PARALLEL", "2"), "--kv-unified",

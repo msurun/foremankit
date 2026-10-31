@@ -118,7 +118,7 @@ reasoning:
 
 budget:
   # Two separate budgets (each stops only its own kind of spend):
-  daily_usd: 1.5        # delegated work (the delegate tool) - hard stop for paid providers
+  daily_usd: 0.5        # delegated work (the delegate tool) - hard stop for paid providers
   monthly_usd: 5.0      # delegated work per month (= the USD 5 loaded on Gemini 2026-10-07)
   orchestrator_daily_usd: 1     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
   orchestrator_monthly_usd: 5.0   # same, per month (remove the line for no monthly cap)

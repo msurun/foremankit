@@ -21,7 +21,7 @@ def test_server_command_defaults():
     argv = serve_gpu.server_command(Path("/b/llama-server"), Path("/m/Qwen-A3B.gguf"), "sk-x", {})
     assert all(isinstance(item, str) for item in argv)
     assert after(argv, "--api-key") == "sk-x" and after(argv, "--port") == "8080"
-    assert after(argv, "--ctx-size") == "262144" and after(argv, "--cache-type-v") == "q8_0" and after(argv, "--parallel") == "2"
+    assert after(argv, "--ctx-size") == "200000" and after(argv, "--cache-type-v") == "q8_0" and after(argv, "--parallel") == "2"
     assert after(argv, "-fa") == "on" and after(argv, "--host") == "127.0.0.1"
     assert {"--jinja", "--kv-unified", "--cache-reuse"} <= set(argv)
     assert after(argv, "--alias") == "Qwen-A3B"

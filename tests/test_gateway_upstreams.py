@@ -340,6 +340,30 @@ def test_claude_only_blocks_become_text_and_tool_search_flags_are_dropped(gatewa
     assert shaped["messages"][1]["content"] == "plain string" and "defer_loading" not in shaped["tools"][0]
 
 
+def test_a_mid_conversation_system_message_is_merged_into_the_preceding_user_turn():
+    """Qwen/vLLM refuses a system message after the first turn: it becomes a text block of the user turn before it."""
+    request = {"model": "qwen", "messages": [
+        {"role": "user", "content": "before"},
+        {"role": "system", "content": "rules"},
+        {"role": "assistant", "content": "ok"}]}
+    shaped = gateway.plain_request(request)
+    assert [message["role"] for message in shaped["messages"]] == ["user", "assistant"]
+    assert shaped["messages"][0]["content"] == [{"type": "text", "text": "before"}, {"type": "text", "text": "rules"}]
+    assert shaped["messages"][1]["content"] == "ok" and all(m["role"] != "system" for m in shaped["messages"])
+
+
+def test_a_system_message_after_an_assistant_turn_is_merged_with_the_following_tool_results():
+    """A system message after an assistant turn becomes a user turn, and the user tool_result turn after it joins it."""
+    request = {"model": "qwen", "messages": [
+        {"role": "assistant", "content": "ok"},
+        {"role": "system", "content": "reminder"},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "done"}]}]}
+    shaped = gateway.plain_request(request)
+    assert [message["role"] for message in shaped["messages"]] == ["assistant", "user"]
+    blocks = shaped["messages"][1]["content"]
+    assert blocks[0] == {"type": "text", "text": "reminder"} and blocks[1]["type"] == "tool_result"
+
+
 def test_a_normal_claude_model_still_goes_to_anthropic_in_an_external_mode(gateway_dirs: Path, fake_upstream: list):
     """Only the ForemanKit picker entry follows the mode: Sonnet chosen in the picker is sent to the cloud, key untouched."""
     use_mode("deepseek")

@@ -206,7 +206,7 @@ class Panel {
     await this.applyPreset(name);
   }
 
-  configArgs({ action, role, name, url, accept, priority, model, fields, enabled, category, period, value, key }) {
+  configArgs({ action, role, name, url, accept, priority, model, fields, enabled, category, period, value, key, hours, max }) {
     const table = {
       orchestrator: ['orchestrator', '--name', name || 'this'],
       budgetSet: ['budget-set', period, '--name', category, '--value', String(value)],
@@ -222,6 +222,7 @@ class Panel {
       profileSet: ['profile-set', '--model', model, '--fields', fields],
       kaggleSet: ['kaggle-set', '--url', url || '', '--key', key || ''],
       kaggleTest: ['kaggle-test'],
+      nightSet: ['night-run', enabled ? 'on' : 'off', '--hours', String(hours || 8), '--max', String(max || 20)],
     };
     return table[action];
   }
@@ -314,6 +315,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  .call{font-size:11px;margin:2px 0;display:flex;gap:6px} .call .t{opacity:.6;min-width:34px} .call .bad{color:var(--vscode-errorForeground)}
  .code{font-size:20px;letter-spacing:.15em;font-weight:bold;margin:4px 0;user-select:all}
  .worker{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px} .worker .x{margin-left:auto;cursor:pointer;opacity:.7} a{color:var(--vscode-textLink-foreground);cursor:pointer}
+ .q{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;border-radius:50%;border:1px solid currentColor;font-size:10px;opacity:.6;cursor:pointer;margin-left:6px;user-select:none} .q:hover,.q.on{opacity:1} .tip{display:none;font-size:12px;opacity:.8;margin:4px 0} .tip.on{display:block}
 </style></head><body>
 <div class="row head"><span class="dot" id="headDot"></span><b id="headText">ForemanKit</b></div>
 <div id="liveLine" class="info" style="display:none"></div>
@@ -321,12 +323,13 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="gpuWrap" style="display:none"><svg id="gpuChart" viewBox="0 0 100 40" preserveAspectRatio="none" style="width:100%;height:46px;background:rgba(128,128,128,.15);border-radius:3px"><polyline id="gpuLine" fill="none" stroke="var(--vscode-progressBar-background)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><polyline id="vramLine" fill="none" stroke="var(--vscode-charts-orange, #d29922)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="info" id="gpuText"></div></div>
 <div id="error" class="err"></div>
 <div id="issues"></div>
-<h3>Who orchestrates Claude Code</h3>
+<h3>Who orchestrates Claude Code<span class="q" data-for="tip2">?</span></h3>
 <div id="presetChoice"></div>
-<div class="info" id="escalationRow" style="display:none"><b>Model per provider (DeepSeek, Gemini)</b><div id="escalationTiers"></div><span id="escalationNow"></span><br>auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div>
-<div class="info">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Choose the model of DeepSeek and Gemini with the selectors above (auto = flash, pro after errors). External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
+<div class="info" id="escalationRow" style="display:none"><b>Model per provider (DeepSeek, Gemini)</b><span class="q" data-for="tip1">?</span><div class="tip" id="tip1">auto = flash, moving to pro after repeated tool errors; a named tier is pinned until you switch back.</div><div id="escalationTiers"></div><span id="escalationNow"></span></div>
+<div class="tip" id="tip2">Claude = your subscription, straight to Anthropic. External = the router is on; the picker keeps the Anthropic 5.5 models and adds "DeepSeek" and "Gemini"; type /model fm-kaggle for Kaggle, or pick "Sonnet 5" for the Local LLM. Choose the model of DeepSeek and Gemini with the selectors above (auto = flash, pro after errors). External APIs need the key in .env; a folder above the provider's sensitivity ceiling is refused. The panel sets router, role and direct mode for you.</div>
 <details><summary class="info" id="kaggleSummary">Kaggle notebook</summary>
-<div class="info">Every notebook session prints a new address and key: paste both here (saved to .env, the running router uses them on its next call).</div>
+<div><span class="q" data-for="tip3">?</span></div>
+<div class="tip" id="tip3">Every notebook session prints a new address and key: paste both here (saved to .env, the running router uses them on its next call).</div>
 <div class="grid">
 <label>address <input id="kaggleUrl" placeholder="https://name.trycloudflare.com"></label>
 <label>key <input id="kaggleKey" type="password" placeholder="sk-... (empty = keep the saved key)" autocomplete="off"></label>
@@ -334,10 +337,14 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="row"><button id="kaggleSave">Save</button><button class="secondary" id="kaggleTest">Test</button></div>
 </details>
 <h3>Helpers (delegation)</h3>
-<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled (off = everything runs on the orchestrator)</label>
+<label class="info"><input type="checkbox" id="delegAll"> Delegation enabled</label><span class="q" data-for="tip4">?</span><div class="tip" id="tip4">off = everything runs on the orchestrator</div>
 <details><summary class="info">Which helpers</summary>
 <div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
 </details>
+<h3>Night run<span class="q" data-for="tip9">?</span></h3>
+<div class="tip" id="tip9">Keeps the session working unattended: when the model ends its turn, the Stop hook tells it to continue the plan and the latest handoff, until the DONE file appears, the deadline passes or the max-continues limit is reached. Works only when the local model or Kaggle drives the main loop (not the Anthropic cloud). Off by default; start it only after a live test.</div>
+<label class="info"><input type="checkbox" id="nightOn"> <span id="nightTitle">Night run</span></label> <span class="info" id="nightLine"></span>
+<div class="info"><label><input type="number" id="nightHours" min="0.5" step="0.5" value="8" style="width:4em"> hours</label> <label><input type="number" id="nightMax" min="1" step="1" value="20" style="width:4em"> max continues</label></div>
 <h3>Local model</h3>
 <select id="models"></select><div class="info" id="modelInfo"></div>
 <div class="row"><button id="startServer">Start server</button><button class="secondary" data-quick="stop-server">Stop</button></div>
@@ -353,7 +360,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="delegRecent"></div>
 </details>
 <details><summary class="info">Advanced</summary>
-<label class="info"><input type="checkbox" id="shareLab"> Share with the lab (-Share: other PCs can use this server; needs FOREMANKIT_PEER_KEY)</label>
+<label class="info"><input type="checkbox" id="shareLab"> Share with the lab</label><span class="q" data-for="tip5">?</span><div class="tip" id="tip5">-Share: other PCs can use this server; needs FOREMANKIT_PEER_KEY</div>
 <div class="row"><button class="secondary" id="tune">Tune model + max context</button></div>
 <div class="info">Parameters of the selected model:</div>
 <div class="grid">
@@ -366,10 +373,10 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label>temperature <input id="p_temp" type="number" min="0" max="2" step="0.1"></label>
 </div>
 <div class="row"><button class="secondary" id="saveProfile">Save to profile</button></div>
-<div class="info">Empty field = launcher default. Applies at the next server start. Tuning overwrites ctx, ncmoe and threads.</div>
+<span class="q" data-for="tip6">?</span><div class="tip" id="tip6">Empty field = launcher default. Applies at the next server start. Tuning overwrites ctx, ncmoe and threads.</div>
 <h3>Thinking by effort level</h3>
 <div class="levels" id="levels"></div>
-<div class="info">Ticked levels make the local model think; the others answer directly.</div>
+<span class="q" data-for="tip7">?</span><div class="tip" id="tip7">Ticked levels make the local model think; the others answer directly.</div>
 <h3>Computers of the lab</h3>
 <div id="workers"></div>
 <div class="row"><button class="secondary" id="workerAddToggle">Add worker...</button></div>
@@ -381,7 +388,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="row"><button id="workerSave">Save worker</button><button class="secondary" id="workerCancel">Cancel</button></div></div>
 <div class="info">Local orchestrator runs on:</div>
 <div id="orchChoice"></div>
-<div class="info" style="margin-top:8px">Pair another PC of yours (it gets the lab key without copying files):</div>
+<div class="info" style="margin-top:8px">Pair another PC<span class="q" data-for="tip8">?</span></div><div class="tip" id="tip8">it gets the lab key without copying files</div>
 <div id="fwLine" class="info"></div>
 <div class="row"><button class="secondary" id="pairFirewall">Open firewall (Private + Public)</button></div>
 <div class="row"><button class="secondary" id="pairHost">Show pairing code</button><button class="secondary" id="pairFind">Find computers</button></div>
@@ -399,6 +406,7 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
  const vscode = acquireVsCodeApi(); let models = []; let startingUntil = 0; let lastStatus = null; let headCost = ''; let busy = false; const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
  const $ = (id) => document.getElementById(id);
  const send = (m) => vscode.postMessage(m);
+ document.addEventListener('click', (e) => { const q = e.target.closest && e.target.closest('.q'); if (!q) return; q.classList.toggle('on'); const t = $(q.dataset.for); if (t) t.classList.toggle('on'); });
  const current = () => models.find((m) => m.file === $('models').value);
  function dot(id, up) { $(id).className = 'dot ' + (up ? 'up' : 'down'); }
  function showLevels(thinking) {
@@ -489,6 +497,13 @@ function showGpu(gpu) {
   for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
  }
+ function showNight(n) {
+  if (!n) return;
+  $('nightTitle').textContent = n.texts.title;
+  $('nightLine').textContent = n.line;
+  if (document.activeElement !== $('nightOn')) $('nightOn').checked = n.enabled;
+  if (document.activeElement !== $('nightHours')) $('nightHours').placeholder = n.texts.hours;
+ }
  function showFirewall(f) {
   const open = f && f.open;
   $('fwLine').textContent = f && f.open === null ? '' : open ? 'Firewall: open for pairing on Private and Public networks (this subnet only).'
@@ -500,7 +515,7 @@ function showGpu(gpu) {
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showKaggle(s.kaggle); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showKaggle(s.kaggle); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); showNight(s.night); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -676,6 +691,7 @@ function showGpu(gpu) {
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
+$('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
  for (const r of document.querySelectorAll('input[name=role]')) r.onchange = () => send({ type: 'config', action: 'role', role: r.value });

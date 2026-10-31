@@ -139,7 +139,7 @@ upstreams:
     url_env: FOREMANKIT_NODE_KAGGLE_LAN
     key_env: KAGGLE_LLM_KEY
     ceiling: internal                # our own account and disposable notebook, but the prompts DO leave this machine
-    context: 250000                  # both notebooks serve 262144 (the model maximum); headroom for the reply
+    context: 190000                  # the GPU notebook serves 200000 (VRAM-limited on 2x T4); the TPU one 262144; headroom for the reply
     tools_keep: *keep_tools
     schema: {}
     models: {opus: main, sonnet: main, haiku: main}   # provider aliases (providers.yaml `kaggle`) -> qwen3.8-27b
