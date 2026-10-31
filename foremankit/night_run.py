@@ -3,15 +3,18 @@ Night-run state for unattended local work.
 
 Stores enabled flag, deadline, continue limit and done-file path in night_run.json.
 """
-from __future__ import annotations
-
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
 
+from .config import load_config
 from foremankit.config import state_dir
-from foremankit.driver import local_drives
+from . import driver
+from . import utils
+
+local_drives = driver.local_drives
 
 NIGHT_FILE = "night_run.json"
 
@@ -67,12 +70,22 @@ def record_continue() -> int:
     _write_night(state)
     return count
 
-
 def should_continue(now: float | None = None) -> tuple[bool, str]:
     """Return (True, "ok") if the night run may continue, else (False, reason)."""
+    # In plain words: decide whether the nightly automation should keep running.
+    cfg = load_config()
     state = read_night()
     if not state or not state.get("enabled"):
         return False, "off"
+    kind = driver.drives_kind() or "local"
+    allowed = cfg.get("night_drivers", ["local", "external:kaggle"])
+    if kind not in allowed:
+        return False, "off"
+    if kind.startswith("external:kaggle"):
+        url = os.getenv("FOREMANKIT_NODE_KAGGLE_LAN")
+        token = os.getenv("KAGGLE_LLM_KEY")
+        if not url or not utils.ping_endpoint(url, token, retries=3, backoff=0.3):
+            return False, "tunnel"
     if not local_drives():
         return False, "drives"
     done = str(state.get("done_file", ""))
@@ -80,7 +93,12 @@ def should_continue(now: float | None = None) -> tuple[bool, str]:
         return False, "done"
     if int(state.get("count", 0)) >= int(state.get("max_continues", 0)):
         return False, "limit"
+    if state.get("context_stop"):
+        return False, "context_stop"
     current = time.time() if now is None else now
     if current >= float(state.get("until", 0.0)):
         return False, "expired"
     return True, "ok"
+
+
+
