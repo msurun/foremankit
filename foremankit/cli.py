@@ -288,6 +288,32 @@ def cmd_delegation(router: Router, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_supervisor(router: Router, args: argparse.Namespace) -> int:
+    """Show or choose who supervises bulk_code: the Claude Haiku agent or the Antigravity CLI (`foremankit supervise`)."""
+    from foremankit.delegation import set_supervisor, supervisor_mode
+    if args.choice in ("haiku", "agy"):
+        set_supervisor(router.store, args.choice)
+    print(f"supervisor: {supervisor_mode(router.store.load())}")
+    return 0
+
+
+def cmd_supervise(router: Router, args: argparse.Namespace) -> int:
+    """Let agy do one task on one file and run the check itself; print `PASS|FAIL <target> <s>s <tail>`, exit 0 on PASS."""
+    from foremankit.config import load_env
+    from foremankit.supervise import SuperviseError, SuperviseJob, supervise
+    load_env()
+    task = Path(args.task_file).read_text(encoding="utf-8")
+    job = SuperviseJob(task, str(Path(args.target).resolve()), args.check, Path.cwd().resolve(), args.sensitivity)
+    try:
+        result = supervise(job)
+    except SuperviseError as problem:
+        print(f"FAIL {args.target} 0s refused: {problem}")
+        return 2
+    tail = " ".join(result["check_output_tail"].split())[-150:]
+    print(f"{'PASS' if result['passed'] else 'FAIL'} {args.target} {result['seconds']}s {tail}")
+    return 0 if result["passed"] else 1
+
+
 def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
     """Show or switch who orchestrates Claude Code: claude, local, or an external upstream (deepseek, gemini)."""
     from foremankit import upstream
@@ -376,7 +402,7 @@ def _read_jobs(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
@@ -403,6 +429,13 @@ def _add_node_parsers(sub: Any) -> None:
     delegation = sub.add_parser("delegation", help="delegation [paid|free|local|all] [on|off|status]: switch a whole source category")
     delegation.add_argument("target", nargs="?", default="all", choices=[*CATEGORIES, "all"])
     delegation.add_argument("action", nargs="?", default="status", choices=["on", "off", "status"])
+    supervisor = sub.add_parser("supervisor", help="supervisor [haiku|agy|status]: who supervises bulk_code")
+    supervisor.add_argument("choice", nargs="?", default="status", choices=["haiku", "agy", "status"])
+    supervise = sub.add_parser("supervise", help="agy does one task on one file and runs the check itself (no Claude in the loop)")
+    supervise.add_argument("--task-file", required=True)
+    supervise.add_argument("--target", required=True)
+    supervise.add_argument("--check", required=True)
+    supervise.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
     llm = sub.add_parser("llm", help="llm [status|test] | llm <node|self|others|all> [on|off|auto|status|test]")
     llm.add_argument("target", nargs="?", help="status | test | self | others | all | a node name from nodes.yaml")
     llm.add_argument("action", nargs="?", choices=["on", "off", "auto", "status", "test"])

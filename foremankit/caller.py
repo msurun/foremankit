@@ -11,6 +11,7 @@ from . import speed as speed_module
 from .config import is_dry_run
 from .continuation import complete_if_cut
 from .outputs import write_answer
+from .agy_provider import agy_completion
 from .providers import ChatRequest, ProviderError, chat_completion
 from .records import Answer, CallContext, Candidate, TaskTooLarge
 from .stitch import open_fence
@@ -114,7 +115,7 @@ class Caller:
         attempt = 0
         while True:
             try:
-                reply = chat_completion(client, self._chat_request(candidate, ctx))
+                reply = self._complete(client, candidate, ctx)
                 reject_served_model(candidate, reply)
                 return reply
             except ProviderError as error:
@@ -122,6 +123,12 @@ class Caller:
                     raise
                 attempt += 1
                 self.router.sleep(RETRY_PAUSE_S)
+
+    def _complete(self, client: httpx.Client, candidate: Candidate, ctx: CallContext) -> dict[str, Any]:
+        request = self._chat_request(candidate, ctx)
+        if candidate.provider.is_agy:   # a subprocess, no HTTP; base_url holds the path of agy.exe
+            return agy_completion(request, candidate.base_url)
+        return chat_completion(client, request)
 
     @staticmethod
     def _chat_request(candidate: Candidate, ctx: CallContext) -> ChatRequest:

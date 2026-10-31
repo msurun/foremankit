@@ -207,6 +207,38 @@ providers:
         id: gpt-oss-120b               # VERIFY
         price: {input_miss: 0, input_hit: 0, output: 0}
 
+  agy:
+    # Google Antigravity CLI (agy.exe) run as a subprocess on the owner's Google AI Pro subscription (promo, no per-call
+    # price). Added 2026-10-31. type agy = no HTTP, no key: it signs in through the Antigravity app; the prompt goes as an
+    # argument (no stdin, Windows limit -> agy_provider.MAX_PROMPT_CHARS) and the run happens in an empty temp dir.
+    # GREY AREA: Antigravity terms (section 6) forbid access through third-party tools; forum answers conflict, so this
+    # is local, own-account use only. Revert to enabled: false if Google objects.
+    type: agy
+    binary: ~/.gemini/bin/agy.exe   # ~ is expanded (Provider.agy_binary)
+    enabled: true
+    free: true
+    trains_on_data: true       # UNKNOWN for a personal account. internal data allowed by the owner (2026-10-31) via .env FOREMANKIT_ALLOW_INTERNAL_TRAINING=...,agy; private never
+    max_concurrent: 2
+    timeout: 300               # measured 2026-10-31: 35-40 s for a one-function reply (agent harness overhead, ~21k input tokens)
+    limits: {rpm: 10, rpd: null, tpd: null}   # VERIFY: the AI Pro quota in Antigravity is reported as low
+    default_model: flash
+    models:
+      flash:                                   # `agy models` 2026-10-31
+        id: gemini-3.8-flash-medium
+        price: {input_miss: 0, input_hit: 0, output: 0}
+      flash_low:
+        id: gemini-3.8-flash-low
+        price: {input_miss: 0, input_hit: 0, output: 0}
+      flash_high:
+        id: gemini-3.8-flash-high
+        price: {input_miss: 0, input_hit: 0, output: 0}
+      sonnet:
+        id: claude-sonnet-4-6
+        price: {input_miss: 0, input_hit: 0, output: 0}
+      opus:
+        id: claude-opus-4-6-thinking
+        price: {input_miss: 0, input_hit: 0, output: 0}
+
   kaggle:
     # The free Kaggle notebook (nodes.yaml `kaggle`) also used as the ORCHESTRATOR (orchestrator.yaml upstreams.kaggle).
     # enabled: false - it is never routed as a cloud provider; this block only supplies the model id and a zero price,

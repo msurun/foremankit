@@ -1,8 +1,8 @@
-"""Category switch for delegation sources: paid, free, local.
+"""Category switch for delegation sources: paid, free, local, agy (Antigravity subscription).
 
 Toggles are stored in the state file under state["toggles"] with keys
-"delegation:paid", "delegation:free", "delegation:local". A missing key
-defaults to "on".
+"delegation:paid", "delegation:free", "delegation:local", "delegation:agy". A missing key
+defaults to "on", except agy (opt-in: "off" until the owner switches it on).
 """
 from __future__ import annotations
 
@@ -13,18 +13,21 @@ from .state import StateStore
 if TYPE_CHECKING:
     from .providers import Provider
 
-CATEGORIES = ("paid", "free", "local")
+CATEGORIES = ("paid", "free", "local", "agy")
+DEFAULT_OFF = frozenset({"agy"})   # opt-in sources: "all on" leaves them alone
 
 _VALUE_ON = "on"
 _VALUE_OFF = "off"
 
 
 def category_of(provider: Provider) -> str:
-    """Classify a provider into one of the three delegation categories.
+    """Classify a provider into one of the four delegation categories.
 
-    Returns "local" if the provider is an LLM, "free" if it is free,
-    otherwise "paid".
+    Returns "agy" for the Antigravity CLI, "local" if the provider is an LLM,
+    "free" if it is free, otherwise "paid".
     """
+    if provider.is_agy:
+        return "agy"
     if provider.is_llm:
         return "local"
     if provider.free:
@@ -35,11 +38,11 @@ def category_of(provider: Provider) -> str:
 def is_switched_off(state: dict, category: str) -> bool:
     """Return True if the given category is explicitly switched off.
 
-    A missing key or a value of "on" means the category is enabled.
-    Only "off" means disabled.
+    A missing key means enabled, except for the opt-in categories (DEFAULT_OFF).
     """
-    key = f"delegation:{category}"
-    value = state.get("toggles", {}).get(key)
+    value = state.get("toggles", {}).get(f"delegation:{category}")
+    if value is None:
+        return category in DEFAULT_OFF
     return value == _VALUE_OFF
 
 
@@ -72,7 +75,7 @@ def set_switch(store: StateStore, target: str, value: str) -> list[str]:
         raise ValueError(f"Invalid value: {value!r}. Must be 'on' or 'off'.")
 
     if target == "all":
-        targets_to_update = list(CATEGORIES)
+        targets_to_update = [c for c in CATEGORIES if value == _VALUE_OFF or c not in DEFAULT_OFF]
     else:
         targets_to_update = [target]
 
@@ -98,3 +101,25 @@ def describe(state: dict) -> str:
         status = _VALUE_OFF if is_switched_off(state, cat) else _VALUE_ON
         lines.append(f"{cat}: {status}")
     return "\n".join(lines)
+
+
+SUPERVISORS = ("haiku", "agy")   # who supervises bulk_code: the Claude Haiku agent, or the Antigravity CLI (`foremankit supervise`)
+_SUPERVISOR_KEY = "supervisor"
+
+
+def supervisor_mode(state: dict) -> str:
+    """The chosen supervisor, "haiku" (default) or "agy"."""
+    value = state.get("toggles", {}).get(_SUPERVISOR_KEY)
+    return value if value in SUPERVISORS else "haiku"
+
+
+def set_supervisor(store: StateStore, value: str) -> str:
+    """Choose the supervisor; raises ValueError for anything but "haiku" or "agy"."""
+    if value not in SUPERVISORS:
+        raise ValueError(f"Invalid supervisor: {value!r}. Must be one of {SUPERVISORS}.")
+
+    def _apply_change(state: dict) -> str:
+        state.setdefault("toggles", {})[_SUPERVISOR_KEY] = value
+        return value
+
+    return store.update(_apply_change)

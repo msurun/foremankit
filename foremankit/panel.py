@@ -14,7 +14,8 @@ JSON this module prints. Keeping the logic here makes it testable and keeps the 
     worker-enable true|false --name N    let the router use a worker or not
     pair-host | pair-state | pair-find | pair-join --ip I --port P --code C [--replace]
                    pair lab computers: show a code here, find hosts, join with a code (foremankit/pairing.py)
-    delegation-set true|false --name paid|free|local|all    switch delegation (everything on Claude when all is off)
+    supervisor-set haiku|agy    who supervises bulk_code (Claude Haiku agent or Antigravity `foremankit supervise`)
+    delegation-set true|false --name paid|free|local|agy|all    switch delegation (everything on Claude when all is off)
     delegations    delegated tasks, who did them and what they cost (today, last days)
     night-run on|off|status [--hours N --max N]    unattended local work until the deadline or the continue limit
     workers | worker-add --name N --url U [--accept A --priority P] | worker-remove --name N
@@ -140,7 +141,7 @@ def status() -> dict[str, Any]:
     """Everything the panel header shows."""
     port = int(_read_yaml(config_dir() / "orchestrator.yaml").get("port", 8081))
     return {"router": {"up": port_open(port), "port": port}, "server": server_status(), "context": context_usage(),
-            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "night": night_status(),"orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(), "kaggle": kaggle_status(),
+            "direct_mode": direct_mode(), "role": local_role(), "delegation": delegation_switches(), "supervisor": supervisor_choice(), "night": night_status(),"orchestrator": orchestrator_status(), "orchestrator_mode": orchestrator_mode_status(), "preset": preset_status(), "prices": prices_status(), "budget": budget_status(), "llama_installed": llama_installed(), "kaggle": kaggle_status(),
             "thinking": get_thinking()}
 
 
@@ -388,13 +389,27 @@ def join_lab(ip: str, port: int, code: str, replace: bool = False) -> str:
 
 
 def delegation_switches() -> dict[str, bool]:
-    """Which source categories delegation may use: paid clouds, free clouds, local models (all on unless switched off)."""
+    """Which source categories delegation may use: paid clouds, free clouds, local models (on unless switched off) and agy (Antigravity, off unless switched on)."""
     state = StateStore().load()
     return {category: not delegation_module.is_switched_off(state, category) for category in delegation_module.CATEGORIES}
 
 
+def supervisor_choice() -> str:
+    """Who supervises bulk_code: "haiku" (the Claude Haiku agent) or "agy" (`foremankit supervise`, Antigravity CLI)."""
+    return delegation_module.supervisor_mode(StateStore().load())
+
+
+def set_supervisor_choice(value: str) -> str:
+    """Choose the supervisor ("haiku" or "agy"); the nudge hook tells Claude which one to call."""
+    try:
+        chosen = delegation_module.set_supervisor(StateStore(), value)
+    except ValueError as problem:
+        return f"not done: {problem}"
+    return f"supervisor: {chosen}"
+
+
 def set_delegation(target: str, enabled: bool) -> str:
-    """Switch one category (paid, free, local) or `all` of delegation on or off; the router reads it on every call."""
+    """Switch one category (paid, free, local, agy) or `all` (on leaves agy alone) of delegation on or off; the router reads it on every call."""
     changed = delegation_module.set_switch(StateStore(), target, "on" if enabled else "off")
     return f"delegation {'on' if enabled else 'off'}: {', '.join(changed)}" + (
         "" if enabled or target != "all" else " (everything runs on Claude now)")
@@ -1157,6 +1172,7 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
     return {
         "role": lambda: set_role(args.action or ""),
         "delegation-set": lambda: set_delegation(args.name or "all", args.action == "true"),
+        "supervisor-set": lambda: set_supervisor_choice(args.action or ""),
         "escalation-set": lambda: set_escalation_control(args.name, args.model),
         "worker-test": lambda: test_worker(args.name),
         "orchestrator": lambda: set_orchestrator(args.name),
@@ -1184,7 +1200,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "night-run", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "night-run", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -1241,7 +1257,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "escalation-set", "kaggle-set", "kaggle-test", "night-run"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test", "night-run"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}

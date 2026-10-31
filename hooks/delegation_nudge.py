@@ -8,6 +8,8 @@ Registered by install.py for two events:
   practice) by reading the transcript incrementally. When the count passes FOREMANKIT_NUDGE_LINES (default 80) it adds a
   reminder to the model's context and a one-line message for the user, then waits for another such amount before it
   repeats. A call to the `delegate` tool or to an agent resets the count.
+* UserPromptSubmit: while the supervisor switch is "agy" (panel or `foremankit supervisor agy`) it tells the model to send
+  bulk_code to `foremankit supervise` through Bash instead of the bulk-supervisor (Haiku) agent.
 * UserPromptSubmit: while ALL delegation categories are off (panel switch or `foremankit delegation all off`) it tells
   the model to do the work itself and not to mention delegation at all.
 
@@ -21,13 +23,19 @@ from pathlib import Path
 
 DEFAULT_THRESHOLD = 80                      # lines written without delegating before the first reminder
 DELEGATION_TOOLS = {"mcp__foremankit__delegate", "Agent", "Task"}
-CATEGORIES = ("paid", "free", "local")      # the delegation categories of foremankit/delegation.py
+CATEGORIES = ("paid", "free", "local")      # the default-on categories of foremankit/delegation.py; agy (opt-in) is handled apart in delegation_off
 SHELL_WRITE_MARKERS = ("<<", "cat >", "tee ")   # a shell command that writes a file or a script
 MAX_SESSIONS = 50
 OFF_NOTICE = (
     "foremankit delegation is switched OFF by the user. Do all the work yourself. Do not call the foremankit delegate tool "
     "or hand work to cheaper helper models, and do not mention, suggest or ask about delegation in your replies (no "
     "'delegating' lines, no helper summaries).")
+AGY_SUPERVISOR_NOTICE = (
+    "foremankit: the SUPERVISOR is Antigravity. For bulk_code (tests, docs, new files) do not use the bulk-supervisor agent: "
+    "write the task to a file and run from the project folder, via Bash: foremankit supervise --task-file <task.md> "
+    "--target <file> --check \"<allowed check command>\" [--sensitivity internal]. One file per command, independent ones in "
+    "parallel; it prints one line PASS|FAIL <target> <s>s <tail> (exit 0 = PASS, 1-3 min). Never for private data.")
+AGY_NUDGE_CONTEXT = "foremankit: ~{lines} lines written yourself; send tests, docs and new files to `foremankit supervise` (Bash)."
 # Kept to one short line: it lands in the orchestrator's context every ~80 written lines.
 NUDGE_CONTEXT = "foremankit: ~{lines} lines written yourself; send tests, docs and new files to bulk-supervisor."
 NUDGE_MESSAGE = {
@@ -60,7 +68,13 @@ def write_json_atomic(path: Path, data: dict) -> None:
 def delegation_off(folder: Path) -> bool:
     """True when every delegation category is switched off in the router state (`toggles` of state.json)."""
     toggles = load_json(folder / "state.json").get("toggles", {})
-    return all(toggles.get(f"delegation:{category}") == "off" for category in CATEGORIES)
+    agy_on = toggles.get("delegation:agy") == "on"      # agy is opt-in: missing means off
+    return not agy_on and all(toggles.get(f"delegation:{category}") == "off" for category in CATEGORIES)
+
+
+def supervisor_is_agy(folder: Path) -> bool:
+    """True when the supervisor switch (`toggles.supervisor` of state.json) is "agy"; anything else means the Haiku agent."""
+    return load_json(folder / "state.json").get("toggles", {}).get("supervisor") == "agy"
 
 
 def lines_of(text: object) -> int:
@@ -140,7 +154,7 @@ def emit(additional_context: str, event: str, system_message: str = "") -> None:
     print(json.dumps(answer))
 
 
-def nudge(event: dict, folder: Path) -> None:
+def nudge(event: dict, folder: Path, context: str = NUDGE_CONTEXT) -> None:
     """PostToolUse: count, and remind the model (and the user) when too much was written without delegating."""
     session_id, transcript = event.get("session_id"), event.get("transcript_path")
     if not session_id or not transcript:
@@ -157,7 +171,7 @@ def nudge(event: dict, folder: Path) -> None:
     remember(state, state_file)
     if due:
         language = os.getenv("FOREMANKIT_LANG", "en").strip().lower()
-        emit(NUDGE_CONTEXT.format(lines=lines), "PostToolUse", NUDGE_MESSAGE.get(language, NUDGE_MESSAGE["en"]).format(lines=lines))
+        emit(context.format(lines=lines), "PostToolUse", NUDGE_MESSAGE.get(language, NUDGE_MESSAGE["en"]).format(lines=lines))
 
 
 def run() -> int:
@@ -172,8 +186,10 @@ def run() -> int:
     if event.get("hook_event_name") == "UserPromptSubmit":
         if off:
             emit(OFF_NOTICE, "UserPromptSubmit")
+        elif supervisor_is_agy(folder):
+            emit(AGY_SUPERVISOR_NOTICE, "UserPromptSubmit")
     elif not off:
-        nudge(event, folder)
+        nudge(event, folder, AGY_NUDGE_CONTEXT if supervisor_is_agy(folder) else NUDGE_CONTEXT)
     return 0
 
 

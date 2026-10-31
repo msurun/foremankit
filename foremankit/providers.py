@@ -69,6 +69,16 @@ class Provider:
         return self.cfg.get("type") == "llm"
 
     @property
+    def is_agy(self) -> bool:
+        """The Antigravity CLI `agy` run as a subprocess on the owner's subscription (provider type "agy")."""
+        return self.cfg.get("type") == "agy"
+
+    @property
+    def agy_binary(self) -> str:
+        """Path of agy.exe from the config, with ~ expanded."""
+        return os.path.expanduser(str(self.cfg["binary"]))
+
+    @property
     def free(self) -> bool:
         """Whether the provider costs nothing (free tier)."""
         return bool(self.cfg.get("free", False))

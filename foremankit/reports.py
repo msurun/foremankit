@@ -161,7 +161,8 @@ class Reporter:
         if provider.cfg.get("enabled", True) is False:
             reason = "disabled"
         else:
-            reason = "no key" if not provider.api_key() else self.router.cloud_enabled(provider)
+            keyless = not provider.api_key() and not provider.is_agy
+            reason = "no key" if keyless else self.router.cloud_enabled(provider)
         return {"name": provider.name, "active": not reason, "reason": reason, "free": provider.free,
                 "trains_on_data": provider.trains_on_data, "internal_ok": provider.eligible("internal"),
                 "remaining": quota.remaining(state, provider.name, provider.limits, now),

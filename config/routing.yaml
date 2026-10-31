@@ -19,16 +19,21 @@ chains:
   # invents APIs in tests); mistral keeps its place for inputs too big for groq (413).
   # 2026-10-30 (owner): trial - the local pool first in bulk_code, quick and summarize, to measure it on real tasks
   # (before: 8 local calls in a week, reached only after every free cloud failed). Revert if verify pass rate drops.
-  bulk_code:    [llm, cerebras, groq, mistral, openrouter, "deepseek:flash", "gemini:lite31", "gemini:flash"]
-  data_script:  ["deepseek:flash", "gemini:flash"]
+  # 2026-10-31 (owner): agy (Antigravity CLI on the Google AI Pro promo subscription, no per-call price) goes first in every
+  # non-private chain; agy gets internal data only through .env FOREMANKIT_ALLOW_INTERNAL_TRAINING (owner accepted 2026-10-31), never private. ~30 s per call,
+  # AI Pro quota unknown: measure the pass rate and the quota, revert (delete the agy entries) if it drops or Google objects.
+  # agy level per kind (2026-10-31, owner): quick/summarize = flash_low, bulk_code/data_script/long_context = flash (medium),
+  # hard_code = flash_high. The reasoning table below does not apply to agy: the level is part of the model id.
+  bulk_code:    [agy, llm, cerebras, groq, mistral, openrouter, "deepseek:flash", "gemini:lite31", "gemini:flash"]
+  data_script:  [agy, "deepseek:flash", "gemini:flash"]
   # 2026-10-29: free sources after the paid ones, so hard_code still has a route when paid ones are skipped (local orchestrator)
-  hard_code:    ["deepseek:pro", "gemini:pro", mistral, cerebras, openrouter]
-  long_context: ["deepseek:flash", "gemini:flash"]
+  hard_code:    ["agy:flash_high", "deepseek:pro", "gemini:pro", mistral, cerebras, openrouter]
+  long_context: [agy, "deepseek:flash", "gemini:flash"]
   # `llm` is the pool of local-LLM nodes (config/nodes.yaml, this machine included). When the chain reaches it, the router
   # expands it into the nodes that are on, answer, and accept the task's data level, the one expected to FINISH first
   # coming first (measured tok/s per node, busy ones later). Off or unreachable nodes are skipped (parallel probe).
-  quick:        [llm, groq, cerebras, openrouter, "gemini:flash"]
-  summarize:    [llm, groq, cerebras, openrouter, "gemini:flash"]
+  quick:        ["agy:flash_low", llm, groq, cerebras, openrouter, "gemini:flash"]
+  summarize:    ["agy:flash_low", llm, groq, cerebras, openrouter, "gemini:flash"]
   # review: a second model reads code that is already written (delegate review=true, `foremankit review`). Only own hardware
   # (the pool `llm`) or a PAID model: free clouds review superficially and may train on the code. The author's own
   # source is skipped. A slow node is used last (llm.kinds.review + max_seconds), so the fast Legion or a paid flash answers first.

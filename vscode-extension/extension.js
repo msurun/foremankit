@@ -213,6 +213,7 @@ class Panel {
       fixModel: ['fix-model', '--name', name, '--model', model],
       orchestratorMode: ['orchestrator-mode', '--name', name, '--cwd', workspaceDir()],
       delegationSet: ['delegation-set', String(!!enabled), '--name', name],
+      supervisorSet: ['supervisor-set', value],
       escalationSet: ['escalation-set', '--name', name, '--model', model],
       workerTest: ['worker-test', '--name', name],
       workerEnable: ['worker-enable', String(!!enabled), '--name', name],
@@ -340,6 +341,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <label class="info"><input type="checkbox" id="delegAll"> Delegation enabled</label><span class="q" data-for="tip4">?</span><div class="tip" id="tip4">off = everything runs on the orchestrator</div>
 <details><summary class="info">Which helpers</summary>
 <div class="info"><label><input type="checkbox" id="delegPaid"> paid clouds</label> <label><input type="checkbox" id="delegFree"> free clouds</label> <label><input type="checkbox" id="delegLocal"> local models</label></div>
+<div class="info">Supervisor: <label><input type="radio" name="supervisor" id="supHaiku" value="haiku"> Haiku agent</label> <label><input type="radio" name="supervisor" id="supAgy" value="agy"> Antigravity (agy runs commands itself)</label></div>
+<div class="info"><label><input type="checkbox" id="delegAgy"> Antigravity (Google AI Pro; internal data allowed, never private)</label></div>
 </details>
 <h3>Night run<span class="q" data-for="tip9">?</span></h3>
 <div class="tip" id="tip9">Keeps the session working unattended: when the model ends its turn, the Stop hook tells it to continue the plan and the latest handoff, until the DONE file appears, the deadline passes or the max-continues limit is reached. Works only when the local model or Kaggle drives the main loop (not the Anthropic cloud). Off by default; start it only after a live test.</div>
@@ -493,9 +496,13 @@ function showGpu(gpu) {
  }
  function showDelegationSwitches(d) {
   if (!d) return;
-  const any = d.paid || d.free || d.local;
-  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
+  const any = d.paid || d.free || d.local || d.agy;
+  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local'], ['delegAgy', 'agy']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
+ }
+ function showSupervisor(mode) {
+  const id = mode === 'agy' ? 'supAgy' : 'supHaiku';
+  if (document.activeElement !== $(id)) $(id).checked = true;
  }
  function showNight(n) {
   if (!n) return;
@@ -515,7 +522,7 @@ function showGpu(gpu) {
   $('error').textContent = s.error || '';
   if (s.error) return;
   lastStatus = s; if (s.server.up) startingUntil = 0;
-  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showKaggle(s.kaggle); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); showNight(s.night); renderHead();
+  showLevels(s.thinking); showPrices(s.prices); showBudget(s.budget); showKaggle(s.kaggle); showPresets(s.preset); showEscalation(s); showIssues(s.preset.issues); showRole(s.role); showDelegationSwitches(s.delegation); showSupervisor(s.supervisor); showNight(s.night); renderHead();
   $('ctxWrap').style.display = s.context ? 'block' : 'none';
   if (s.context) { const pct = Math.min(100, Math.round(100 * s.context.tokens / s.context.window));
    $('ctxFill').style.width = pct + '%'; $('ctxText').textContent = 'context ' + pct + '% (' + s.context.tokens + ' / ' + s.context.window + ')'; }
@@ -689,8 +696,9 @@ function showGpu(gpu) {
  $('pairFirewall').onclick = () => send({ type: 'pair', action: 'firewall' });
  $('pairHost').onclick = () => send({ type: 'pair', action: 'host' });
  $('pairFind').onclick = () => { $('pairFound').textContent = 'searching...'; send({ type: 'pair', action: 'find' }); };
+ for (const id of ['supHaiku', 'supAgy']) $(id).onchange = () => send({ type: 'config', action: 'supervisorSet', value: $(id).value });
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
- for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
+ for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local'], ['delegAgy', 'agy']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
 $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };

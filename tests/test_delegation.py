@@ -22,16 +22,20 @@ class TestCategoryOf:
     """Tests for category_of function."""
 
     def test_a_llm_provider_is_classified_as_local(self):
-        provider = SimpleNamespace(is_llm=True, free=False)
+        provider = SimpleNamespace(is_agy=False, is_llm=True, free=False)
         assert category_of(provider) == "local"
 
     def test_a_free_non_llm_provider_is_classified_as_free(self):
-        provider = SimpleNamespace(is_llm=False, free=True)
+        provider = SimpleNamespace(is_agy=False, is_llm=False, free=True)
         assert category_of(provider) == "free"
 
     def test_a_paid_non_llm_provider_is_classified_as_paid(self):
-        provider = SimpleNamespace(is_llm=False, free=False)
+        provider = SimpleNamespace(is_agy=False, is_llm=False, free=False)
         assert category_of(provider) == "paid"
+
+    def test_the_antigravity_provider_is_its_own_category_even_though_it_is_free(self):
+        provider = SimpleNamespace(is_agy=True, is_llm=False, free=True)
+        assert category_of(provider) == "agy"
 
 
 class TestIsSwitchedOff:
@@ -40,6 +44,10 @@ class TestIsSwitchedOff:
     def test_a_missing_key_means_on(self):
         state = {"toggles": {}}
         assert not is_switched_off(state, "paid")
+
+    def test_agy_is_opt_in_so_a_missing_key_means_off(self):
+        assert is_switched_off({"toggles": {}}, "agy")
+        assert not is_switched_off({"toggles": {"delegation:agy": "on"}}, "agy")
 
     def test_an_explicit_on_means_not_off(self):
         state = {"toggles": {"delegation:paid": "on"}}
@@ -101,10 +109,11 @@ class TestDescribe:
         state = {"toggles": {}}
         description = describe(state)
         lines = description.split("\n")
-        assert len(lines) == 3
+        assert len(lines) == 4
         assert "paid: on" in lines
         assert "free: on" in lines
         assert "local: on" in lines
+        assert "agy: off" in lines
 
     def test_describe_reflects_off_state(self):
         state = {"toggles": {"delegation:paid": "off"}}

@@ -250,3 +250,29 @@ def test_a_cut_off_last_line_is_counted_only_when_it_is_complete(tmp_path: Path)
     stdout, returncode = run_hook(event, tmp_path)
     assert "systemMessage" in stdout
     assert returncode == 0
+
+
+def test_the_antigravity_supervisor_notice_names_the_supervise_command(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {"supervisor": "agy"})
+    out, code = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1"}, tmp_path)
+    assert code == 0 and "foremankit supervise" in out and "SUPERVISOR is Antigravity" in out
+
+
+def test_the_haiku_supervisor_adds_no_prompt_notice(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {"supervisor": "haiku"})
+    out, code = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1"}, tmp_path)
+    assert code == 0 and out == ""
+
+
+def test_the_nudge_context_points_at_supervise_when_the_supervisor_is_agy(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {"supervisor": "agy"})
+    transcript = write_transcript(tmp_path / "t.jsonl", [("Write", {"content": write_text_lines(THRESHOLD + 2)})])
+    event = {"hook_event_name": "PostToolUse", "session_id": "s1", "transcript_path": str(transcript)}
+    out, _ = run_hook(event, tmp_path)
+    assert "foremankit supervise" in out and "bulk-supervisor" not in out
+
+
+def test_agy_only_delegation_is_not_treated_as_switched_off(tmp_path: Path) -> None:
+    write_toggles(tmp_path, {**all_delegation_off(), "delegation:agy": "on", "supervisor": "agy"})
+    out, _ = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1"}, tmp_path)
+    assert "switched OFF" not in out and "foremankit supervise" in out

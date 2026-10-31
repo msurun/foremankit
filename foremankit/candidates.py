@@ -99,7 +99,7 @@ class CandidateBuilder:
         if provider.cfg.get("enabled", True) is False:
             return "disabled in config"
         key = provider.api_key()
-        if not key:
+        if not key and not provider.is_agy:   # agy signs in through the Antigravity app, not through a key
             return f"no key ({provider.cfg.get('key_env')})"
         reason = self.router.cloud_enabled(provider)  # probes only providers with a key
         if reason:
@@ -108,7 +108,8 @@ class CandidateBuilder:
             alias, model_id, price = provider.model(alias)
         except KeyError as error:
             return str(error)
-        return Candidate(provider, alias, model_id, price, provider.cfg["base_url"], key,
+        location = provider.agy_binary if provider.is_agy else provider.cfg["base_url"]   # agy: path of agy.exe
+        return Candidate(provider, alias, model_id, price, location, key,
                          limit=provider.cfg.get("max_concurrent"))
 
     def _limit_problem(self, candidate: Candidate, ctx: CallContext, state: dict[str, Any], now: float) -> str | None:
