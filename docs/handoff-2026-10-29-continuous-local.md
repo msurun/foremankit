@@ -12,56 +12,30 @@ subagents ran until 07:23, chaining ~70 "final report" agents after successful S
 USD 1.38 / 1.50 of the daily delegation cap (hard_code on deepseek-v4-pro, gemini-3.1-pro) and the Claude
 subscription (15 Haiku bulk-supervisor, 1 opus-advisor, ~80 subagent turns spilled to cloud Sonnet).
 
-## Already done (committed, NOT pushed, NOT live-tested; needs router + MCP + VS Code restart)
-- `354fe1b`: step 4b done: `night_run.should_continue()` allows configurable driver kinds (`night_drivers`, default `["local", "external:kaggle"]`), pings the Kaggle tunnel (`FOREMANKIT_NODE_KAGGLE_LAN` / `KAGGLE_LLM_KEY`) via `foremankit.utils.ping_endpoint` with bounded retries and backoff (reason `"tunnel"` on failure), and stops continuation if `context_stop` flag is present in `night_run.json` (reason `"context_stop"`). Tests in `tests/test_night_run_extended.py` and `tests/test_night_run.py`.
-- `558f4c2` step 4 core (foremankit/night_run.py, hooks/night_continue.py Stop hook, installed via install.py, run done 2026-10-29), `bfe707d` panel switch (panel.py night_status/set_night, CLI `panel night-run on|off|status`), `477cc1b` driver.json now has `kind` (local / external:<mode>) and Kaggle main loop goes through virtual_clear_body in prepare_external. 1299 tests green. NOT pushed.
+## Already done (committed, NOT pushed)
+- `9a8275c` / `1e80baa` / `354fe1b`: step 4b completed and verified. `night_run.should_continue()` allows configurable driver kinds (`night_drivers`, default `["local", "external:kaggle"]`), pings the Kaggle tunnel (`FOREMANKIT_NODE_KAGGLE_LAN` / `KAGGLE_LLM_KEY`) via `/v1/models` with bounded retries and backoff (reason `"tunnel"` on failure), and stops continuation if `context_stop` flag is present in `night_run.json` (reason `"context_stop"`). Strict clean code enforced (functions <= 20 lines, `foremankit check`, `ruff check`). Full suite: 1380 tests passed.
+- `558f4c2` step 4 core (foremankit/night_run.py, hooks/night_continue.py Stop hook, installed via install.py), `bfe707d` panel switch (panel.py night_status/set_night, CLI `panel night-run on|off|status`), `477cc1b` driver.json now has `kind` (local / external:<mode>) and Kaggle main loop goes through virtual_clear_body in prepare_external.
 - `4c096fd`: gateway strips Agent/Task from subagent requests (they carry the `SubagentHandback` tool) and answers a
   synthetic end_turn after a successful handback (`guard_subagent`, `handed_back` in foremankit/gateway.py);
   routing.yaml `budget.local_orchestrator_paid: false`; hard_code chain has free sources after the paid ones.
 - `2987cd1`: foremankit/driver.py (`driver.json` in the state dir, last main-loop request wins, `local_drives()`);
   candidates.py uses it; orchestrator.yaml `cloud_when_local: false` -> Haiku/Opus subagent ids served locally,
   an overflowing SUBAGENT gets a stop answer instead of a spill (`overflow_stop`).
-- Still going to the cloud: tool-less side requests (auto-mode classifier -> claude-sonnet-5-5), and the MAIN LOOP
-  spill between `overflow_ratio` 0.70 and `context_stop.ratio` 0.90.
-- `tests/test_gateway_side_cloud.py` has someone else's uncommitted change: do not commit or revert it.
-- `19917b3` and `0c674b8`: plan steps 0-3 done (confirmed hook schemas, no main-loop spill while local drives, context_stop.ratio 0.85, virtual clear in the gateway). Full suite 1267 green. NOT pushed.
-- Uncommitted: vscode-extension/extension.js holds the Night run block + tip9 help (mine) mixed with someone else's changes; also others' changes in config/routing.yaml, config/orchestrator.yaml, kaggle/gpu/serve_gpu.py, tests/test_gateway_side_cloud.py, tests/test_gateway_upstreams.py, tests/test_serve_gpu.py - do not commit or revert blindly.
+- `19917b3` and `0c674b8`: plan steps 0-3 done (confirmed hook schemas, no main-loop spill while local drives, context_stop.ratio 0.85, virtual clear in the gateway).
+- Step 6 LIVE TEST COMPLETED (night 2026-10-31 to 2026-11-01): 8.5-hour unattended run on Kaggle (`qwen3.8-27b`) executing 4,093 calls. Virtual clear rotated context at ~163k tokens (86%), generated `handoff-20261101-005033.md`, Stop hook blocked stop and resumed session at 14.8k tokens. When the Kaggle 9-hour runtime limit ended the tunnel with HTTP 530 at 06:13, `should_continue()` ping caught it, returned reason `"tunnel"`, and prevented continuation loops. Zero spills to cloud Sonnet. Full telemetry in `docs/night-run-live-log.md`.
+- Working tree uncommitted files belonging to others: do not commit or revert (`config/orchestrator.yaml`, `config/routing.yaml`, `kaggle/gpu/serve_gpu.py`, `tests/test_gateway_side_cloud.py`, `tests/test_gateway_upstreams.py`, `tests/test_serve_gpu.py`, `vscode-extension/extension.js`).
 
-## Plan (in order; one step = one delegation + tests) — NEXT: step 5 / step 6 (steps 0-4b done)
-0. Before coding, confirm with the `claude-code-guide` agent: Stop hook output schema (`decision: "block"` +
-   `reason`, the `stop_hook_active` input field), SessionStart `source` values (startup/resume/clear/compact) and how
-   it injects context (`additionalContext` / stdout). Do not code these from memory.
-1. No main-loop spill while the local model drives: in `prepare_body` (gateway.py), when `cloud_when_local` is false
-   and `driver.local_drives()`, an overflowing main-loop request goes to step 3 instead of `spill_to_cloud`.
-2. `context_stop.ratio: 0.85` in config/orchestrator.yaml (the 0.70 spill must no longer pre-empt it, see step 1).
-3. Virtual clear in the gateway (new module, e.g. foremankit/virtual_clear.py; call it from prepare_body before
-   `context_stop_response`): when a local main-loop request reaches the ratio, write the handoff with the existing
-   `context_stop.handoff_markdown` / `write_handoff`, store a cut marker in the state dir, and from then on send the
-   model: system + tools + one user message "handoff: <text>" + the messages after the cut. Rules:
-   - the kept tail must start at a valid point: never a `tool_result` without its `tool_use`; every kept assistant
-     `tool_use` keeps its result;
-   - the marker must identify the session (look for a session id in the request, e.g. `metadata.user_id`; check a
-     real dump via the `DUMP_ENV` variable in gateway.py) and the cut message (fingerprint), so a new session or a
-     real /clear does not inherit it;
-   - rolling: when the trimmed request reaches the ratio again, cut again with a new handoff;
-   - leave Claude Code's reported usage alone (the panel context meter will look low: known, cosmetic);
-   - the hard `context_stop` stays as the last resort when even the trimmed request does not fit.
-   Open choice: handoff stays mechanical (from the request body, as now) or a direct tool-less call to the local
-   llama-server writes a summary. Start mechanical.
-4. DONE (see Already done): Stop hook `hooks/night_continue.py`, `foremankit/night_run.py`, panel switch (`panel night-run ...`).
-4b. DONE (`354fe1b`): Driver kinds `local` / `external:kaggle` (configurable via `night_drivers`), Kaggle tunnel ping with retries/backoff (fail reason `"tunnel"`), and `context_stop` suppression via `night_run.json` flag (reason `"context_stop"`).
-5. SessionStart hook (sources startup and clear): if a handoff for this cwd is newer than N hours, inject its path and
+## Plan (in order; one step = one delegation + tests) — NEXT: step 5 (steps 0-4b and 6 done)
+0. DONE: Confirm hook schemas (Stop hook `decision: "block"` + `reason`, SessionStart `source` values).
+1. DONE: No main-loop spill while local model drives (`prepare_body` in gateway.py).
+2. DONE: `context_stop.ratio: 0.85`.
+3. DONE: Virtual clear in the gateway (`foremankit/virtual_clear.py`).
+4. DONE: Stop hook `hooks/night_continue.py`, `foremankit/night_run.py`, panel switch (`panel night-run ...`).
+4b. DONE: Driver kinds `local` / `external:kaggle`, tunnel ping with backoff (reason `"tunnel"`), `context_stop` suppression.
+5. NEXT: SessionStart hook (sources startup and clear): if a handoff for this cwd is newer than N hours, inject its path and
    a bounded excerpt, so a manual `/clear` also resumes in one step.
-6. Live test before any night: set ratio low (e.g. 0.30) and max_continues 3 on a short task; check in the gateway
-   log that the cut happens, tool pairs stay valid, the Stop hook continues and stops at the cap/DONE, and that no
-   request reaches the Anthropic cloud except tool-less side requests.
+6. DONE: Live test passed with full context reset and graceful tunnel drop handling (see Already done).
 
 ## Rules for the session
 - Orchestrator does not write code: delegate (bulk-supervisor / delegate / Haiku agents), report in Polish, short.
-- Clean code rules from CLAUDE.md; full suite `.venv/Scripts/python -m pytest -q` (1267 green at 0c674b8; system
-  python lacks yaml). Commit only after green; push only when the owner says so.
-- Do not run a night session until step 6 passed.
-
-## Also pending (other project)
-RougherSim: 3 local commits not pushed; mill/cyclone/flotation physics must be redone with sources before pushing
-(see memory `project-roughersim-m0-state-2026-10-27`).
+- Clean code rules from CLAUDE.md; full suite `.venv/Scripts/python -m pytest -q` (1380 green). Commit only after green; push only when the owner says so.
