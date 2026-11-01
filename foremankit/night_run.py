@@ -9,10 +9,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .config import load_config
 from foremankit.config import state_dir
-from . import driver
-from . import utils
+
+from . import driver, utils
+from .config import load_config, load_env, refresh_live_env
 
 local_drives = driver.local_drives
 
@@ -70,9 +70,22 @@ def record_continue() -> int:
     _write_night(state)
     return count
 
+def _check_kaggle_tunnel() -> bool:
+    """Verify that the Kaggle upstream Cloudflare tunnel is reachable."""
+    url = os.getenv("FOREMANKIT_NODE_KAGGLE_LAN")
+    token = os.getenv("KAGGLE_LLM_KEY")
+    if not url:
+        return False
+    endpoint = url if "/v1" in url else f"{url.rstrip('/')}/v1/models"
+    return utils.ping_endpoint(endpoint, token, retries=3, backoff=0.3)
+
+
 def should_continue(now: float | None = None) -> tuple[bool, str]:
     """Return (True, "ok") if the night run may continue, else (False, reason)."""
-    # In plain words: decide whether the nightly automation should keep running.
+    # In plain words: decide whether the nightly automation should continue running.
+    # The decision checks the active driver, tunnel reachability, done marker, and continue bounds.
+    load_env()
+    refresh_live_env()
     cfg = load_config()
     state = read_night()
     if not state or not state.get("enabled"):
@@ -80,13 +93,11 @@ def should_continue(now: float | None = None) -> tuple[bool, str]:
     kind = driver.drives_kind() or "local"
     allowed = cfg.get("night_drivers", ["local", "external:kaggle"])
     if kind not in allowed:
-        return False, "off"
+        return False, "drives"
     if kind.startswith("external:kaggle"):
-        url = os.getenv("FOREMANKIT_NODE_KAGGLE_LAN")
-        token = os.getenv("KAGGLE_LLM_KEY")
-        if not url or not utils.ping_endpoint(url, token, retries=3, backoff=0.3):
+        if not _check_kaggle_tunnel():
             return False, "tunnel"
-    if not local_drives():
+    elif kind == "local" and not local_drives():
         return False, "drives"
     done = str(state.get("done_file", ""))
     if done and Path(done).exists():
