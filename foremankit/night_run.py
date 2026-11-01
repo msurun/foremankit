@@ -80,6 +80,18 @@ def _check_kaggle_tunnel() -> bool:
     return utils.ping_endpoint(endpoint, token, retries=3, backoff=0.3)
 
 
+def _check_driver(kind: str, allowed: list[str]) -> str | None:
+    """Return an error reason ('drives' or 'tunnel') if the driver is not ready, else None."""
+    if kind not in allowed:
+        return "drives"
+    if kind.startswith("external:kaggle"):
+        if not _check_kaggle_tunnel():
+            return "tunnel"
+    elif kind == "local" and not local_drives():
+        return "drives"
+    return None
+
+
 def should_continue(now: float | None = None) -> tuple[bool, str]:
     """Return (True, "ok") if the night run may continue, else (False, reason)."""
     # In plain words: decide whether the nightly automation should continue running.
@@ -90,17 +102,10 @@ def should_continue(now: float | None = None) -> tuple[bool, str]:
     state = read_night()
     if not state or not state.get("enabled"):
         return False, "off"
-    kind = driver.drives_kind() or "local"
-    allowed = cfg.get("night_drivers", ["local", "external:kaggle"])
-    if kind not in allowed:
-        return False, "drives"
-    if kind.startswith("external:kaggle"):
-        if not _check_kaggle_tunnel():
-            return False, "tunnel"
-    elif kind == "local" and not local_drives():
-        return False, "drives"
-    done = str(state.get("done_file", ""))
-    if done and Path(done).exists():
+    err = _check_driver(driver.drives_kind() or "local", cfg.get("night_drivers", ["local", "external:kaggle"]))
+    if err:
+        return False, err
+    if (done := str(state.get("done_file", ""))) and Path(done).exists():
         return False, "done"
     if int(state.get("count", 0)) >= int(state.get("max_continues", 0)):
         return False, "limit"

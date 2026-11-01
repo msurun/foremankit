@@ -8,7 +8,6 @@ night run's plan and handoff. The hook never blocks the call unless the night ru
 
 import json
 import sys
-from pathlib import Path
 
 
 def read_event() -> dict:
@@ -32,7 +31,7 @@ def run() -> int:
     event = read_event()
     if not event:
         return 0
-    from foremankit.night_run import should_continue, record_continue, read_night
+    from foremankit.night_run import read_night, record_continue, should_continue
     should, _ = should_continue()
     if should:
         record_continue()

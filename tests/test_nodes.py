@@ -105,6 +105,7 @@ def test_borrowing_from_a_more_important_machine_is_limited_to_idle_and_short(la
 
 def test_a_node_with_its_own_key_env_never_receives_the_shared_lab_key(lab, cfg, monkeypatch):
     """A tunnelled node outside the lab sends its own throwaway token, and no header at all while that token is unset."""
+    monkeypatch.delenv("KAGGLE_LLM_KEY", raising=False)
     config = lab("firefly")
     config["nodes"]["kaggle"] = {"hostname": "kaggle-notebook", "priority": 5, "key_env": "KAGGLE_LLM_KEY",
                                  "lan": ["https://notebook.trycloudflare.com"]}
