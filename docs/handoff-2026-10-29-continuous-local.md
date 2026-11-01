@@ -13,6 +13,7 @@ USD 1.38 / 1.50 of the daily delegation cap (hard_code on deepseek-v4-pro, gemin
 subscription (15 Haiku bulk-supervisor, 1 opus-advisor, ~80 subagent turns spilled to cloud Sonnet).
 
 ## Already done (committed, NOT pushed, NOT live-tested; needs router + MCP + VS Code restart)
+- `354fe1b`: step 4b done: `night_run.should_continue()` allows configurable driver kinds (`night_drivers`, default `["local", "external:kaggle"]`), pings the Kaggle tunnel (`FOREMANKIT_NODE_KAGGLE_LAN` / `KAGGLE_LLM_KEY`) via `foremankit.utils.ping_endpoint` with bounded retries and backoff (reason `"tunnel"` on failure), and stops continuation if `context_stop` flag is present in `night_run.json` (reason `"context_stop"`). Tests in `tests/test_night_run_extended.py` and `tests/test_night_run.py`.
 - `558f4c2` step 4 core (foremankit/night_run.py, hooks/night_continue.py Stop hook, installed via install.py, run done 2026-10-29), `bfe707d` panel switch (panel.py night_status/set_night, CLI `panel night-run on|off|status`), `477cc1b` driver.json now has `kind` (local / external:<mode>) and Kaggle main loop goes through virtual_clear_body in prepare_external. 1299 tests green. NOT pushed.
 - `4c096fd`: gateway strips Agent/Task from subagent requests (they carry the `SubagentHandback` tool) and answers a
   synthetic end_turn after a successful handback (`guard_subagent`, `handed_back` in foremankit/gateway.py);
@@ -26,7 +27,7 @@ subscription (15 Haiku bulk-supervisor, 1 opus-advisor, ~80 subagent turns spill
 - `19917b3` and `0c674b8`: plan steps 0-3 done (confirmed hook schemas, no main-loop spill while local drives, context_stop.ratio 0.85, virtual clear in the gateway). Full suite 1267 green. NOT pushed.
 - Uncommitted: vscode-extension/extension.js holds the Night run block + tip9 help (mine) mixed with someone else's changes; also others' changes in config/routing.yaml, config/orchestrator.yaml, kaggle/gpu/serve_gpu.py, tests/test_gateway_side_cloud.py, tests/test_gateway_upstreams.py, tests/test_serve_gpu.py - do not commit or revert blindly.
 
-## Plan (in order; one step = one delegation + tests) — NEXT: step 4b (steps 0-3 done, step 4 done except as noted)
+## Plan (in order; one step = one delegation + tests) — NEXT: step 5 / step 6 (steps 0-4b done)
 0. Before coding, confirm with the `claude-code-guide` agent: Stop hook output schema (`decision: "block"` +
    `reason`, the `stop_hook_active` input field), SessionStart `source` values (startup/resume/clear/compact) and how
    it injects context (`additionalContext` / stdout). Do not code these from memory.
@@ -47,16 +48,8 @@ subscription (15 Haiku bulk-supervisor, 1 opus-advisor, ~80 subagent turns spill
    - the hard `context_stop` stays as the last resort when even the trimmed request does not fit.
    Open choice: handoff stays mechanical (from the request body, as now) or a direct tool-less call to the local
    llama-server writes a summary. Start mechanical.
-4. DONE (see Already done), except: night_run.should_continue still requires driver.local_drives().
-   NEXT 4b: allow driver kind local OR external:kaggle (config night_drivers), ping the Kaggle tunnel before each
-   continue, stop continuing after context_stop (Opus advisor 2026-10-29: Kaggle never wrote driver.json before,
-   stale local=true let night-run fire by accident; Kaggle windows 9-12h are the owner's preferred night setup;
-   URL/key do not change between handoffs). Then step 5, step 6 (nothing at night before it).
-   Original spec: Stop hook `hooks/night_continue.py` (install via install.py like the other hooks): when a night run is ON
-   (state file e.g. `night_run.json`: enabled, until time, max_continues, count) and `driver.local_drives()` and no
-   DONE file and count < max and now < until -> block the stop with a reason like "Continue the task from the plan
-   and the latest handoff; when everything is finished create the DONE file <path>". Count every block. Off by
-   default. Panel switch + CLI (`panel night-run ...`), strings PL/EN like the other panel items.
+4. DONE (see Already done): Stop hook `hooks/night_continue.py`, `foremankit/night_run.py`, panel switch (`panel night-run ...`).
+4b. DONE (`354fe1b`): Driver kinds `local` / `external:kaggle` (configurable via `night_drivers`), Kaggle tunnel ping with retries/backoff (fail reason `"tunnel"`), and `context_stop` suppression via `night_run.json` flag (reason `"context_stop"`).
 5. SessionStart hook (sources startup and clear): if a handoff for this cwd is newer than N hours, inject its path and
    a bounded excerpt, so a manual `/clear` also resumes in one step.
 6. Live test before any night: set ratio low (e.g. 0.30) and max_continues 3 on a short task; check in the gateway
