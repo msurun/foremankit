@@ -137,8 +137,8 @@ supervisor:
 budget:
   # Two separate budgets (each stops only its own kind of spend):
   daily_usd: 0.5        # delegated work (the delegate tool) - hard stop for paid providers
-  monthly_usd: 15.0     # delegated work per month (= USD 5 loaded on Gemini + 10 USD Google Developer AI Pro promo)
-  orchestrator_daily_usd: 1     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
+  monthly_usd: 10.0     # delegated work per month (= 10 USD Google Developer AI Pro promo)
+  orchestrator_daily_usd: 2     # Claude Code running on DeepSeek/Gemini: the gateway refuses requests once it is passed
   orchestrator_monthly_usd: 5.0   # same, per month (remove the line for no monthly cap)
   local_orchestrator_paid: false   # 2026-10-29: night run with the local orchestrator spent the daily cap on hard_code
   per_call_usd: 0.10    # a paid call whose WORST-CASE cost is above this is refused unless allow_cost=true is passed
