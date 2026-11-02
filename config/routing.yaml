@@ -24,11 +24,11 @@ chains:
   # AI Pro quota unknown: measure the pass rate and the quota, revert (delete the agy entries) if it drops or Google objects.
   # agy level per kind (2026-10-31, owner): quick/summarize = flash_low, bulk_code/data_script/long_context = flash_low (measured 2026-10-31: low 14/14 on the bulk_code bench, medium returned EMPTY replies 13/14 - agent wrote via tools),
   # hard_code = flash_high. The reasoning table below does not apply to agy: the level is part of the model id.
-  bulk_code:    ["agy:flash_low", llm, cerebras, groq, mistral, openrouter, "deepseek:flash", "gemini:lite31", "gemini:flash"]
-  data_script:  ["agy:flash_low", "deepseek:flash", "gemini:flash"]
+  bulk_code:    ["agy:flash_low", llm, cerebras, groq, mistral, openrouter, "gemini:lite31", "gemini:flash", "deepseek:flash"]
+  data_script:  ["agy:flash_low", "gemini:flash", "deepseek:flash"]
   # 2026-10-29: free sources after the paid ones, so hard_code still has a route when paid ones are skipped (local orchestrator)
-  hard_code:    ["agy:flash_high", "deepseek:pro", "gemini:pro", mistral, cerebras, openrouter]
-  long_context: ["agy:flash_low", "deepseek:flash", "gemini:flash"]
+  hard_code:    ["agy:flash_high", "gemini:pro", "deepseek:pro", mistral, cerebras, openrouter]
+  long_context: ["agy:flash_low", "gemini:flash", "deepseek:flash"]
   # `llm` is the pool of local-LLM nodes (config/nodes.yaml, this machine included). When the chain reaches it, the router
   # expands it into the nodes that are on, answer, and accept the task's data level, the one expected to FINISH first
   # coming first (measured tok/s per node, busy ones later). Off or unreachable nodes are skipped (parallel probe).
@@ -37,11 +37,11 @@ chains:
   # review: a second model reads code that is already written (delegate review=true, `foremankit review`). Only own hardware
   # (the pool `llm`) or a PAID model: free clouds review superficially and may train on the code. The author's own
   # source is skipped. A slow node is used last (llm.kinds.review + max_seconds), so the fast Legion or a paid flash answers first.
-  review:       [llm, "deepseek:flash", "gemini:flash"]
+  review:       [llm, "gemini:flash", "deepseek:flash"]
   private:      [llm]                     # only own hardware is ever accepted here (and only nodes with accept: private)
 
 # escalate=true replaces the kind's chain with this one (ignored for sensitivity=private)
-escalation: ["deepseek:pro", "gemini:pro"]
+escalation: ["gemini:pro", "deepseek:pro"]
 
 # Fixed system prompt per kind: always the first message, so DeepSeek's prefix cache hits.
 system_prompts:
