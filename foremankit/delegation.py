@@ -1,8 +1,8 @@
-"""Category switch for delegation sources: paid, free, local, agy (Antigravity subscription).
+"""Category switch for delegation sources: deepseek, gemini, free, local, agy (Antigravity subscription).
 
 Toggles are stored in the state file under state["toggles"] with keys
-"delegation:paid", "delegation:free", "delegation:local", "delegation:agy". A missing key
-defaults to "on", except agy (opt-in: "off" until the owner switches it on).
+"delegation:deepseek", "delegation:gemini", "delegation:free", "delegation:local", "delegation:agy".
+A missing key defaults to "on", except agy (opt-in: "off" until the owner switches it on).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .state import StateStore
 if TYPE_CHECKING:
     from .providers import Provider
 
-CATEGORIES = ("paid", "free", "local", "agy")
+CATEGORIES = ("deepseek", "gemini", "free", "local", "agy")
 DEFAULT_OFF = frozenset({"agy"})   # opt-in sources: "all on" leaves them alone
 
 _VALUE_ON = "on"
@@ -21,18 +21,22 @@ _VALUE_OFF = "off"
 
 
 def category_of(provider: Provider) -> str:
-    """Classify a provider into one of the four delegation categories.
+    """Classify a provider into one of the five delegation categories.
 
     Returns "agy" for the Antigravity CLI, "local" if the provider is an LLM,
-    "free" if it is free, otherwise "paid".
+    "free" if it is free, "deepseek" if deepseek, "gemini" if gemini.
     """
     if provider.is_agy:
         return "agy"
     if provider.is_llm:
         return "local"
+    if provider.name == "deepseek":
+        return "deepseek"
+    if provider.name == "gemini":
+        return "gemini"
     if provider.free:
         return "free"
-    return "paid"
+    return "paid" # Fallback, though shouldn't happen with full category coverage
 
 
 def is_switched_off(state: dict, category: str) -> bool:
