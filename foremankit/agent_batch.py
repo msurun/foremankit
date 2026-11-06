@@ -277,6 +277,11 @@ def _run_entry(
         "branch": str(report.get("branch") or ""),
         "files": list(report.get("files") or []),
         "reason": reason,
+        "passed": status == "passed",
+        "run_id": str(report.get("run_id") or ""),
+        "model": str(report.get("model") or ""),
+        "review_required": bool(report.get("review_required")),
+        "review_paths": list(report.get("review_paths") or []),
     }
 
 

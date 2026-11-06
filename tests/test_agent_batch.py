@@ -303,3 +303,17 @@ def test_passed_run_mentioning_quota_is_not_a_quota_error(tmp_path: Path) -> Non
     assert report["tasks"][0]["status"] == "passed"
     assert "paused_until" not in json.loads(context.state_path.read_text()).get("agy", {}) or \
         json.loads(context.state_path.read_text())["agy"]["paused_until"] == 0.0
+
+
+def test_run_entry_carries_what_agent_merge_needs(tmp_path: Path) -> None:
+    """The batch report entry has passed, run_id, model and the review flags of the run."""
+    f1 = _create_task_file(tmp_path, "t1.md")
+
+    def run_one(job: AgentRunJob) -> dict[str, Any]:
+        return {"passed": True, "branch": "agent-run/x", "files": ["a.py"], "run_id": "x", "model": "m",
+                "review_required": True, "review_paths": ["gateway/**"], "agent_reply": "ok"}
+
+    task = PlanTask(id="t1", task_file=f1, scope=("a.py",), check="pytest", runner="agy")
+    entry = run_batch([task], _make_context(tmp_path, run_one))["tasks"][0]
+    assert entry["passed"] is True and entry["run_id"] == "x" and entry["model"] == "m"
+    assert entry["review_required"] is True and entry["review_paths"] == ["gateway/**"]
