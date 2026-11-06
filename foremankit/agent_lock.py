@@ -16,6 +16,9 @@ from pathlib import Path
 WAIT_S = 120.0
 POLL_S = 0.1
 MAX_AGE_S = 600.0               # a lock older than this is taken over even if its PID looks alive (PID reuse)
+PID_WRITE_GRACE_S = 5.0         # an EMPTY lock file younger than this is a PID being written, not a dead lock
+REMOVE_TRIES = 100
+REMOVE_POLL_S = 0.05
 STILL_ACTIVE = 259
 PROCESS_QUERY_LIMITED = 0x1000
 
@@ -50,13 +53,30 @@ def pid_alive(pid: int) -> bool:
 
 
 def _is_stale(path: Path) -> bool:
-    """The lock file's owner is gone, the file is unreadable, or it is older than MAX_AGE_S."""
+    """The lock's owner is gone, or the file is older than MAX_AGE_S.
+    A file that is gone, cannot be read right now (the owner or another waiter has it open) or is still empty (the owner
+    has created it but not written its PID yet; garbage text is stale at once) is NOT stale: taking it over would delete a live lock."""
     try:
         age = time.time() - path.stat().st_mtime
-        pid = int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return True
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        pid = int(text.strip())
+    except ValueError:
+        return bool(text.strip()) or age > PID_WRITE_GRACE_S
     return age > MAX_AGE_S or not pid_alive(pid)
+
+
+def _remove(path: Path) -> None:
+    """Delete the lock file; Windows refuses while another thread has it open for a moment, so retry briefly."""
+    for _ in range(REMOVE_TRIES):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(REMOVE_POLL_S)
+    path.unlink(missing_ok=True)
 
 
 def _try_create(path: Path) -> bool:
@@ -78,7 +98,7 @@ def git_lock(project: Path, wait_s: float = WAIT_S) -> Iterator[None]:
     deadline = time.monotonic() + wait_s
     while not _try_create(path):
         if _is_stale(path):
-            path.unlink(missing_ok=True)
+            _remove(path)
         elif time.monotonic() > deadline:
             raise LockTimeout(f"git lock {path} is held by another agent-run")
         else:
@@ -86,4 +106,4 @@ def git_lock(project: Path, wait_s: float = WAIT_S) -> Iterator[None]:
     try:
         yield
     finally:
-        path.unlink(missing_ok=True)
+        _remove(path)

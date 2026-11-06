@@ -203,3 +203,14 @@ def test_pid_alive_is_true_for_our_own_process() -> None:
 def test_pid_alive_is_false_for_an_exited_process() -> None:
     """A PID whose process has finished is not alive."""
     assert agent_lock.pid_alive(_spawn_and_reap_child_pid()) is False
+
+
+def test_fresh_empty_lock_file_is_not_taken_over(tmp_path: Path, temp_dir: Path) -> None:
+    """An empty file is a PID being written by its owner: waiting for it must time out, not delete the lock."""
+    project = tmp_path / "alpha"
+    path = agent_lock.lock_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(agent_lock.LockTimeout), agent_lock.git_lock(project, wait_s=0.3):
+        pass
+    assert path.exists()
