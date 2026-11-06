@@ -24,7 +24,7 @@ Code: `agent_run.py` (orchestration, report), `agent_git.py`, `agent_scope.py` (
 
 ## Open
 
-- Owner: install opencode, then add `OpenCodeRunner` (check `opencode run --help`; same members as `AgyRunner`; free models only for `normal`). `make_runner('opencode')` raises today.
+- opencode 2.2.0 CLI found at `~/AppData/Local/Programs/ai.opencode.desktop/resources/opencode-cli.exe` (settings in routing.yaml `agent_run.opencode`); `OpenCodeRunner` (`opencode run --auto --model M --format json`, normal data only) is built and unit-tested but NOT yet run live: the permission classifier blocked a live `--auto` run, owner must approve it first.
 - Owner: agree to push (`git push` not done), and re-confirm `--dangerously-skip-permissions` for multi-file runs (larger blast radius than `supervise`; worktree limits file damage, not command damage).
 - First real task: `docs/examples/task-crosscut-policy-editor-ui.md` in `CrosscutProcessSuite`; needs `npx vitest run` / `tsc` / `eslint` in `verify.allowed_commands` with `--check-cwd frontend`, and `node_modules` (not in the worktree; a junction was NOT added because removing a worktree through a junction can delete the target's files).
 - Not built: MCP tool `agent_run` / non-blocking job id (use the CLI with `run_in_background`), `agent_run` pass-rate view by model (events are logged), 17 pre-existing test failures above.

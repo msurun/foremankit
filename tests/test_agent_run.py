@@ -19,7 +19,13 @@ from foremankit.agent_run import (
     render_text,
     worktree_env,
 )
-from foremankit.agent_runner import AgyRunner, RunnerError, RunnerResult, make_runner
+from foremankit.agent_runner import (
+    AgyRunner,
+    OpenCodeRunner,
+    RunnerError,
+    RunnerResult,
+    make_runner,
+)
 from foremankit.providers import Provider
 from foremankit.state import CallLog
 
@@ -271,8 +277,58 @@ def test_agy_missing_binary_is_a_runner_error(tmp_path):
         runner.run("do it", tmp_path, 1)
 
 
-def test_make_runner_builds_agy_and_refuses_opencode():
+OC_CONFIG = {"routing": {"agent_run": {"opencode": {"binary": "oc.exe", "default_model": "opencode/x-free"}}}}
+
+
+def test_make_runner_builds_agy_and_refuses_unknown_names():
     runner = make_runner("agy", {"providers": {"agy": AGY_CONFIG}})
     assert runner.name == "agy" and runner.model == "gemini-3.8-flash-high"
     with pytest.raises(RunnerError):
-        make_runner("opencode", {"providers": {"agy": AGY_CONFIG}})
+        make_runner("nope", {"providers": {"agy": AGY_CONFIG}})
+
+
+def test_make_runner_builds_opencode_from_the_routing_settings():
+    assert make_runner("opencode", OC_CONFIG).model == "opencode/x-free"
+    assert make_runner("opencode", OC_CONFIG, "opencode/other").model == "opencode/other"
+    with pytest.raises(RunnerError):
+        make_runner("opencode", {"routing": {}})
+
+
+def test_opencode_takes_only_normal_data():
+    runner = OpenCodeRunner("oc.exe", "opencode/x-free")
+    assert [runner.eligible(level) for level in ("normal", "internal", "private")] == [True, False, False]
+
+
+def oc_lines(*events: dict) -> str:
+    return "\n".join(json.dumps(event) for event in events)
+
+
+def test_opencode_reply_is_the_last_text_event(tmp_path):
+    seen: list = []
+    out = oc_lines({"type": "step_start"}, {"type": "text", "part": {"text": "OK"}})
+    reply = OpenCodeRunner("oc.exe", "m", agy_popen(out, seen=seen)).run("do it", tmp_path, 5).reply
+    assert reply == "OK"
+    assert "--auto" in seen[0] and seen[0][seen[0].index("--format") + 1] == "json" and "m" in seen[0]
+
+
+@pytest.mark.parametrize("stdout, expected", [
+    (oc_lines({"type": "error", "message": "quota"}), "quota"),
+    ("not json at all", "FAIL opencode printed no usable output"),
+])
+def test_opencode_error_and_garbage_output(tmp_path, stdout, expected):
+    reply = OpenCodeRunner("oc.exe", "m", agy_popen(stdout)).run("do it", tmp_path, 5).reply
+    assert reply.startswith(expected)
+
+
+def test_opencode_timeout_and_missing_binary(tmp_path):
+    timed_out = OpenCodeRunner("oc.exe", "m", agy_popen(raises=subprocess.TimeoutExpired(cmd="oc", timeout=1)))
+    assert timed_out.run("x", tmp_path, 1).timed_out is True
+    missing = OpenCodeRunner("oc.exe", "m", agy_popen(raises=FileNotFoundError("oc")))
+    with pytest.raises(RunnerError):
+        missing.run("x", tmp_path, 1)
+
+
+def test_agent_run_refuses_internal_data_for_opencode(tmp_path, repo):
+    job = AgentRunJob("task", repo, ("a.py",), CHECK, sensitivity="internal")
+    with pytest.raises(AgentRunError):
+        agent_run(job, runner=OpenCodeRunner("oc.exe", "m"), log=CallLog(tmp_path / "calls.jsonl"))

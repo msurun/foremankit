@@ -484,7 +484,7 @@ def _add_node_parsers(sub: Any) -> None:
     agent_run.add_argument("--scope", action="append", required=True, help="glob of files the agent may create or change (repeatable)")
     agent_run.add_argument("--check", required=True, help="check command (routing.yaml verify.allowed_commands)")
     agent_run.add_argument("--check-cwd", default="", help="folder inside the project the check runs in")
-    agent_run.add_argument("--runner", default="agy", choices=["agy"])
+    agent_run.add_argument("--runner", default="agy", choices=["agy", "opencode"])
     agent_run.add_argument("--model", default="", help="model alias of the runner (default flash_high)")
     agent_run.add_argument("--timeout", type=float, default=1800)
     agent_run.add_argument("--keep-worktree", action="store_true")

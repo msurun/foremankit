@@ -5,6 +5,7 @@ three members (name, model, eligible) and `run`.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,49 @@ class AgyRunner:
         return RunnerResult(_reply_of(done.stdout, done.returncode), exit_code=done.returncode)
 
 
+class OpenCodeRunner:
+    """`opencode run --auto --model <provider/model> --format json <prompt>` in the worktree (opencode 2.x).
+    Its free models train on prompts, so only `normal` (synthetic or public) data is eligible."""
+    name = "opencode"
+
+    def __init__(self, binary: str, model: str, runner=subprocess.run):
+        self.binary = os.path.expanduser(binary)
+        self.model = model
+        self._runner = runner
+
+    def eligible(self, sensitivity: str) -> bool:
+        """Only `normal` data: free opencode models may train on what they receive."""
+        return sensitivity == "normal"
+
+    def run(self, prompt: str, cwd: Path, timeout: float) -> RunnerResult:
+        """Start opencode; same contract as AgyRunner.run."""
+        command = [self.binary, "run", "--auto", "--model", self.model, "--format", "json", prompt]
+        try:
+            done = self._runner(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=timeout, cwd=cwd)
+        except subprocess.TimeoutExpired:
+            return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
+        except FileNotFoundError as error:
+            raise RunnerError(f"opencode binary not found: {self.binary}") from error
+        return RunnerResult(_opencode_reply(done.stdout, done.returncode), exit_code=done.returncode)
+
+
+def _opencode_reply(stdout: str, exit_code: int) -> str:
+    """The last `text` event of opencode's JSON-lines output; the error event's message or a short note otherwise."""
+    texts, errors = [], []
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "text":
+            texts.append(str((event.get("part") or {}).get("text") or ""))
+        elif isinstance(event, dict) and event.get("type") == "error":
+            errors.append(str(event.get("error") or event.get("message") or event))
+    reply = (texts or errors or [f"FAIL opencode printed no usable output (exit {exit_code})"])[-1]
+    return reply.strip().replace("\n", " ")
+
+
 def _reply_of(stdout: str, exit_code: int) -> str:
     """agy's reply text from its JSON output; a short note when it printed something else."""
     try:
@@ -79,4 +123,9 @@ def make_runner(name: str, config: dict[str, Any], model_alias: str = "") -> Run
     """The runner called `name`; RunnerError for a runner that is not available yet."""
     if name == "agy":
         return AgyRunner(Provider("agy", config["providers"]["agy"]), model_alias or MODEL_ALIAS)
-    raise RunnerError(f"runner {name!r} is not available (supported: agy; opencode is planned)")
+    if name == "opencode":
+        settings = config["routing"].get("agent_run", {}).get("opencode") or {}
+        if not settings.get("binary"):
+            raise RunnerError("routing.yaml agent_run.opencode.binary is not set")
+        return OpenCodeRunner(settings["binary"], model_alias or settings["default_model"])
+    raise RunnerError(f"runner {name!r} is not available (supported: agy, opencode)")

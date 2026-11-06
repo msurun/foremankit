@@ -206,6 +206,11 @@ verify:
 agent_run:
   check_timeout_s: 600
   review_paths: ["gateway/**", "**/auth*", "**/policy*", "**/security*"]
+  # opencode 2.2.0 CLI, bundled with the desktop app (found 2026-11-06). Free `opencode/*-free` models train on prompts:
+  # only sensitivity=normal. `opencode models` lists the ids; pass rate per model is tracked by the outcome events.
+  opencode:
+    binary: ~/AppData/Local/Programs/ai.opencode.desktop/resources/opencode-cli.exe
+    default_model: opencode/deepseek-v4.1-flash-free
 
 # One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the
 # system prompt of these kinds (a project can override it with <project>/.foremankit/conventions.md). `foremankit check <files>`
