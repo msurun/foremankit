@@ -332,3 +332,22 @@ def test_agent_run_refuses_internal_data_for_opencode(tmp_path, repo):
     job = AgentRunJob("task", repo, ("a.py",), CHECK, sensitivity="internal")
     with pytest.raises(AgentRunError):
         agent_run(job, runner=OpenCodeRunner("oc.exe", "m"), log=CallLog(tmp_path / "calls.jsonl"))
+
+
+def test_dependent_run_starts_from_the_predecessor_branch(tmp_path, repo):
+    first = run_job(tmp_path, FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"}))
+    seen = {}
+
+    def see_predecessor(worktree: Path) -> None:
+        seen["file"] = (worktree / "tests" / "test_new.py").exists()
+
+    second = run_job(tmp_path, FakeRunner(writes={"tests/test_two.py": "def test_two(): assert True\n"},
+                                          on_run=see_predecessor),
+                     scope=("tests/test_two.py",), base=first["branch"])
+    assert seen["file"] is True and second["files"] == ["tests/test_two.py"] and second["passed"] is True
+
+
+def test_unknown_base_is_refused_without_leaving_a_worktree(tmp_path, repo):
+    with pytest.raises(AgentRunError):
+        run_job(tmp_path, FakeRunner(), base="agent-run/nope")
+    assert git(repo, "worktree", "list").count("\n") == 1

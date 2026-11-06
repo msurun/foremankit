@@ -38,6 +38,14 @@ def repo_head(project: Path) -> str:
     return git(["rev-parse", "HEAD"], project).strip()
 
 
+def resolve_commit(project: Path, ref: str) -> str:
+    """The commit a branch name or hash points to (for `--base`: a dependent run starts from its predecessor's branch)."""
+    try:
+        return git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], project).strip()
+    except AgentGitError as error:
+        raise AgentGitError(f"base {ref!r} is not a commit of {project}") from error
+
+
 def add_worktree(project: Path, path: Path, branch: str, base: str) -> None:
     """Create `path` as a worktree on the new branch `branch` at commit `base`."""
     with git_lock(project):

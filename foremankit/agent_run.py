@@ -48,6 +48,7 @@ class AgentRunJob:
     timeout: float = AGENT_TIMEOUT_S
     check_cwd: str = ""
     keep_worktree: bool = False
+    base: str = ""                 # branch or commit to start from; empty = HEAD of the project
 
 
 def agent_run(job: AgentRunJob, runner: Runner | None = None, log: CallLog | None = None) -> dict[str, Any]:
@@ -118,7 +119,8 @@ class _Run:
 
     def _start_worktree(self) -> str:
         try:
-            base = vcs.repo_head(self.job.project)
+            head = vcs.repo_head(self.job.project)
+            base = vcs.resolve_commit(self.job.project, self.job.base) if self.job.base else head
             self.worktree.parent.mkdir(parents=True, exist_ok=True)
             vcs.add_worktree(self.job.project, self.worktree, self.branch, base)
         except vcs.AgentGitError as error:

@@ -345,7 +345,7 @@ def cmd_agent_run(router: Router, args: argparse.Namespace) -> int:
         print(f"FAIL agent-run refused: cannot read the task file: {problem}")
         return 2
     job = AgentRunJob(task, Path(args.project).resolve(), tuple(args.scope), args.check, args.runner, args.model,
-                      args.sensitivity, args.timeout, args.check_cwd, args.keep_worktree)
+                      args.sensitivity, args.timeout, args.check_cwd, args.keep_worktree, args.base)
     try:
         report = agent_run(job)
     except AgentRunError as problem:
@@ -492,6 +492,7 @@ def _add_node_parsers(sub: Any) -> None:
     agent_run.add_argument("--model", default="", help="model alias of the runner (default flash_high)")
     agent_run.add_argument("--timeout", type=float, default=1800)
     agent_run.add_argument("--keep-worktree", action="store_true")
+    agent_run.add_argument("--base", default="", help="branch or commit to start from (a dependent task: the branch of its predecessor); default HEAD")
     agent_run.add_argument("--json", action="store_true")
     agent_run.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
     llm = sub.add_parser("llm", help="llm [status|test] | llm <node|self|others|all> [on|off|auto|status|test]")
