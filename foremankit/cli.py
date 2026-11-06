@@ -339,7 +339,11 @@ def cmd_agent_run(router: Router, args: argparse.Namespace) -> int:
     from foremankit.agent_run import AgentRunError, AgentRunJob, agent_run, render_text
     from foremankit.config import load_env
     load_env()
-    task = Path(args.task_file).read_text(encoding="utf-8")
+    try:
+        task = Path(args.task_file).read_text(encoding="utf-8")
+    except OSError as problem:
+        print(f"FAIL agent-run refused: cannot read the task file: {problem}")
+        return 2
     job = AgentRunJob(task, Path(args.project).resolve(), tuple(args.scope), args.check, args.runner, args.model,
                       args.sensitivity, args.timeout, args.check_cwd, args.keep_worktree)
     try:
