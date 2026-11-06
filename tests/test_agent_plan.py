@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from foremankit.agent_plan import PlanError, PlanTask, load_plan, parse_plan, plan_levels
+from foremankit.agent_plan import (
+    PlanError,
+    PlanTask,
+    load_plan,
+    parse_plan,
+    plan_levels,
+)
 
 
 def test_valid_minimal_task_applies_defaults() -> None:
