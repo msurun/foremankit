@@ -350,13 +350,13 @@ def test_delegated_tokens_are_priced_as_if_they_ran_on_claude(tmp_path: Path, mo
 
 def test_delegation_can_be_switched_off_as_a_whole_and_per_category(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FOREMANKIT_STATE_DIR", str(tmp_path))
-    assert panel.delegation_switches() == {"paid": True, "free": True, "local": True, "agy": False}
+    assert panel.delegation_switches() == {"deepseek": True, "gemini": True, "free": True, "local": True, "agy": False}
     assert "everything runs on Claude" in panel.set_delegation("all", False)
-    assert panel.delegation_switches() == {"paid": False, "free": False, "local": False, "agy": False}
+    assert panel.delegation_switches() == {"deepseek": False, "gemini": False, "free": False, "local": False, "agy": False}
     panel.set_delegation("local", True)
-    assert panel.delegation_switches() == {"paid": False, "free": False, "local": True, "agy": False}
+    assert panel.delegation_switches() == {"deepseek": False, "gemini": False, "free": False, "local": True, "agy": False}
     panel.set_delegation("all", True)
-    assert panel.delegation_switches() == {"paid": True, "free": True, "local": True, "agy": False}   # agy is opt-in
+    assert panel.delegation_switches() == {"deepseek": True, "gemini": True, "free": True, "local": True, "agy": False}   # agy is opt-in
     panel.set_delegation("agy", True)
     assert panel.delegation_switches()["agy"] is True
     panel.set_delegation("all", False)

@@ -22,19 +22,22 @@ class TestCategoryOf:
     """Tests for category_of function."""
 
     def test_a_llm_provider_is_classified_as_local(self):
-        provider = SimpleNamespace(is_agy=False, is_llm=True, free=False)
+        provider = SimpleNamespace(name="llm", is_agy=False, is_llm=True, free=False)
         assert category_of(provider) == "local"
 
     def test_a_free_non_llm_provider_is_classified_as_free(self):
-        provider = SimpleNamespace(is_agy=False, is_llm=False, free=True)
+        provider = SimpleNamespace(name="groq", is_agy=False, is_llm=False, free=True)
         assert category_of(provider) == "free"
 
-    def test_a_paid_non_llm_provider_is_classified_as_paid(self):
-        provider = SimpleNamespace(is_agy=False, is_llm=False, free=False)
-        assert category_of(provider) == "paid"
+    def test_a_paid_non_llm_provider_is_classified_by_its_name(self):
+        # paid delegation is split into the deepseek and gemini categories (there is no "paid" category any more)
+        deepseek = SimpleNamespace(name="deepseek", is_agy=False, is_llm=False, free=False)
+        gemini = SimpleNamespace(name="gemini", is_agy=False, is_llm=False, free=False)
+        assert category_of(deepseek) == "deepseek"
+        assert category_of(gemini) == "gemini"
 
     def test_the_antigravity_provider_is_its_own_category_even_though_it_is_free(self):
-        provider = SimpleNamespace(is_agy=True, is_llm=False, free=True)
+        provider = SimpleNamespace(name="agy", is_agy=True, is_llm=False, free=True)
         assert category_of(provider) == "agy"
 
 
@@ -43,23 +46,23 @@ class TestIsSwitchedOff:
 
     def test_a_missing_key_means_on(self):
         state = {"toggles": {}}
-        assert not is_switched_off(state, "paid")
+        assert not is_switched_off(state, "deepseek")
 
     def test_agy_is_opt_in_so_a_missing_key_means_off(self):
         assert is_switched_off({"toggles": {}}, "agy")
         assert not is_switched_off({"toggles": {"delegation:agy": "on"}}, "agy")
 
     def test_an_explicit_on_means_not_off(self):
-        state = {"toggles": {"delegation:paid": "on"}}
-        assert not is_switched_off(state, "paid")
+        state = {"toggles": {"delegation:deepseek": "on"}}
+        assert not is_switched_off(state, "deepseek")
 
     def test_an_explicit_off_means_off(self):
-        state = {"toggles": {"delegation:paid": "off"}}
-        assert is_switched_off(state, "paid")
+        state = {"toggles": {"delegation:deepseek": "off"}}
+        assert is_switched_off(state, "deepseek")
 
     def test_only_the_specific_category_is_checked(self):
-        state = {"toggles": {"delegation:paid": "off", "delegation:free": "on"}}
-        assert is_switched_off(state, "paid")
+        state = {"toggles": {"delegation:deepseek": "off", "delegation:free": "on"}}
+        assert is_switched_off(state, "deepseek")
         assert not is_switched_off(state, "free")
 
 
@@ -68,8 +71,8 @@ class TestSetSwitch:
 
     def test_setting_a_single_category_returns_it(self, tmp_path: Path):
         store = StateStore(tmp_path / "state.json")
-        changed = set_switch(store, "paid", "off")
-        assert changed == ["paid"]
+        changed = set_switch(store, "deepseek", "off")
+        assert changed == ["deepseek"]
 
     def test_setting_all_categories_returns_all(self, tmp_path: Path):
         store = StateStore(tmp_path / "state.json")
@@ -84,22 +87,22 @@ class TestSetSwitch:
     def test_setting_invalid_value_raises_value_error(self, tmp_path: Path):
         store = StateStore(tmp_path / "state.json")
         with pytest.raises(ValueError, match="Invalid value"):
-            set_switch(store, "paid", "maybe")
+            set_switch(store, "deepseek", "maybe")
 
     def test_persisted_state_reflects_the_change(self, tmp_path: Path):
         store = StateStore(tmp_path / "state.json")
-        set_switch(store, "paid", "off")
+        set_switch(store, "deepseek", "off")
         state = store.load()
-        assert is_switched_off(state, "paid")
+        assert is_switched_off(state, "deepseek")
         assert not is_switched_off(state, "free")
         assert not is_switched_off(state, "local")
 
     def test_setting_on_cleans_off_state(self, tmp_path: Path):
         store = StateStore(tmp_path / "state.json")
-        set_switch(store, "paid", "off")
-        set_switch(store, "paid", "on")
+        set_switch(store, "deepseek", "off")
+        set_switch(store, "deepseek", "on")
         state = store.load()
-        assert not is_switched_off(state, "paid")
+        assert not is_switched_off(state, "deepseek")
 
 
 class TestDescribe:
@@ -109,17 +112,19 @@ class TestDescribe:
         state = {"toggles": {}}
         description = describe(state)
         lines = description.split("\n")
-        assert len(lines) == 4
-        assert "paid: on" in lines
+        assert len(lines) == 5
+        assert "deepseek: on" in lines
+        assert "gemini: on" in lines
         assert "free: on" in lines
         assert "local: on" in lines
         assert "agy: off" in lines
 
     def test_describe_reflects_off_state(self):
-        state = {"toggles": {"delegation:paid": "off"}}
+        state = {"toggles": {"delegation:deepseek": "off"}}
         description = describe(state)
         lines = description.split("\n")
-        assert "paid: off" in lines
+        assert "deepseek: off" in lines
+        assert "gemini: on" in lines
         assert "free: on" in lines
         assert "local: on" in lines
 
@@ -128,7 +133,7 @@ class TestSwitchedOffMessage:
     """When the user turns every category off, the caller must be told clearly to do the work itself."""
 
     def test_all_switched_off_needs_every_category_off(self):
-        assert not all_switched_off({"toggles": {"delegation:paid": "off", "delegation:free": "off"}})
+        assert not all_switched_off({"toggles": {"delegation:deepseek": "off", "delegation:gemini": "off"}})
         assert all_switched_off({"toggles": {f"delegation:{c}": "off" for c in CATEGORIES}})
 
     def test_the_message_says_to_do_the_task_yourself_and_not_to_retry(self):
