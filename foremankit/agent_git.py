@@ -8,6 +8,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from .agent_lock import git_lock
 from .agent_scope import Change
 
 IDENTITY = ["-c", "user.name=foremankit-agent-run", "-c", "user.email=agent-run@foremankit.invalid"]
@@ -39,18 +40,21 @@ def repo_head(project: Path) -> str:
 
 def add_worktree(project: Path, path: Path, branch: str, base: str) -> None:
     """Create `path` as a worktree on the new branch `branch` at commit `base`."""
-    git(["worktree", "add", "-q", "-b", branch, str(path), base], project)
+    with git_lock(project):
+        git(["worktree", "add", "-q", "-b", branch, str(path), base], project)
 
 
 def remove_worktree(project: Path, path: Path) -> None:
     """Delete the worktree folder (the branch and its commit stay) and forget it."""
-    git(["worktree", "remove", "--force", str(path)], project)
-    git(["worktree", "prune"], project)
+    with git_lock(project):
+        git(["worktree", "remove", "--force", str(path)], project)
+        git(["worktree", "prune"], project)
 
 
 def delete_branch(project: Path, branch: str) -> None:
     """Delete a branch that holds nothing worth keeping."""
-    git(["branch", "-D", branch], project)
+    with git_lock(project):
+        git(["branch", "-D", branch], project)
 
 
 def stage_all(worktree: Path) -> None:
