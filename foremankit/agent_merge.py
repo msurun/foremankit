@@ -132,18 +132,32 @@ def _attempt_merge(project: Path, branch: str, message: str) -> MergeExecution:
             git(["merge", "--no-ff", "-m", message, branch], project)
         commit_hash = git(["rev-parse", "HEAD"], project).strip()
         return MergeExecution(is_conflict=False, commit_hash=commit_hash, conflicts=[])
+    except AgentGitError as error:
+        return _abort_merge(project, str(error))
+
+
+def _merge_in_progress(project: Path) -> bool:
+    """Whether MERGE_HEAD exists (git refused before it started a merge: nothing to abort)."""
+    try:
+        git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], project)
     except AgentGitError:
-        # In plain words:
-        # The 3-way merge failed with conflicts. We query the index for unmerged files
-        # (--diff-filter=U) while the merge state is still active, then abort cleanly
-        # so the working tree reverts to its exact pre-merge state.
-        raw_conflicts = git(["diff", "--name-only", "--diff-filter=U"], project).strip()
-        conflicts = [line.strip() for line in raw_conflicts.splitlines() if line.strip()]
-        try:
+        return False
+    return True
+
+
+def _abort_merge(project: Path, merge_error: str) -> MergeExecution:
+    """Collect the unmerged files, abort the merge and report; no conflicts means git refused for another reason."""
+    raw_conflicts = git(["diff", "--name-only", "--diff-filter=U"], project).strip()
+    conflicts = [line.strip() for line in raw_conflicts.splitlines() if line.strip()]
+    try:
+        if _merge_in_progress(project):
             git(["merge", "--abort"], project)
-        except AgentGitError:
-            pass
-        return MergeExecution(is_conflict=True, commit_hash="", conflicts=conflicts)
+    except AgentGitError as abort_error:
+        raise MergeRefused(f"merge failed ({merge_error}) and --abort failed: {abort_error}; "
+                           "the repository may be mid-merge, fix it by hand") from abort_error
+    if not conflicts:
+        raise MergeRefused(f"git refused the merge without conflicts: {merge_error}")
+    return MergeExecution(is_conflict=True, commit_hash="", conflicts=conflicts)
 
 
 def _conflict_dict(branch: str, conflicts: list[str]) -> dict:

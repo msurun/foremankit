@@ -321,3 +321,16 @@ def test_merge_operation_never_requires_or_invokes_push(repo: Path) -> None:
     result = merge_branch(repo, report, MergeOptions())
     assert result["status"] == "merged"
     assert git(repo, "remote").strip() == ""
+
+
+def test_git_refusal_without_conflicts_is_refused_not_reported_as_conflict(repo: Path) -> None:
+    """An untracked file in the way makes git refuse the merge: that is MergeRefused, not an empty 'conflict'."""
+    git(repo, "checkout", "-q", "-b", "agent-run/in-the-way")
+    commit_all(repo, {"new.py": "branch\n"}, "branch adds new.py")
+    git(repo, "checkout", "-q", "main")
+    (repo / "new.py").write_text("local untracked\n", encoding="utf-8")
+    report = {"passed": True, "branch": "agent-run/in-the-way", "files": []}
+    with pytest.raises(MergeRefused, match="without conflicts"):
+        merge_branch(repo, report, MergeOptions())
+    assert (repo / "new.py").read_text(encoding="utf-8") == "local untracked\n"
+    assert git(repo, "branch", "--list", "agent-run/in-the-way").strip()
