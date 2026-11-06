@@ -49,3 +49,12 @@ Neither costs per call, so the limits are: agy is the only runner allowed `inter
 - Batch plan: each task is pinned (`runner: agy` mandatory for `internal`; the plan validator rejects `internal` + opencode) or `runner: auto`.
 - Metrics: log `quota_exhausted` events and agy runs per day to estimate the real quota after about a week; if opencode's merged-without-fix rate falls below ~40%, move medium jobs to agy; log the model id on every run (done), keep `default_model` configurable (free models can be withdrawn).
 - Extra risk: a task file labelled `normal` that contains plant tags; the lead checks every task file before an opencode run.
+
+## 6. Lessons from the Crosscut session (2026-11-06, using agy as a worker)
+
+- Measured: every Antigravity slice had real defects found by independent review; frontends written against a guessed contract; safety logic missed core points. Its adversarial TEST files were the best output (found two real bugs in Claude-written code). Net token saving probably 20-40 percent, uncertain (review and fix agents cost). Pays off: UI slices with a real contract, test files with edge-case lists, docs and deployment files, mechanical edits. Does not: gateway/auth/safety logic, anything where the hard part is a decision.
+- Task files: point at the real source files for every contract and say "read them first", never restate a contract from memory; list edge cases; forbid commits and out-of-scope edits (agy committed to main with the owner's identity when run freely: keep the worktree + branch design).
+- `review_paths` now also covers tuning and supervisor; the report says a second-model review is mandatory before merge.
+- Review prompt wording: gemini refuses "security/vulnerability review" but accepts "code review of logic errors and missing edge cases". Keep that wording in review templates. `delegate` review with the diff as context_files is a cheap second opinion (about 0.05 USD, 3 of 10 findings real): leads, not verdicts.
+- Frontend checks need `node_modules` (not in the worktree; a junction was rejected). Options: run the check in the main checkout against the patch applied there, a per-run copy of `node_modules`, or allow `npm ci` in the worktree. Decide before the Crosscut policy-editor task.
+- CI gotcha: editable installs and tests depending on file permissions, paths or symlinks passed on Windows and failed on Ubuntu CI: run the checks under WSL/Linux before calling a run green when tests touch those.
