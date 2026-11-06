@@ -105,9 +105,16 @@ class _Run:
         except (VerifyError, vcs.AgentGitError, OSError) as error:
             raise AgentRunError(f"{error} (worktree kept: {self.worktree}, branch {self.branch})") from error
         if report["committed"] and not self.job.keep_worktree:
+            self._remove_worktree(report)
+        return report
+
+    def _remove_worktree(self, report: dict[str, Any]) -> None:
+        """The patch is safe on the branch; a worktree that cannot be removed is reported, not fatal."""
+        try:
             vcs.remove_worktree(self.job.project, self.worktree)
             report["worktree"] = None
-        return report
+        except vcs.AgentGitError as error:
+            report["agent_reply"] = f"{report['agent_reply']} [worktree not removed: {error}]"[:REPLY_CHARS * 2]
 
     def _start_worktree(self) -> str:
         try:

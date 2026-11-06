@@ -4,11 +4,12 @@ Ensures glob pattern handling, scope splitting, and review reason extraction wor
 """
 
 import pytest
+
 from foremankit.agent_scope import (
     glob_regex,
     matches_any,
-    split_by_scope,
     review_reasons,
+    split_by_scope,
 )
 
 
