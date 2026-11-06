@@ -205,6 +205,21 @@ foremankit delegate "Napisz testy dla verify.py" --kind bulk_code --files forema
 - The file is changed **only** when the command passes. Otherwise the original comes back (a new file is deleted). The result shows `verify: PASSED ...` or `verify: FAILED ... was restored`.
 - Safety: the command must start with a prefix from `routing.yaml → verify.allowed_commands` (`python -m pytest`, `.venv/Scripts/python -m pytest`, `.venv/bin/python -m pytest`, `pytest`, `python -m ruff check`, `ruff check`). `verify_target` is a plain relative file inside the project (never `.env`, `.git`, `.ssh`). A bad inference is rejected before you pay for the model, and a command that fails to start ends the loop immediately.
 - Paths are resolved from the process working directory: the MCP server works in the Claude session folder, and the CLI in the folder you launch it from.
+### agent-run (multi-file agent tasks)
+
+```
+foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope GLOB] --check "<allowed check command>" [--runner agy] [--model alias] [--sensitivity normal|internal] [--timeout 1800] [--check-cwd DIR] [--keep-worktree] [--json]
+```
+
+- The agent works in its own git worktree on branch `agent-run/<id>`.
+- A scope guard reverts and reports any change outside the `--scope` globs.
+- The check is re-run by foremankit with `PYTHONPATH` pointing at the worktree, because editable installs otherwise resolve the main checkout.
+- The patch is committed on the branch and the worktree is removed (kept with `--keep-worktree`).
+- A changed path matching `agent_run.review_paths` in `config/routing.yaml` prints REVIEW REQUIRED.
+- Private data is refused.
+- Exit codes: 0 PASS, 1 FAIL, 2 refused.
+- Merge after review: `git merge --no-ff agent-run/<id>`.
+
 ### One coding standard (clean code)
 
 All code written by foremankit and for it must follow the same rules, regardless of tool and session: clean code per R. Martin, readable for a beginner programmer (names that reveal intent, small functions, no duplication and no magic values, specific exceptions, logic separated from I/O, a docstring for every module, class and public function, comments explaining **why**). The full text is `config/conventions.md`.

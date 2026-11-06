@@ -201,6 +201,12 @@ verify:
     - ./ForemanKit/.venv/Scripts/python -m pytest
     - ./ForemanKit/.venv/Scripts/python -m ruff check
 
+# `foremankit agent-run` (multi-file agentic tasks in a git worktree): paths that make the report say REVIEW REQUIRED
+# (an independent review before merge is mandatory for security code), and the timeout of our own check run.
+agent_run:
+  check_timeout_s: 600
+  review_paths: ["gateway/**", "**/auth*", "**/policy*", "**/security*"]
+
 # One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the
 # system prompt of these kinds (a project can override it with <project>/.foremankit/conventions.md). `foremankit check <files>`
 # verifies the measurable part mechanically; put it in `verify` to make a delegated file pass it before it is accepted.

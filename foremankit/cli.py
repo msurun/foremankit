@@ -332,6 +332,25 @@ def cmd_supervise(router: Router, args: argparse.Namespace) -> int:
     return 0 if result["passed"] else 1
 
 
+def cmd_agent_run(router: Router, args: argparse.Namespace) -> int:
+    """Multi-file task for a headless agent in its own worktree; print the short report (or JSON), exit 0 on PASS."""
+    import json
+
+    from foremankit.agent_run import AgentRunError, AgentRunJob, agent_run, render_text
+    from foremankit.config import load_env
+    load_env()
+    task = Path(args.task_file).read_text(encoding="utf-8")
+    job = AgentRunJob(task, Path(args.project).resolve(), tuple(args.scope), args.check, args.runner, args.model,
+                      args.sensitivity, args.timeout, args.check_cwd, args.keep_worktree)
+    try:
+        report = agent_run(job)
+    except AgentRunError as problem:
+        print(f"FAIL agent-run refused: {problem}")
+        return 2
+    print(json.dumps(report, indent=2) if args.json else render_text(report))
+    return 0 if report["passed"] else 1
+
+
 def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
     """Show or switch who orchestrates Claude Code: claude, local, or an external upstream (deepseek, gemini)."""
     from foremankit import upstream
@@ -420,7 +439,7 @@ def _read_jobs(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
@@ -459,6 +478,18 @@ def _add_node_parsers(sub: Any) -> None:
     supervise.add_argument("--target", required=True)
     supervise.add_argument("--check", required=True)
     supervise.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
+    agent_run = sub.add_parser("agent-run", help="multi-file task for a headless agent (agy) in its own git worktree, scope-guarded and re-checked")
+    agent_run.add_argument("--task-file", required=True)
+    agent_run.add_argument("--project", required=True, help="root of the git repository the agent works on")
+    agent_run.add_argument("--scope", action="append", required=True, help="glob of files the agent may create or change (repeatable)")
+    agent_run.add_argument("--check", required=True, help="check command (routing.yaml verify.allowed_commands)")
+    agent_run.add_argument("--check-cwd", default="", help="folder inside the project the check runs in")
+    agent_run.add_argument("--runner", default="agy", choices=["agy"])
+    agent_run.add_argument("--model", default="", help="model alias of the runner (default flash_high)")
+    agent_run.add_argument("--timeout", type=float, default=1800)
+    agent_run.add_argument("--keep-worktree", action="store_true")
+    agent_run.add_argument("--json", action="store_true")
+    agent_run.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
     llm = sub.add_parser("llm", help="llm [status|test] | llm <node|self|others|all> [on|off|auto|status|test]")
     llm.add_argument("target", nargs="?", help="status | test | self | others | all | a node name from nodes.yaml")
     llm.add_argument("action", nargs="?", choices=["on", "off", "auto", "status", "test"])

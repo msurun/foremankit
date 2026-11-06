@@ -177,13 +177,14 @@ def resolve_executable(name: str, project: Path) -> str:
     return str(path)
 
 
-def run_command(tokens: list[str], project: Path, timeout_s: float) -> tuple[bool, str]:
+def run_command(tokens: list[str], project: Path, timeout_s: float, env: dict[str, str] | None = None) -> tuple[bool, str]:
     """Run the check without a shell. Returns (passed, tail of the combined output).
+    `env` replaces the inherited environment (agent-run adds PYTHONPATH there).
     Raises VerifyError when the program cannot be started at all: that is no fault of the model's answer."""
     command = [resolve_executable(tokens[0], project), *tokens[1:]]
     try:
         done = subprocess.run(command, cwd=project, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout_s, env=os.environ.copy(), check=False)
+                              errors="replace", timeout=timeout_s, env=env or os.environ.copy(), check=False)
     except subprocess.TimeoutExpired:
         return False, f"the check did not finish within {timeout_s:.0f} s"
     except OSError as exc:
