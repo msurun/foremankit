@@ -233,7 +233,7 @@ def _handle_run_report(
 ) -> dict[str, Any]:
     """Process normal completion report from run_one."""
     reply = str(report.get("agent_reply") or "")
-    if agent_quota.is_quota_error(reply):
+    if not report.get("passed") and agent_quota.is_quota_error(reply):
         _record_exhaustion(plan.runner, state)
         return _run_entry(plan.task.id, plan.runner, "quota_exhausted", report)
     passed = bool(report.get("passed"))

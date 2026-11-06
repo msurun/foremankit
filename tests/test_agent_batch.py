@@ -288,3 +288,18 @@ def test_plan_error_propagates_when_plan_is_invalid(tmp_path: Path) -> None:
     t2 = PlanTask(id="t2", task_file=f2, scope=("b.py",), check="pytest", depends_on=("t1",))
     with pytest.raises(PlanError):
         run_batch([t1, t2], context)
+
+
+def test_passed_run_mentioning_quota_is_not_a_quota_error(tmp_path: Path) -> None:
+    """A passed run about quotas must neither be marked exhausted nor pause its runner."""
+    f1 = _create_task_file(tmp_path, "t1.md")
+
+    def passed_run_one(job: AgentRunJob) -> dict[str, Any]:
+        return {"passed": True, "branch": "b", "files": ["a.py"], "agent_reply": "added the quota module, 429 handled"}
+
+    context = _make_context(tmp_path, passed_run_one)
+    task = PlanTask(id="t1", task_file=f1, scope=("a.py",), check="pytest", runner="agy")
+    report = run_batch([task], context)
+    assert report["tasks"][0]["status"] == "passed"
+    assert "paused_until" not in json.loads(context.state_path.read_text()).get("agy", {}) or \
+        json.loads(context.state_path.read_text())["agy"]["paused_until"] == 0.0
