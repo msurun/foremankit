@@ -355,6 +355,110 @@ def cmd_agent_run(router: Router, args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def cmd_agent_run_batch(router: Router, args: argparse.Namespace) -> int:
+    """Run a batch plan of agent-run tasks level by level; print one line per task, exit 0 only when all passed."""
+    from foremankit.agent_plan import PlanError
+    from foremankit.config import load_env
+    load_env()
+    try:
+        report = _run_plan(Path(args.plan), Path(args.project).resolve())
+    except (PlanError, ValueError) as problem:
+        print(f"FAIL agent-run-batch refused: {problem}")
+        return 2
+    _print_batch(report)
+    if args.report_out:
+        Path(args.report_out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return 0 if all(entry["status"] == "passed" for entry in report["tasks"]) else 1
+
+
+def _run_plan(plan: Path, project: Path) -> dict[str, Any]:
+    """Load the plan and run it; PlanError propagates to the caller."""
+    from foremankit.agent_batch import run_batch
+    from foremankit.agent_plan import load_plan
+    return run_batch(load_plan(plan), _batch_context(plan, project))
+
+
+def _batch_context(plan: Path, project: Path) -> Any:
+    """The batch context: the real agent_run, the routing settings, the quota state file, the tracked files."""
+    import tempfile
+
+    from foremankit.agent_batch import BatchContext
+    from foremankit.agent_run import agent_run
+    from foremankit.config import load_config
+    settings = load_config()["routing"].get("agent_run", {})
+    state_dir = Path(tempfile.gettempdir()) / "foremankit-agent-run"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return BatchContext(project=project, plan_dir=plan.resolve().parent, run_one=agent_run, settings=settings,
+                        state_path=state_dir / "quota-state.json", review_globs=settings.get("review_paths", []),
+                        tracked=_tracked_files(project))
+
+
+def _tracked_files(project: Path) -> list[str]:
+    """The git-tracked paths of the project; empty when git is missing or the folder is not a repository."""
+    try:
+        result = subprocess.run(["git", "ls-files"], cwd=project, capture_output=True, text=True, check=False,
+                                timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return result.stdout.splitlines() if result.returncode == 0 else []
+
+
+def _print_batch(report: dict[str, Any]) -> None:
+    """One line per task (status, id, runner, branch), then the batch summary."""
+    for entry in report["tasks"]:
+        print(f"{entry['status']} {entry['id']} {entry.get('runner', '-')} {entry.get('branch', '-')}")
+    print(report["summary"])
+
+
+def cmd_agent_merge(router: Router, args: argparse.Namespace) -> int:
+    """Merge or reject one agent-run branch named in a batch report and log the verdict; exit 0 only for merged/rejected."""
+    from foremankit.agent_merge import MergeRefused
+    from foremankit.verify import VerifyError
+    try:
+        entry = _find_report_entry(Path(args.report), args.id)
+        if entry is None:
+            print(f"FAIL agent-merge refused: no task '{args.id}' in the report")
+            return 2
+        result = _apply_merge(Path(args.project).resolve(), entry, args)
+    except (MergeRefused, VerifyError, ValueError, OSError) as problem:
+        print(f"FAIL agent-merge refused: {problem}")
+        return 2
+    print(f"{result['status']} {result.get('branch', '')} {result.get('detail', '')}")
+    return 0 if result["status"] in ("merged", "rejected") else 1
+
+
+def _find_report_entry(report_path: Path, task_id: str) -> dict[str, Any] | None:
+    """The report entry with this task id, or None."""
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    return next((entry for entry in report.get("tasks", []) if entry.get("id") == task_id), None)
+
+
+def _apply_merge(project: Path, entry: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Reject the branch, or merge it with the optional post-merge check, and log the lead's verdict."""
+    from foremankit.agent_merge import MergeOptions, merge_branch, reject_branch
+    from foremankit.agent_review_log import log_review
+    from foremankit.state import CallLog
+    if args.reject:
+        result = reject_branch(project, entry)
+        log_review(CallLog(), entry["run_id"], entry["runner"], entry["model"], "rejected", args.blockers)
+        return result
+    result = merge_branch(project, entry, MergeOptions(reviewed=args.reviewed, recheck=_recheck(project, args.check)))
+    if result["status"] == "merged":
+        log_review(CallLog(), entry["run_id"], entry["runner"], entry["model"], args.verdict, args.blockers)
+    return result
+
+
+def _recheck(project: Path, check: str) -> Any:
+    """The post-merge check as a callable returning (passed, output tail); None when no --check was given."""
+    if not check:
+        return None
+    from foremankit.config import load_config
+    from foremankit.verify import run_command, split_command
+    allowed = load_config()["routing"]["verify"]["allowed_commands"]
+    tokens = split_command(check, allowed, project)
+    return lambda: run_command(tokens, project, 600)
+
+
 def cmd_orchestrator(router: Router, args: argparse.Namespace) -> int:
     """Show or switch who orchestrates Claude Code: claude, local, or an external upstream (deepseek, gemini)."""
     from foremankit import upstream
@@ -443,7 +547,7 @@ def _read_jobs(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "agent-run-batch": cmd_agent_run_batch, "agent-merge": cmd_agent_merge, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
@@ -554,6 +658,22 @@ def _add_delegate_parser(sub: Any) -> None:
                           help="folder inside the project the check runs in; --verify and --verify-target are relative to it")
 
 
+def _add_agent_batch_parsers(sub: Any) -> None:
+    batch = sub.add_parser("agent-run-batch", help="run a plan of agent-run tasks in dependency levels; exit 0 when all passed")
+    batch.add_argument("--plan", required=True, help="YAML plan: tasks with id, task_file, check, scope, depends_on")
+    batch.add_argument("--project", required=True, help="root of the git repository the agents work on")
+    batch.add_argument("--report-out", default="", help="write the full batch report as JSON here")
+    merge = sub.add_parser("agent-merge", help="merge or reject one agent-run branch from a batch report, log the verdict")
+    merge.add_argument("--project", required=True, help="root of the git repository")
+    merge.add_argument("--report", required=True, help="the JSON written by agent-run-batch --report-out")
+    merge.add_argument("--id", required=True, help="the task id in the report")
+    merge.add_argument("--reviewed", action="store_true", help="the lead has reviewed the branch")
+    merge.add_argument("--reject", action="store_true", help="delete the branch without merging")
+    merge.add_argument("--verdict", default="merged", choices=["merged", "merged_after_fix"])
+    merge.add_argument("--blockers", type=int, default=0)
+    merge.add_argument("--check", default="", help="post-merge check command (routing.yaml verify.allowed_commands)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argument parser of the `foremankit` command with all its subcommands."""
     parser = argparse.ArgumentParser(prog="foremankit", description="Delegate work to cheaper/local models.")
@@ -563,6 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_code_quality_parsers(sub)
     _add_kaggle_parser(sub)
     _add_delegate_parser(sub)
+    _add_agent_batch_parsers(sub)
     return parser
 
 
