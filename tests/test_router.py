@@ -98,14 +98,14 @@ def test_cost_uses_cache_hit_tokens(monkeypatch, make_router, mock):
     assert router.status()["budget"]["day_usd"] == pytest.approx(expected)
 
 
-def test_gemini_pro_replaces_blocked_deepseek_and_counts_toward_budget(monkeypatch, make_router, mock, cfg):
+def test_gemini_pro_is_first_for_hard_code_and_counts_toward_budget(monkeypatch, make_router, mock, cfg):
     monkeypatch.setenv("GEMINI_API_KEY", "g")
-    cfg["providers"]["deepseek"]["enabled"] = False  # as on the work laptop
+    cfg["providers"]["deepseek"]["enabled"] = False  # as on the work laptop (not reached: gemini is first in the chain)
     mock.on(GEMINI, "/chat/completions", chat_json(prompt=1_000_000, completion=100_000))
     router = make_router(cfg)
     res = router.delegate("hard problem", kind="hard_code")
     assert res["model"] == "gemini-3.1-pro-preview"
-    assert any(s.startswith("deepseek:pro(disabled") for s in res["skipped"])
+    assert not any("deepseek" in c for c in mock.calls)  # paid gemini is tried before deepseek
     assert res["cost_usd"] == pytest.approx(2.00 + 0.1 * 12.00)
     assert router.status()["budget"]["day_usd"] == pytest.approx(res["cost_usd"])
 
@@ -191,6 +191,8 @@ def test_deepseek_auto_probe_prefers_deepseek_over_paid_gemini(monkeypatch, make
     monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     cfg["providers"]["deepseek"]["enabled"] = "auto"
+    # the deployed chains list gemini first; pin DeepSeek first here to test the probe preference itself
+    cfg["routing"]["chains"]["hard_code"] = ["deepseek:pro", "gemini:pro"]
     mock.on(DEEPSEEK, "/models", {"data": []})
     mock.on(DEEPSEEK, "/chat/completions", chat_json())
     mock.on(GEMINI, "/chat/completions", chat_json())
@@ -202,6 +204,8 @@ def test_deepseek_auto_probe_blocked_falls_back_and_reprobes_after_ttl(monkeypat
     monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     cfg["providers"]["deepseek"]["enabled"] = "auto"
+    # the deployed chains list gemini first; pin DeepSeek first here to test the probe preference itself
+    cfg["routing"]["chains"]["hard_code"] = ["deepseek:pro", "gemini:pro"]
     now = [1_000_000.0]
     # first probe: blocked (as on the work network); later: reachable (e.g. at home)
     mock.on(DEEPSEEK, "/models", httpx.ConnectTimeout("blocked"), httpx.ConnectTimeout("blocked"), {"data": []})
@@ -222,6 +226,8 @@ def test_probe_retries_once_and_failures_are_cached_only_briefly(monkeypatch, ma
     monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     cfg["providers"]["deepseek"]["enabled"] = "auto"
+    # the deployed chains list gemini first; pin DeepSeek first here to test the probe itself
+    cfg["routing"]["chains"]["hard_code"] = ["deepseek:pro", "gemini:pro"]
     now = [1_000_000.0]
     # one dropped connection, then fine: the retry saves it (no failure cached at all)
     mock.on(DEEPSEEK, "/models", httpx.ConnectError("blip"), {"data": []})
@@ -429,6 +435,8 @@ def test_internal_falls_back_to_llm_then_fails_closed(monkeypatch, make_router, 
 def test_deepseek_internal_only_with_per_machine_opt_in(monkeypatch, make_router, mock, cfg):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
     cfg["providers"]["deepseek"]["trains_on_data"] = False  # hypothetical: the real config says True
+    # the deployed chains list gemini first; pin DeepSeek first here to test the privacy filter itself
+    cfg["routing"]["chains"]["hard_code"] = ["deepseek:pro", "gemini:pro"]
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     mock.on(DEEPSEEK, "/chat/completions", chat_json())
     mock.on(GEMINI, "/chat/completions", chat_json())
@@ -457,14 +465,17 @@ def test_real_config_keeps_deepseek_out_of_internal_even_with_opt_in(monkeypatch
     assert res["provider"] == "gemini" and not any("deepseek" in c for c in mock.calls)
 
 
-def test_deepseek_internal_with_explicit_training_acceptance(monkeypatch, make_router, mock):
+def test_deepseek_internal_with_explicit_training_acceptance(monkeypatch, make_router, mock, cfg):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
     monkeypatch.setenv("GEMINI_API_KEY", "g")
+    # the deployed chains list gemini first; pin DeepSeek first here to test the training acceptance itself
+    cfg["routing"]["chains"]["data_script"] = ["deepseek:flash", "gemini:flash"]
+    cfg["routing"]["chains"]["hard_code"] = ["deepseek:pro", "gemini:pro"]
     mock.on(DEEPSEEK, "/chat/completions", chat_json())
     mock.on(GEMINI, "/chat/completions", chat_json())
     assert make_router().status()["providers"][0]["internal_ok"] is False  # default: deepseek is not internal-ok
     monkeypatch.setenv("FOREMANKIT_ALLOW_INTERNAL_TRAINING", "DeepSeek")
-    router = make_router()
+    router = make_router(cfg)
     st = {p["name"]: p for p in router.status()["providers"]}
     assert st["deepseek"]["internal_ok"] and st["deepseek"]["trains_on_data"]  # the config still tells the truth
     res = router.delegate("t", kind="data_script", sensitivity="internal")  # deepseek:flash is first in this chain
@@ -767,7 +778,8 @@ def test_switching_paid_delegation_off_skips_paid_sources(monkeypatch, make_rout
     mock.on(LOCAL, "/api/tags", tags("llama3.2:3b"))
     mock.on(LOCAL, "/v1/chat/completions", chat_json("local answer"))
     router = make_router()
-    set_switch(router.store, "paid", "off")
+    set_switch(router.store, "deepseek", "off")
+    set_switch(router.store, "gemini", "off")   # paid delegation is split into these two categories
     res = router.delegate("x", kind="quick", sensitivity="normal")
     assert res["provider"] == "llm"
     assert "generativelanguage.googleapis.com" not in mock.hosts()
@@ -782,7 +794,8 @@ def test_delegate_with_everything_switched_off_tells_the_caller_to_do_the_work_i
     with pytest.raises(RouterError, match="DELEGATION IS SWITCHED OFF"):
         router.delegate("anything", kind="quick")
     assert not any(call.startswith(DEEPSEEK) for call in mock.calls)
-    delegation.set_switch(router.store, "paid", "on")
+    delegation.set_switch(router.store, "deepseek", "on")
+    delegation.set_switch(router.store, "gemini", "on")   # paid delegation is split into these two categories
     assert router.delegate("anything", kind="bulk_code")["provider"] == "deepseek"
 
 
