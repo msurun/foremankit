@@ -8,10 +8,10 @@ from collections.abc import Mapping, Sequence
 from foremankit.agent_scope import matches_any
 
 
-def scopes_overlap(a: Sequence[str], b: Sequence[str], tracked: Sequence[str] = ()) -> list[str]:
+def scopes_overlap(scope_a: Sequence[str], scope_b: Sequence[str], tracked: Sequence[str] = ()) -> list[str]:
     """Reasons why two scope lists can touch the same file (empty when they are disjoint)."""
-    left = [_normalize(pattern) for pattern in a]
-    right = [_normalize(pattern) for pattern in b]
+    left = [_normalize(pattern) for pattern in scope_a]
+    right = [_normalize(pattern) for pattern in scope_b]
     reasons: list[str] = []
     for pattern_a in left:
         for pattern_b in right:
