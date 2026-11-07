@@ -10,6 +10,8 @@ from typing import Any
 from .state import CallLog
 
 VERDICTS = ("merged", "merged_after_fix", "rejected")
+MODEL_REVIEW_EVENT = "agent_run_model_review"
+MODEL_REVIEW_SEVERITIES = ("high", "medium", "low")
 
 
 # codecheck: allow too-many-parameters (the log protocol fixes them)
@@ -59,3 +61,23 @@ def _format_line(key: str, entry: dict) -> str:
     """The human-readable line for one review entry."""
     return (f"{key}: {entry['reviews']} reviews, clean {entry['clean_rate']:.0%}, "
             f"fixed {entry['merged_after_fix']}, rejected {entry['rejected']}, blockers {entry['blockers']}")
+
+
+
+def summarize_model_reviews(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return every model review attempt, newest first, without findings or raw output."""
+    attempts = [(position, row) for position, row in enumerate(rows)
+                if row.get("event") == MODEL_REVIEW_EVENT]
+    # Timestamps are seconds since the epoch; later log positions break timestamp ties.
+    attempts.sort(key=lambda item: (float(item[1].get("ts") or 0.0), item[0]), reverse=True)
+    return [_model_review_summary(row) for _, row in attempts]
+
+
+def _model_review_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep an attempt's identity and status alongside complete severity counters."""
+    counts = row.get("counts_by_severity") or {}
+    return {"branch": row.get("branch", ""),
+            "reviewer": row.get("reviewer", ""),
+            "status": row.get("status", ""),
+            "counts_by_severity": {severity: counts.get(severity, 0)
+                                   for severity in MODEL_REVIEW_SEVERITIES}}

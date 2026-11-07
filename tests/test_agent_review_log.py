@@ -6,6 +6,7 @@ verdict recorded after a merge or reject is counted once per agent-run branch.
 
 import pytest
 
+from foremankit import agent_review_log
 from foremankit.agent_review_log import format_reviews, log_review, summarize_reviews
 from foremankit.state import CallLog
 
@@ -127,3 +128,72 @@ def test_groups_are_sorted_by_key():
     lines = format_reviews(table).splitlines()
 
     assert lines[0].startswith("alpha/m:") and lines[1].startswith("zeta/m:")
+
+
+
+def model_review(**overrides) -> dict:
+    """Build one model review attempt with optional event fields."""
+    row = {"event": "agent_run_model_review", "branch": "agent-run/example",
+           "reviewer": "codex", "status": "ok", "ts": 10}
+    row.update(overrides)
+    return row
+
+
+def test_model_reviews_return_only_summary_fields():
+    """Findings and raw model output stay outside the summary."""
+    row = model_review(counts_by_severity={"high": 2, "medium": 3, "low": 4},
+                       findings=[{"problem": "details"}], raw_text="private output")
+    assert agent_review_log.summarize_model_reviews([row]) == [
+        {"branch": "agent-run/example", "reviewer": "codex", "status": "ok",
+         "counts_by_severity": {"high": 2, "medium": 3, "low": 4}}]
+
+
+def test_empty_model_review_history_returns_a_list():
+    """No attempts produce an empty list."""
+    assert agent_review_log.summarize_model_reviews([]) == []
+
+
+def test_model_reviews_exclude_unrelated_events():
+    """Owner verdicts and run outcomes are not model review attempts."""
+    rows = [review(), model_review(event="outcome")]
+    assert agent_review_log.summarize_model_reviews(rows) == []
+
+
+@pytest.mark.parametrize("fields, high_count", [({}, 0),
+    ({"counts_by_severity": {}}, 0), ({"counts_by_severity": {"high": 2}}, 2)])
+def test_model_reviews_fill_missing_severity_counts(fields, high_count):
+    """Absent counters default to zero without losing supplied counters."""
+    row = model_review()
+    row.update(fields)
+    expected = {"high": high_count, "medium": 0, "low": 0}
+    assert agent_review_log.summarize_model_reviews([row])[0]["counts_by_severity"] == expected
+
+
+def test_model_reviews_sort_by_timestamp_before_log_position():
+    """A later timestamp wins even when its row appears earlier in the log."""
+    rows = [model_review(ts=20, reviewer="newer"), model_review(ts=10, reviewer="older")]
+    summaries = agent_review_log.summarize_model_reviews(rows)
+    assert (summaries[0]["reviewer"], summaries[1]["reviewer"]) == ("newer", "older")
+
+
+def test_model_review_timestamp_ties_use_latest_log_position():
+    """Later log entries win timestamp ties."""
+    rows = [model_review(reviewer="first"), model_review(reviewer="last")]
+    summaries = agent_review_log.summarize_model_reviews(rows)
+    assert (summaries[0]["reviewer"], summaries[1]["reviewer"]) == ("last", "first")
+
+
+def test_repeated_model_review_attempts_remain_distinct():
+    """Identical branch and reviewer pairs are not collapsed."""
+    row = model_review()
+    summaries = agent_review_log.summarize_model_reviews([row, row])
+    assert len(summaries) == 2
+
+
+@pytest.mark.parametrize("status", ["failed", "skipped", "unparsable"])
+def test_unsuccessful_model_reviews_keep_their_status(status):
+    """Zero findings must not disguise an unsuccessful attempt as a clean review."""
+    row = model_review(status=status)
+    assert agent_review_log.summarize_model_reviews([row]) == [
+        {"branch": "agent-run/example", "reviewer": "codex", "status": status,
+         "counts_by_severity": {"high": 0, "medium": 0, "low": 0}}]
