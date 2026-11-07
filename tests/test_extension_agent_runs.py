@@ -5,6 +5,7 @@ and Node.js syntax integrity in `vscode-extension/extension.js`.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,6 +41,109 @@ CONFIG_TABLE_KEYS = (
     "usageRefresh",
     "usageMark",
 )
+
+# The stub models DOM text replacement so refresh tests catch accumulated old rows.
+MODEL_REVIEW_DOM = """
+class Element {
+    constructor() { this.children = []; this.style = {}; this.text = ''; }
+    set textContent(value) { this.text = String(value); this.children = []; }
+    get textContent() {
+        return this.text + this.children.map(child => child.textContent).join('');
+    }
+    set innerHTML(value) {
+        if (value !== '') throw new Error('Render payloads with textContent');
+        this.textContent = '';
+    }
+    appendChild(child) { this.children.push(child); }
+}
+const elements = {};
+const $ = name => elements[name] || (elements[name] = new Element());
+const document = { createElement: () => new Element(), activeElement: null };
+"""
+MODEL_REVIEW = {
+    "branch": "agent-run/<feature>", "reviewer": "codex<&>", "status": "ok",
+    "counts_by_severity": {"high": 2, "medium": 3, "low": 4},
+}
+
+
+def render_model_review_updates(updates: list[dict]) -> list[str]:
+    """Run real Agent runs rendering in Node and return the final visible review lines."""
+    node_exe = shutil.which("node")
+    assert node_exe, "Install Node.js and add it to PATH to test model review rendering"
+    source = load_extension_source()
+    start = source.index(" function showAgentRunner(")
+    end = source.index(" function showSupervisor(", start)
+    script = MODEL_REVIEW_DOM + source[start:end]
+    script += f"\n{json.dumps(updates)}.forEach(update => showAgentRuns(update));"
+    script += """
+const box = $('arModelReviews');
+const lines = box.children.length
+    ? box.children.map(child => child.textContent) : [box.textContent];
+console.log(JSON.stringify(lines));
+"""
+    result = subprocess.run(
+        [node_exe, "-e", script], capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, f"Model review rendering failed: {result.stderr}"
+    return json.loads(result.stdout)
+
+
+def test_model_reviews_are_placed_next_to_review_verdicts() -> None:
+    """Model reviews have their own labeled container before usage in Agent runs."""
+    source = load_extension_source()
+    assert source.index('<h3>Agent runs') < source.index('id="arReviews"')
+    assert source.index('id="arReviews"') < source.index('<b>Model reviews</b>')
+    assert source.index('<b>Model reviews</b>') < source.index('id="arModelReviews"')
+    assert source.index('id="arModelReviews"') < source.index('<b>Claude usage</b>')
+
+
+def test_agent_runs_calls_the_model_review_renderer() -> None:
+    """Each valid Agent runs update passes model reviews to the dedicated helper."""
+    source = load_extension_source()
+    start = source.index(' function showAgentRuns(')
+    end = source.index(' function showSupervisor(', start)
+    assert 'showModelReviews(d.model_reviews);' in source[start:end]
+    assert "$('arReviews').textContent = d.review_text" in source[start:end]
+
+
+def test_model_reviews_display_branch_reviewer_and_labeled_counts() -> None:
+    """A completed review displays literal identifiers, severity labels and status."""
+    lines = render_model_review_updates([{"model_reviews": [MODEL_REVIEW]}])
+    assert lines == ['agent-run/<feature> | codex<&> | H: 2 / M: 3 / L: 4 | ok']
+
+
+@pytest.mark.parametrize('status', ['failed', 'skipped', 'unparsable'])
+def test_model_reviews_display_unsuccessful_status(status: str) -> None:
+    """Unsuccessful attempts remain visible with their actual status and zero counts."""
+    review = {**MODEL_REVIEW, 'status': status, 'counts_by_severity': {}}
+    lines = render_model_review_updates([{"model_reviews": [review]}])
+    assert lines == [f'agent-run/<feature> | codex<&> | H: 0 / M: 0 / L: 0 | {status}']
+
+
+def test_empty_model_reviews_show_none_yet() -> None:
+    """An empty model review list explicitly reports that no attempts exist."""
+    assert render_model_review_updates([{"model_reviews": []}]) == ['none yet']
+
+
+def test_absent_model_reviews_show_none_yet() -> None:
+    """Older payloads without model reviews receive the same empty state."""
+    assert render_model_review_updates([{}]) == ['none yet']
+
+
+def test_refresh_replaces_stale_model_reviews() -> None:
+    """A subsequent populated update replaces all prior review rows."""
+    replacement = {**MODEL_REVIEW, 'branch': 'agent-run/new'}
+    lines = render_model_review_updates([
+        {'model_reviews': [MODEL_REVIEW, MODEL_REVIEW]}, {'model_reviews': [replacement]},
+    ])
+    assert lines == ['agent-run/new | codex<&> | H: 2 / M: 3 / L: 4 | ok']
+
+
+@pytest.mark.parametrize('empty_update', [{'model_reviews': []}, {}])
+def test_refresh_to_no_reviews_clears_stale_entries(empty_update: dict) -> None:
+    """Empty or absent review data removes populated rows from the previous poll."""
+    updates = [{'model_reviews': [MODEL_REVIEW]}, empty_update]
+    assert render_model_review_updates(updates) == ['none yet']
 
 
 def load_extension_source() -> str:
