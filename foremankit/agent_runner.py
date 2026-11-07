@@ -58,7 +58,7 @@ class AgyRunner:
         """Start agy; a timeout is a result (the work done so far is still checked), a missing binary is an error."""
         command = [self.provider.agy_binary, "-p", prompt, "--model", self.model, *AGY_FLAGS]
         try:
-            done = self._runner(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            done = self._runner(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
@@ -85,7 +85,7 @@ class OpenCodeRunner:
         """Start opencode; same contract as AgyRunner.run."""
         command = [self.binary, "run", "--auto", "--model", self.model, "--format", "json", prompt]
         try:
-            done = self._runner(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            done = self._runner(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)

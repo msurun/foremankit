@@ -351,3 +351,19 @@ def test_unknown_base_is_refused_without_leaving_a_worktree(tmp_path, repo):
     with pytest.raises(AgentRunError):
         run_job(tmp_path, FakeRunner(), base="agent-run/nope")
     assert git(repo, "worktree", "list").count("\n") == 1
+
+
+@pytest.mark.parametrize("make", [
+    lambda run: AgyRunner(Provider("agy", AGY_CONFIG), runner=run),
+    lambda run: OpenCodeRunner("oc.exe", "m", run),
+])
+def test_runners_never_inherit_stdin(tmp_path, make):
+    """opencode waits for the end of an inherited stdin (a pipe of a background process): hung for 10-30 minutes."""
+    seen: dict = {}
+
+    def run(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="{}", stderr="", returncode=0)
+
+    make(run).run("do it", tmp_path, 5)
+    assert seen["stdin"] == subprocess.DEVNULL
