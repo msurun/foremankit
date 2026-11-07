@@ -1,4 +1,15 @@
-# Handoff: `foremankit agent-run` (state 2026-11-06)
+# Handoff: `foremankit agent-run` (state 2026-11-07, UPDATED)
+
+**Current state (read this first).** Built, committed locally on main (NOT pushed; 45 commits ahead of origin):
+agent-run (`--base`), `agent_quota` (slots, daily limit, cooldown), `agent_plan`, `agent_batch` (`foremankit agent-run-batch`), `agent_merge` (`foremankit agent-merge`), `agent_review_log` (clean-merge rate), `agent_switch` (panel on/off: master + agy + opencode, enforced in agent_run/batch/auto choice), `claude_usage` (`claude -p /usage`, baseline + delta), `panel_agent_runs` + "Agent runs" section in `vscode-extension/extension.js` (reload the VS Code window to see it). Full suite 1711 passed.
+Key fix: runners start with `stdin=DEVNULL` (opencode hung forever on an inherited open pipe when run from a background process). `agent_lock` no longer deletes a live lock whose PID is still being written.
+Dogfood record (reviewed by the lead): opencode wrote agent_quota, agent_review_log, agent_switch, claude_usage, panel_agent_runs, README/nudge (clean, fast: 17-80 s); agy wrote agent_batch, agent_merge, the panel UI (about 10 min each; 3 real defects in batch/merge, all fixed). Failed/empty runs left branches `agent-run/35a78f6f aa96bb30 bc7dd927 7ebe6da9 f6bf442c` and worktrees in %TEMP%/foremankit-agent-run: delete when the owner agrees (a hook blocks `git branch -D`).
+Open: (1) `agent-ask` / `agent-ask-batch` (read-only question mode for the Crosscut graphify A/B; owner agreed 2026-11-07; spec below), (2) push when the owner agrees, (3) the Claude login expires 7-10 Nov (`claude auth login`), (4) measure clean_rate per runner over a week, (5) agy quota 15/day is a guess.
+
+**agent-ask spec (Crosscut request):** `agent-ask --task-file F --project <path> --runner agy|opencode --json`, batch `agent-ask-batch --tasks-dir D --out-dir O --runner R`; runs IN the given path (no worktree); per task JSON: answer, tokens_in/out (null if not reported), tool_calls (or null), seconds, modified_files (git status after; any change = FAIL + revert), raw_path. To check: can agy --sandbox / opencode run `graphify.exe` (C:/Users/regiz/.local/bin), does opencode report token usage.
+
+---- older text below (design and measurements of 2026-11-05/06) ----
+
 
 `agent-run` is built and committed (94ce42c + the follow-up commit with `tests/test_agent_run.py`). Not pushed.
 
