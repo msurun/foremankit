@@ -17,6 +17,29 @@ def facts(**overrides: object) -> RunnerFacts:
 
 
 CASES = [
+    pytest.param(facts(files=6), (), "codex", "6 files", id="six-files-big-boundary"),
+    pytest.param(facts(files=5), (), "opencode", "default", id="five-files-small-boundary"),
+    pytest.param(facts(files=7, codex_enabled=False), (), "agy", "7 files", id="big-codex-off"),
+    pytest.param(facts(files=7, codex_enabled=False, agy_enabled=False), (), "opencode", "7 files",
+                 id="big-codex-and-agy-off"),
+    pytest.param(facts(opencode_failures=2, codex_enabled=False), (), "agy", "opencode failed",
+                 id="opencode-failed-codex-off"),
+    pytest.param(facts(opencode_failures=2, codex_enabled=False, agy_enabled=False), (), "lead", "exhausted",
+                 id="opencode-failed-no-forward-runner"),
+    pytest.param(facts(codex_failures=1), (), "opencode", "default", id="one-codex-failure"),
+    pytest.param(facts(codex_failures=2), (), "agy", "codex failed", id="codex-failed-escalates"),
+    pytest.param(facts(codex_failures=2, agy_enabled=False), (), "lead", "escalation is exhausted",
+                 id="codex-failed-agy-off-no-loop"),
+    pytest.param(facts(codex_failures=2, opencode_failures=2, files=7), (), "agy", "codex failed",
+                 id="codex-failure-before-opencode-failure-and-size"),
+    pytest.param(facts(codex_failures=3, agy_enabled=False, codex_enabled=False), (), "lead", "exhausted",
+                 id="codex-failure-above-threshold"),
+    pytest.param(facts(opencode_failures=3, files=7), (), "codex", "opencode failed",
+                 id="opencode-failure-before-size"),
+    pytest.param(facts(opencode_enabled=False, codex_enabled=False), (), "agy", "switched off",
+                 id="only-agy-enabled"),
+    pytest.param(facts(opencode_enabled=False, agy_enabled=False), (), "codex", "switched off",
+                 id="only-codex-enabled"),
     pytest.param(facts(sensitivity="private", agy_enabled=True, opencode_enabled=True,
                        edits_existing_only=True, files=1, changed_lines=10),
                  (), "lead", "private", id="private-never-reaches-a-runner"),
@@ -33,11 +56,11 @@ CASES = [
     pytest.param(facts(contract_cited=False, edge_cases_listed=True), (), "opencode", "opencode",
                  id="contract-alone-is-not-enough-to-revise"),
     pytest.param(facts(files=9), (), "split", "files", id="nine-files-split"),
-    pytest.param(facts(files=8), (), "agy", "agy", id="eight-files-not-split"),
+    pytest.param(facts(files=8), (), "codex", "files", id="eight-files-not-split"),
     pytest.param(facts(changed_lines=401), (), "split", "lines", id="401-lines-split"),
     pytest.param(facts(changed_lines=400), (), "opencode", "opencode", id="400-lines-not-split"),
     pytest.param(facts(task_text="x" * 22001), (), "split", "text", id="22001-chars-split"),
-    pytest.param(facts(task_text="x" * 22000, agy_enabled=False), (), "opencode", "opencode",
+    pytest.param(facts(task_text="x" * 22000, agy_enabled=False), (), "codex", "text",
                  id="22000-chars-not-split"),
     pytest.param(facts(edits_existing_only=True, files=2, changed_lines=40), (), "haiku", "small edit",
                  id="small-edit-to-existing-code"),
@@ -50,17 +73,17 @@ CASES = [
     pytest.param(facts(sensitivity="internal", files=7), (), "agy", "internal", id="internal-seven-files-agy"),
     pytest.param(facts(sensitivity="internal", opencode_enabled=True), (), "agy", "agy",
                  id="internal-never-opencode"),
-    pytest.param(facts(opencode_failures=2), (), "agy", "twice", id="two-opencode-failures-escalate"),
+    pytest.param(facts(opencode_failures=2), (), "codex", "twice", id="two-opencode-failures-escalate"),
     pytest.param(facts(opencode_failures=1), (), "opencode", "opencode", id="one-failure-stays-opencode"),
-    pytest.param(facts(opencode_failures=2, agy_enabled=False), (), "opencode", "opencode",
-                 id="escalation-needs-agy"),
-    pytest.param(facts(context_lines=1500), (), "agy", "context", id="1500-context-lines-agy"),
+    pytest.param(facts(opencode_failures=2, agy_enabled=False), (), "codex", "twice",
+                 id="escalation-does-not-need-agy"),
+    pytest.param(facts(context_lines=1500), (), "codex", "context", id="1500-context-lines-codex"),
     pytest.param(facts(context_lines=1499), (), "opencode", "opencode", id="1499-context-lines-opencode"),
-    pytest.param(facts(task_text="y" * 8001), (), "agy", "long", id="8001-chars-agy"),
+    pytest.param(facts(task_text="y" * 8001), (), "codex", "long", id="8001-chars-codex"),
     pytest.param(facts(task_text="y" * 8000), (), "opencode", "opencode", id="8000-chars-opencode"),
-    pytest.param(facts(opencode_enabled=False), (), "agy", "switched off", id="opencode-off-falls-to-agy"),
-    pytest.param(facts(opencode_enabled=False, agy_enabled=False), (), "lead", "no runner",
-                 id="both-runners-off"),
+    pytest.param(facts(opencode_enabled=False), (), "codex", "switched off", id="opencode-off-falls-to-codex"),
+    pytest.param(facts(opencode_enabled=False, codex_enabled=False, agy_enabled=False), (), "lead", "no runner is enabled",
+                 id="all-runners-off"),
     pytest.param(facts(sensitivity="secret", agy_enabled=True, opencode_enabled=True), (), "lead", "sensitivity",
                  id="unknown-sensitivity-fails-closed"),
 ]
@@ -90,9 +113,11 @@ def test_the_scope_default_is_empty_and_a_review_glob_is_optional() -> None:
 
 
 @pytest.mark.parametrize("codex_enabled", [False, True])
-def test_codex_never_changes_auto_choice(codex_enabled):
-    """Codex is available only when a task pins it; existing normal/internal routing stays intact."""
-    assert decide_runner(facts(codex_enabled=codex_enabled))[0] == "opencode"
-    assert decide_runner(facts(codex_enabled=codex_enabled, opencode_enabled=False))[0] == "agy"
-    assert decide_runner(facts(codex_enabled=codex_enabled, opencode_enabled=False, agy_enabled=False))[0] == "lead"
+def test_internal_routing_ignores_codex(codex_enabled: bool) -> None:
+    """Internal data uses agy or waits, regardless of Codex availability."""
     assert decide_runner(facts(codex_enabled=codex_enabled, sensitivity="internal"))[0] == "agy"
+    picked, reasons = decide_runner(facts(
+        codex_enabled=codex_enabled, sensitivity="internal", agy_enabled=False,
+    ))
+    assert picked == "queue"
+    assert "wait" in " ".join(reasons)
