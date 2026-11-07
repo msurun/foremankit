@@ -204,6 +204,11 @@ verify:
 # `foremankit agent-run` (multi-file agentic tasks in a git worktree): paths that make the report say REVIEW REQUIRED
 # (an independent review before merge is mandatory for security code), and the timeout of our own check run.
 agent_run:
+  # Everything starts with Codex; previously small tasks defaulted to opencode first.
+  # Change these lists to reorder fallback without changing code.
+  auto_order:
+    normal: [codex, opencode, agy]
+    internal: [codex, agy]  # opencode is never allowed internal data, whatever the list says.
   conventions: true          # Include the coding standard in the runner prompt.
   conventions_check: warn    # Report mechanical issues; fail blocks acceptance, off skips.
   check_timeout_s: 600

@@ -1,4 +1,6 @@
-"""Keep the documented three-runner order and prompt size consistent."""
+"""Keep the documented three-runner order and prompt size consistent.
+These checks prevent stale routing advice across the user-facing guides.
+"""
 
 import re
 from pathlib import Path
@@ -12,7 +14,7 @@ def test_readme_batch_runner_order() -> None:
     section = text.split("### agent-run-batch and agent-merge", 1)[1]
     section = section.split("\n### ", 1)[0].lower()
     assert all(word in section for word in ("codex", "internal", "agy"))
-    assert any(re.search(r"opencode.{0,140}codex.{0,140}agy", line)
+    assert any(re.search(r"codex.{0,140}opencode.{0,140}agy", line)
                for line in section.splitlines())
 
 
@@ -21,9 +23,12 @@ def test_orchestrator_names_codex_and_stays_small() -> None:
     path = ROOT / "config" / "orchestrator.md"
     assert "codex" in path.read_text(encoding="utf-8").lower()
     assert path.stat().st_size <= 4400
+    assert "agent_run.auto_order" in path.read_text(encoding="utf-8")
 
 
 def test_codex_order_heading() -> None:
     """The Codex runner notes explain its position in the runner order."""
     text = (ROOT / "docs" / "codex-runner.md").read_text(encoding="utf-8")
     assert "## Where Codex sits in the order" in text
+    assert "agent_run.auto_order" in text
+    assert "shared" in text and "panel pause" in text

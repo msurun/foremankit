@@ -92,7 +92,7 @@ def test_failed_dependency_causes_dependent_task_to_be_skipped(tmp_path: Path) -
     f1 = _create_task_file(tmp_path, "t1.md")
     f2 = _create_task_file(tmp_path, "t2.md")
     context = _make_context(tmp_path, lambda job: {"passed": False, "branch": "b", "files": []})
-    t1 = PlanTask(id="t1", task_file=f1, scope=("a.py",), check="pytest")
+    t1 = PlanTask(id="t1", task_file=f1, scope=("a.py",), check="pytest", runner="codex")
     t2 = PlanTask(id="t2", task_file=f2, scope=("b.py",), check="pytest", depends_on=("t1",))
     report = run_batch([t1, t2], context)
     assert report["tasks"][0]["status"] == "failed"
@@ -182,7 +182,7 @@ def test_daily_limit_skips_second_task_when_exceeded(tmp_path: Path) -> None:
 def test_auto_runner_resolves_to_not_for_runner_for_review_glob_and_runner_otherwise(
     tmp_path: Path,
 ) -> None:
-    """Verify auto runner resolves to lead for review globs and opencode otherwise."""
+    """Verify auto runner resolves to lead for review globs and Codex otherwise."""
     f1 = _create_task_file(tmp_path, "t1.md")
     f2 = _create_task_file(tmp_path, "t2.md")
     context = _make_context(
@@ -197,7 +197,7 @@ def test_auto_runner_resolves_to_not_for_runner_for_review_glob_and_runner_other
     assert report["tasks"][0]["runner"] == "lead"
     assert "review" in report["tasks"][0]["reason"]
     assert report["tasks"][1]["status"] == "passed"
-    assert report["tasks"][1]["runner"] == "opencode"
+    assert report["tasks"][1]["runner"] == "codex"
 
 
 def test_unreadable_task_file_results_in_refused_status(tmp_path: Path) -> None:
@@ -373,7 +373,7 @@ def test_limit_fallback_or_wait(tmp_path: Path, runner: str) -> None:
     entry = run_batch([task], context)["tasks"][0]
     assert json.loads(context.state_path.read_text())[calls[0]]["paused_until"] == 8200.0
     assert entry["status"] == ("passed" if runner == "auto" else "waiting")
-    assert "rerouted from opencode (limit)" in entry["reason"] if runner == "auto" else entry["retry_after"] == 8200
+    assert "rerouted from codex (limit)" in entry["reason"] if runner == "auto" else entry["retry_after"] == 8200
 
 
 @pytest.mark.parametrize("runner,sensitivity", [("codex", "normal"), ("auto", "internal")])
@@ -408,12 +408,12 @@ def test_resume_uses_old_branch(tmp_path: Path) -> None:
 
 def test_auto_skips_pause_and_normal_failure_resets_strikes(tmp_path: Path) -> None:
     """Auto avoids paused opencode and a failed check still clears codex strikes."""
-    context = _make_context(tmp_path, lambda job: {"passed": False})
+    context = _make_context(tmp_path, lambda job: {"passed": job.runner == "agy"})
     context = BatchContext(**{**context.__dict__, "clock": lambda: 1000.0})
     context.state_path.write_text(json.dumps({"opencode": {"paused_until": 2000}, "codex": {"strikes": 2}}))
     task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"), scope=("a.py",), check="pytest")
     entry = run_batch([task], context)["tasks"][0]
-    assert entry["runner"] == "codex" and entry["status"] == "failed"
+    assert entry["runner"] == "agy" and entry["status"] == "passed"
     assert json.loads(context.state_path.read_text())["codex"]["strikes"] == 0
 
 
@@ -448,3 +448,75 @@ def test_batch_entry_defaults_to_no_convention_issues():
     from foremankit.agent_batch import _run_entry
 
     assert _run_entry("task", "codex", "passed", {})["conventions_issues"] == []
+
+
+def test_batch_honours_the_configured_auto_order(tmp_path: Path) -> None:
+    """Settings can restore opencode priority without editing routing code."""
+    context = _make_context(tmp_path, lambda job: {"passed": True},
+                            settings={"auto_order": {"normal": ["opencode", "codex"]}})
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"),
+                    scope=("a.py",), check="pytest")
+    assert run_batch([task], context)["tasks"][0]["runner"] == "opencode"
+
+
+def test_batch_retries_codex_twice_before_opencode(tmp_path: Path) -> None:
+    """Only failures of this task in this batch consume its runner attempts."""
+    calls = []
+
+    def run_one(job: AgentRunJob) -> dict:
+        calls.append(job.runner)
+        return {"passed": job.runner == "opencode"}
+
+    context = _make_context(tmp_path, run_one)
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"),
+                    scope=("a.py",), check="pytest")
+    entry = run_batch([task], context)["tasks"][0]
+    assert calls == ["codex", "codex", "opencode"]
+    assert entry["status"] == "passed"
+
+
+def test_batch_skips_paused_codex(tmp_path: Path) -> None:
+    """A subscription pause makes Codex unavailable before dispatch."""
+    context = _make_context(tmp_path, lambda job: {"passed": True})
+    context.state_path.write_text(json.dumps({"codex": {"paused_until": time.time() + 2000}}))
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"),
+                    scope=("a.py",), check="pytest")
+    assert run_batch([task], context)["tasks"][0]["runner"] == "opencode"
+
+
+@pytest.mark.parametrize("sensitivity, expected", [
+    ("normal", ["codex", "codex", "opencode", "opencode", "agy", "agy"]),
+    ("internal", ["codex", "codex", "agy", "agy"]),
+])
+def test_batch_exhausts_each_allowed_runner_twice(tmp_path, sensitivity, expected):
+    """Repeated check failures eventually return to the lead with no retry loop."""
+    calls = []
+
+    def run_one(job: AgentRunJob) -> dict:
+        calls.append(job.runner)
+        return {"passed": False}
+
+    context = _make_context(tmp_path, run_one)
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"),
+                    scope=("a.py",), check="pytest", sensitivity=sensitivity)
+    entry = run_batch([task], context)["tasks"][0]
+    assert calls == expected
+    assert entry["runner"] == "lead" and entry["reason"] == "escalation is exhausted"
+
+
+def test_batch_failure_counts_are_specific_to_each_task(tmp_path: Path) -> None:
+    """A previous task's failed Codex attempts do not change another task's priority."""
+    jobs = []
+
+    def run_one(job: AgentRunJob) -> dict:
+        jobs.append((job.scope[0], job.runner))
+        return {"passed": job.scope == ("b.py",) or job.runner == "opencode"}
+
+    context = _make_context(tmp_path, run_one)
+    filename = _create_task_file(tmp_path, "a.md")
+    first = PlanTask(id="a", task_file=filename, scope=("a.py",), check="pytest")
+    second = PlanTask(id="b", task_file=filename, scope=("b.py",),
+                      check="pytest", depends_on=("a",))
+    run_batch([first, second], context)
+    assert jobs == [("a.py", "codex"), ("a.py", "codex"),
+                    ("a.py", "opencode"), ("b.py", "codex")]

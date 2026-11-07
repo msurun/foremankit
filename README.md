@@ -249,19 +249,20 @@ foremankit agent-merge --project <repo root> --report batch.json --id TASK [--re
 
 - Tasks in the same level run in parallel. A dependent task starts from the branch of its **first** dependency (the rest of `depends_on` is only a gate, not a base).
 - Slots per runner (`max_parallel`) and the agy daily quota (`quota.agy`) are in `config/routing.yaml → agent_run`.
-Automatic order for `normal` data: opencode -> codex -> agy.
-Start with opencode for small and medium tasks; after 2 failures, or for a big task
-(6+ files, a lot of context, or a long task text), use Codex. After Codex fails
-twice, or when Codex is switched off, use agy. `internal` data uses codex, then agy after two Codex failures or when Codex is off;
-no runner accepts `private` data. Pin a plan with `runner: codex|opencode|agy`;
-`runner: auto` follows this order.
+Automatic order for `normal` data: codex -> opencode -> agy.
+By default everything goes to Codex first; `internal` uses Codex then agy, never opencode.
+Configure the lists in `agent_run.auto_order` in `config/routing.yaml`.
+Fallback skips runners switched off in the panel, paused by a usage limit, or failed twice
+on this task. No runner accepts `private` data. Pin `runner: codex|opencode|agy` or use `runner: auto`.
+Codex's ChatGPT limit is shared with the owner's own Codex use: watch the panel pause,
+and switch Codex off in the panel to spare it.
 
 Measurements from 2026-11-06/07 (small samples, not guarantees):
 
 | Runner | Role and data | Observed time and constraints |
 |---|---|---|
-| opencode (free models) | Default for small/medium tasks; `normal` only | Typically 15-80 s; clean so far; runs `graphify` |
-| Codex (owner's ChatGPT subscription; model from `config/routing.yaml`) | Big tasks and second escalation step; `normal` and configured `internal` | Typically 6-25 s; runs `graphify`; quota unknown, cooldown after an error configured, no daily limit yet |
+| opencode (free models) | Second in the default order; `normal` only | Typically 15-80 s; clean so far; runs `graphify` |
+| Codex (owner's ChatGPT subscription; model from `config/routing.yaml`) | First for everything by default; `normal` and configured `internal` | Typically 6-25 s; runs `graphify`; quota unknown, cooldown after an error configured, no daily limit yet |
 | Antigravity / agy (Google AI Pro subscription) | Last escalation step, fallback when Codex is off; accepts `internal`, never `private` | About 10 minutes per slice plus ~3 minutes start-up; `graphify` does not work under its sandbox; daily limit 15 is a guess |
 
 The owner allowed internal data for Codex on 2026-11-07. The ChatGPT data-controls
