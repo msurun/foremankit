@@ -136,19 +136,27 @@ def test_dependent_tasks_with_overlapping_scopes_are_allowed() -> None:
     assert [task.id for task in levels[1]] == ["follow"]
 
 
-def test_internal_sensitivity_with_opencode_runner_is_rejected() -> None:
-    """Sensitivity 'internal' paired with runner 'opencode' raises PlanError."""
+@pytest.mark.parametrize("runner", ["opencode", "codex"])
+def test_internal_sensitivity_with_external_runner_is_rejected(runner) -> None:
+    """Internal data can never go to opencode or Codex."""
     raw = {
         "id": "task_secret",
         "task_file": "f.md",
         "scope": ["a.py"],
         "check": "pytest",
         "sensitivity": "internal",
-        "runner": "opencode",
+        "runner": runner,
     }
     with pytest.raises(PlanError) as exc_info:
         parse_plan({"tasks": [raw]})
-    assert "internal data may never go to opencode" in str(exc_info.value)
+    assert f"internal data may never go to {runner}" in str(exc_info.value)
+
+
+def test_codex_is_valid_for_normal_data() -> None:
+    """A batch may explicitly pin Codex for public or synthetic data."""
+    task = {"id": "c", "task_file": "c.md", "scope": ["c.py"], "check": "pytest", "runner": "codex"}
+    parsed = parse_plan({"tasks": [task]})[0]
+    assert parsed.runner == "codex" and parsed.sensitivity == "normal"
 
 
 def test_internal_sensitivity_with_agy_runner_is_accepted() -> None:

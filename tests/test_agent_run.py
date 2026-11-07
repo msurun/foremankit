@@ -20,7 +20,9 @@ from foremankit.agent_run import (
     worktree_env,
 )
 from foremankit.agent_runner import (
+    TIMEOUT_REPLY,
     AgyRunner,
+    CodexRunner,
     OpenCodeRunner,
     RunnerError,
     RunnerResult,
@@ -356,6 +358,7 @@ def test_unknown_base_is_refused_without_leaving_a_worktree(tmp_path, repo):
 @pytest.mark.parametrize("make", [
     lambda run: AgyRunner(Provider("agy", AGY_CONFIG), runner=run),
     lambda run: OpenCodeRunner("oc.exe", "m", run),
+    lambda run: CodexRunner("codex.exe", "m", run),
 ])
 def test_runners_never_inherit_stdin(tmp_path, make):
     """opencode waits for the end of an inherited stdin (a pipe of a background process): hung for 10-30 minutes."""
@@ -369,13 +372,13 @@ def test_runners_never_inherit_stdin(tmp_path, make):
     assert seen["stdin"] == subprocess.DEVNULL
 
 
-@pytest.mark.parametrize("target", ["all", "agy"])
+@pytest.mark.parametrize("target", ["all", "agy", "codex"])
 def test_agent_run_refuses_a_runner_switched_off_in_the_panel(tmp_path, repo, target):
     from foremankit import agent_switch
     from foremankit.state import StateStore
     agent_switch.set_switch(StateStore(), target, "off")
     runner = FakeRunner()
-    runner.name = "agy"
+    runner.name = "codex" if target == "codex" else "agy"
     with pytest.raises(AgentRunError, match="(?i)switched off"):
         run_job(tmp_path, runner)
     assert git(repo, "worktree", "list").count("\n") == 1
@@ -392,6 +395,7 @@ def test_agent_run_ignores_the_switch_of_the_other_runner(tmp_path, repo):
 @pytest.mark.parametrize("make", [
     lambda run: AgyRunner(Provider("agy", AGY_CONFIG), runner=run),
     lambda run: OpenCodeRunner("oc.exe", "m", run),
+    lambda run: CodexRunner("codex.exe", "m", run),
 ])
 def test_runners_set_pwd_to_the_run_folder(tmp_path, make):
     """opencode reads its working folder from PWD: an inherited PWD made it work in the wrong repository."""
@@ -403,3 +407,85 @@ def test_runners_set_pwd_to_the_run_folder(tmp_path, make):
 
     make(run).run("do it", tmp_path, 5)
     assert seen["env"]["PWD"] == str(tmp_path) and seen["cwd"] == tmp_path
+
+
+def test_codex_command_and_raw_output(tmp_path):
+    """Use the measured headless flags and preserve the raw response with a short one-line reply."""
+    seen = []
+    raw = (Path(__file__).parent / "fixtures" / "codex_exec.jsonl").read_text(encoding="utf-8")
+    result = CodexRunner("codex.exe", "gpt-6.1-sol", agy_popen(raw, seen=seen)).run("-prompt", tmp_path, 12)
+    command = seen[0]
+    for flag, value in (("--ask-for-approval", "never"), ("--sandbox", "workspace-write"),
+                        ("--cd", str(tmp_path)), ("--model", "gpt-6.1-sol")):
+        assert command[command.index(flag) + 1] == value
+    assert "exec" in command and "--json" in command and "--ignore-user-config" in command
+    assert "sandbox_workspace_write.exclude_tmpdir_env_var=true" in command
+    assert "sandbox_workspace_write.exclude_slash_tmp=true" in command
+    assert command[-2:] == ["--", "-prompt"]
+    assert result.raw == raw and result.reply == "42 No files changed." and result.exit_code == 0
+
+
+def test_codex_drops_parent_permission_profile(tmp_path, monkeypatch):
+    """A Codex app with unrestricted permissions cannot grant them to the child runner."""
+    seen = {}
+    monkeypatch.setenv("CODEX_PERMISSION_PROFILE", "unrestricted-parent")
+
+    def run(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="", returncode=1)
+
+    result = CodexRunner("codex.exe", "m", run).run("x", tmp_path, 12)
+    assert "CODEX_PERMISSION_PROFILE" not in seen["env"] and seen["timeout"] == 12
+    assert result.exit_code == 1 and "exit 1" in result.reply
+
+
+def test_codex_recovered_error_does_not_hide_final_answer(tmp_path):
+    """A transient stream error followed by a successful answer is not a failed run."""
+    raw = oc_lines({"type": "error", "message": "reconnecting"},
+                   {"type": "item.completed", "item": {"type": "agent_message", "text": "PASS done"}})
+    result = CodexRunner("codex.exe", "m", agy_popen(raw)).run("x", tmp_path, 1)
+    assert result.reply == "PASS done"
+
+
+def test_make_runner_builds_codex_from_routing():
+    """Configured defaults and an explicit model override both reach the Codex runner."""
+    config = {"routing": {"agent_run": {"codex": {"binary": "codex.exe", "default_model": "configured"}}}}
+    runner = make_runner("codex", config)
+    assert isinstance(runner, CodexRunner) and runner.name == "codex" and runner.model == "configured"
+    assert make_runner("codex", config, "override").model == "override"
+    with pytest.raises(RunnerError, match="agent_run.codex.binary"):
+        make_runner("codex", {"routing": {}})
+    with pytest.raises(RunnerError, match="agent_run.codex.default_model"):
+        make_runner("codex", {"routing": {"agent_run": {"codex": {"binary": "codex.exe"}}}})
+
+
+def test_codex_eligibility_and_start_failures(tmp_path):
+    """Internal/private data never reaches Codex; timeouts and missing binaries follow the runner contract."""
+    runner = CodexRunner("codex.exe", "m")
+    assert [runner.eligible(level) for level in ("normal", "internal", "private", "unknown")] == [True, False, False, False]
+    runner = CodexRunner("codex.exe", "m", agy_popen(raises=subprocess.TimeoutExpired(cmd="codex", timeout=1)))
+    result = runner.run("x", tmp_path, 1)
+    assert result == RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
+    missing = CodexRunner("codex.exe", "m", agy_popen(raises=FileNotFoundError("codex")))
+    with pytest.raises(RunnerError, match="codex binary not found"):
+        missing.run("x", tmp_path, 1)
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ('{"type":"turn.failed","error":{"message":"quota exhausted"}}', "FAIL quota exhausted"),
+    ('{"type":"error","message":"connection lost"}', "FAIL connection lost"),
+    ('{"type":"item.completed","item":[]}', "FAIL codex printed no usable output"),
+    ("not JSON\n[]\n{}", "FAIL codex printed no usable output"),
+])
+def test_codex_errors_and_malformed_output(tmp_path, raw, expected):
+    """Failed turns and malformed JSON produce usable short replies without a parser exception."""
+    result = CodexRunner("codex.exe", "m", agy_popen(raw)).run("x", tmp_path, 1)
+    assert result.reply.startswith(expected) and result.raw == raw
+
+
+@pytest.mark.parametrize("sensitivity", ["internal", "private"])
+def test_agent_run_refuses_codex_sensitive_data(repo, sensitivity):
+    """Refuse sensitive data before starting a worktree or a subprocess."""
+    job = AgentRunJob("task", repo, ("a.py",), CHECK, runner="codex", sensitivity=sensitivity)
+    with pytest.raises(AgentRunError, match=f"codex may not receive {sensitivity}"):
+        agent_run(job, runner=CodexRunner("codex.exe", "m"))

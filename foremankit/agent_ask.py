@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import agent_codex, agent_quota, agent_switch
 from . import agent_git as vcs
-from . import agent_quota, agent_switch
 from .agent_runner import Runner, RunnerError, RunnerResult, make_runner
 from .config import load_config
 from .state import CallLog, StateStore
@@ -53,6 +53,8 @@ class AskBatch:
 def parse_usage(runner_name: str, raw: str) -> dict:
     """Token counts, tool calls and turns from a runner's raw stdout; unreadable fields stay None, never raises."""
     try:
+        if runner_name == "codex":
+            return _codex_usage(raw or "")
         if runner_name == "opencode":
             return _opencode_usage(raw or "")
         if runner_name == "agy":
@@ -65,6 +67,23 @@ def parse_usage(runner_name: str, raw: str) -> dict:
 def _no_usage() -> dict:
     """Every usage field unknown."""
     return dict.fromkeys(USAGE_KEYS)
+
+
+def _codex_usage(raw: str) -> dict:
+    """Sum completed-turn usage and count tool item IDs once; missing counters stay unknown."""
+    events = agent_codex.events(raw)
+    usage = _no_usage()
+    if not events:
+        return usage
+    turns = [event for event in events if event.get("type") == "turn.completed"]
+    counters = [event["usage"] for event in turns if isinstance(event.get("usage"), dict)]
+    fields = {"tokens_in": "input_tokens", "tokens_out": "output_tokens",
+              "cache_read_tokens": "cached_input_tokens", "thinking_tokens": "reasoning_output_tokens"}
+    for field, key in fields.items():
+        values = [_as_int(counter.get(key)) for counter in counters]
+        usage[field] = sum(values) if values and len(values) == len(turns) and None not in values else None
+    usage.update(tool_calls=agent_codex.tool_calls(events), turns=len(turns))
+    return usage
 
 
 def _events(raw: str) -> list[dict]:
@@ -222,6 +241,8 @@ def _answer(runner_name: str, result: RunnerResult) -> str:
 
 def _raw_answer(runner_name: str, raw: str) -> str:
     """The full text of the runner's raw output ("" when it has none)."""
+    if runner_name == "codex":
+        return agent_codex.answer(agent_codex.events(raw))
     if runner_name == "agy":
         return _agy_response(raw)
     if runner_name == "opencode":

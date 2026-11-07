@@ -1,6 +1,6 @@
 """Runners for `agent-run`: a headless coding agent that works in a folder and answers with a short reply.
-`Runner` is the interface; `AgyRunner` is the Antigravity CLI. An opencode runner can be added later with the same
-three members (name, model, eligible) and `run`.
+`Runner` is the shared interface for Antigravity, opencode and Codex CLI runs.
+Each runner keeps untouched stdout for usage and full-answer parsing.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from . import agent_codex
 from .providers import Provider
 from .supervise import AGY_FLAGS, MODEL_ALIAS
 
@@ -101,6 +102,54 @@ class OpenCodeRunner:
         return RunnerResult(_opencode_reply(done.stdout, done.returncode), exit_code=done.returncode, raw=done.stdout or "")
 
 
+class CodexRunner:
+    """Non-interactive Codex CLI on the owner's subscription; only normal data is eligible."""
+    name = "codex"
+
+    def __init__(self, binary: str, model: str, runner=subprocess.run):
+        """Use the configured executable and model, with an injectable subprocess runner."""
+        self.binary, self.model = os.path.expanduser(binary), model
+        self._runner = runner
+
+    def eligible(self, sensitivity: str) -> bool:
+        """Only public or synthetic data until the owner permits another sensitivity."""
+        return sensitivity == "normal"
+
+    def run(self, prompt: str, cwd: Path, timeout: float) -> RunnerResult:
+        """Run with closed stdin and bounded workspace writes; preserve the raw JSONL."""
+        command = self._command(prompt, cwd)
+        env = _env_for(cwd)
+        env.pop("CODEX_PERMISSION_PROFILE", None)  # the parent Codex app may grant unrestricted access
+        try:
+            done = self._runner(command, stdin=subprocess.DEVNULL, env=env, cwd=cwd, timeout=timeout,
+                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
+        except FileNotFoundError as error:
+            raise RunnerError(f"codex binary not found: {self.binary}") from error
+        return RunnerResult(_codex_reply(done.stdout, done.returncode), exit_code=done.returncode, raw=done.stdout or "")
+
+    def _command(self, prompt: str, cwd: Path) -> list[str]:
+        """Ignore personal config so its writable roots and tools cannot widen the run's sandbox."""
+        settings = ["sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                    "sandbox_workspace_write.exclude_slash_tmp=true"]
+        if os.name == "nt":
+            settings.append('windows.sandbox="elevated"')
+        overrides = [argument for setting in settings for argument in ("-c", setting)]
+        return [self.binary, "--ask-for-approval", "never", "exec", "--ignore-user-config", *overrides,
+                "--sandbox", "workspace-write", "--json", "--cd", str(cwd), "--model", self.model, "--", prompt]
+
+
+def _codex_reply(stdout: str, exit_code: int) -> str:
+    """The last full message, or a failure; the public reply stays on one line."""
+    events = agent_codex.events(stdout)
+    error = agent_codex.failure(events)
+    answer = agent_codex.answer(events)
+    reply = (answer if exit_code == 0 else error) or error or answer
+    reply = reply or f"FAIL codex printed no usable output (exit {exit_code})"
+    return " ".join(reply.split())
+
+
 def _opencode_reply(stdout: str, exit_code: int) -> str:
     """The last `text` event of opencode's JSON-lines output; the error event's message or a short note otherwise."""
     texts, errors = [], []
@@ -130,9 +179,12 @@ def make_runner(name: str, config: dict[str, Any], model_alias: str = "") -> Run
     """The runner called `name`; RunnerError for a runner that is not available yet."""
     if name == "agy":
         return AgyRunner(Provider("agy", config["providers"]["agy"]), model_alias or MODEL_ALIAS)
-    if name == "opencode":
-        settings = config["routing"].get("agent_run", {}).get("opencode") or {}
+    if name in ("opencode", "codex"):
+        settings = config["routing"].get("agent_run", {}).get(name) or {}
         if not settings.get("binary"):
-            raise RunnerError("routing.yaml agent_run.opencode.binary is not set")
-        return OpenCodeRunner(settings["binary"], model_alias or settings["default_model"])
-    raise RunnerError(f"runner {name!r} is not available (supported: agy, opencode)")
+            raise RunnerError(f"routing.yaml agent_run.{name}.binary is not set")
+        if not (model_alias or settings.get("default_model")):
+            raise RunnerError(f"routing.yaml agent_run.{name}.default_model is not set")
+        runner_type = CodexRunner if name == "codex" else OpenCodeRunner
+        return runner_type(settings["binary"], model_alias or settings["default_model"])
+    raise RunnerError(f"runner {name!r} is not available (supported: agy, opencode, codex)")

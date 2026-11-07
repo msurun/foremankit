@@ -352,11 +352,12 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info"><label><input type="checkbox" id="delegAgy"> Antigravity (Google AI Pro; internal data allowed, never private)</label></div>
 </details>
 <h3>Agent runs<span class="q" data-for="tipAR">?</span></h3>
-<div class="tip" id="tipAR">Autonomous coding agents that work on several files in their own git branch; you review and merge the result. Different from the single-call helpers above. They cost no money: Antigravity is a subscription, opencode uses free models.</div>
+<div class="tip" id="tipAR">Autonomous coding agents that work on several files in their own git branch; you review and merge the result. Different from the single-call helpers above. They cost no money: Antigravity and Codex use subscriptions, opencode uses free models.</div>
 <label class="info"><input type="checkbox" id="arAll"> Agent runs enabled</label>
 <div id="arOffLine" class="info" style="display:none">switched off as a whole</div>
 <div id="arAgyRow" class="info"><label><input type="checkbox" id="arAgy"> Antigravity</label><div id="arAgyInfo" class="info"></div></div>
 <div id="arOpencodeRow" class="info"><label><input type="checkbox" id="arOpencode"> opencode</label><div id="arOpencodeInfo" class="info"></div></div>
+<div id="arCodexRow" class="info"><label><input type="checkbox" id="arCodex"> Codex</label><div id="arCodexInfo" class="info"></div></div>
 <div class="info" style="margin-top:6px"><b>Recent runs</b></div>
 <div id="arRecent"></div>
 <div class="info" style="margin-top:6px"><b>Review verdicts (clean merge rate)</b></div>
@@ -578,9 +579,11 @@ function showGpu(gpu) {
   $('arOffLine').style.display = d.enabled ? 'none' : 'block';
   $('arAgyRow').style.opacity = d.enabled ? '1' : '0.5';
   $('arOpencodeRow').style.opacity = d.enabled ? '1' : '0.5';
+  $('arCodexRow').style.opacity = d.enabled ? '1' : '0.5';
   const runners = d.runners || {};
   showAgentRunner('arAgy', 'arAgyInfo', runners.agy);
   showAgentRunner('arOpencode', 'arOpencodeInfo', runners.opencode);
+  showAgentRunner('arCodex', 'arCodexInfo', runners.codex);
   showAgentRecent(d.recent);
   $('arReviews').textContent = d.review_text || 'no agent-run reviews yet';
   showAgentUsage(d.usage);
@@ -787,6 +790,7 @@ function showGpu(gpu) {
  $('arAll').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'all', enabled: $('arAll').checked });
  $('arAgy').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'agy', enabled: $('arAgy').checked });
  $('arOpencode').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'opencode', enabled: $('arOpencode').checked });
+ $('arCodex').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'codex', enabled: $('arCodex').checked });
  $('arUsageRefresh').onclick = () => send({ type: 'config', action: 'usageRefresh' });
  $('arUsageMark').onclick = () => send({ type: 'config', action: 'usageMark' });
 $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });

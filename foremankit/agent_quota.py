@@ -1,4 +1,4 @@
-"""Whether an `agent-run` runner (agy / opencode) may start now.
+"""Whether an `agent-run` runner (agy / opencode / codex) may start now.
 Decides the parallel slots, the daily run limit and the cooldown after a quota error; the only I/O is load/save of one
 JSON file whose path the caller passes in.
 """
@@ -12,7 +12,7 @@ from typing import Any
 from .agy_provider import RATE_LIMIT_TEXT
 from .state import utc_day
 
-DEFAULT_MAX_PARALLEL = {"opencode": 3, "agy": 1}
+DEFAULT_MAX_PARALLEL = {"opencode": 3, "agy": 1, "codex": 1}
 DEFAULT_SLOTS = 1
 DEFAULT_COOLDOWN_S = 1800.0
 NO_DAILY_LIMIT = 0

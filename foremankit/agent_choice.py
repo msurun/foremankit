@@ -35,6 +35,7 @@ class RunnerFacts:
     opencode_failures: int = 0
     agy_enabled: bool = True
     opencode_enabled: bool = True
+    codex_enabled: bool = True  # explicit plan pins only; never an automatic fallback
 
 
 def decide_runner(facts: RunnerFacts, review_globs: Sequence[str] = ()) -> tuple[str, list[str]]:

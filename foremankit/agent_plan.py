@@ -12,7 +12,7 @@ import yaml
 
 from foremankit.agent_overlap import overlapping_pairs
 
-VALID_RUNNERS = ("auto", "agy", "opencode")
+VALID_RUNNERS = ("auto", "agy", "opencode", "codex")
 VALID_SENSITIVITIES = ("normal", "internal")
 DEFAULT_RUNNER = "auto"
 DEFAULT_SENSITIVITY = "normal"
@@ -116,8 +116,18 @@ def _validate_runner_fields(raw: dict[str, Any], task_id: str) -> tuple[str, str
     runner = raw.get("runner", DEFAULT_RUNNER)
     if runner not in VALID_RUNNERS:
         raise PlanError(
-            f"task '{task_id}' invalid runner '{runner}', must be one of auto, agy, opencode"
+            f"task '{task_id}' invalid runner '{runner}', must be one of {', '.join(VALID_RUNNERS)}"
         )
+    sensitivity = _validate_sensitivity(raw, task_id, runner)
+    model = raw.get("model", "")
+    model_str = "" if model is None else model
+    if not isinstance(model_str, str):
+        raise PlanError(f"task '{task_id}' model must be a string")
+    return runner, sensitivity, model_str
+
+
+def _validate_sensitivity(raw: dict[str, Any], task_id: str, runner: str) -> str:
+    """Refuse private data and keep internal data on agy or automatic routing."""
     sensitivity = raw.get("sensitivity", DEFAULT_SENSITIVITY)
     if sensitivity == "private":
         raise PlanError(f"task '{task_id}': private data never goes to a runner")
@@ -125,13 +135,9 @@ def _validate_runner_fields(raw: dict[str, Any], task_id: str) -> tuple[str, str
         raise PlanError(
             f"task '{task_id}' invalid sensitivity '{sensitivity}', must be normal or internal"
         )
-    if sensitivity == "internal" and runner == "opencode":
-        raise PlanError(f"task '{task_id}': internal data may never go to opencode")
-    model = raw.get("model", "")
-    model_str = "" if model is None else model
-    if not isinstance(model_str, str):
-        raise PlanError(f"task '{task_id}' model must be a string")
-    return runner, sensitivity, model_str
+    if sensitivity == "internal" and runner in ("opencode", "codex"):
+        raise PlanError(f"task '{task_id}': internal data may never go to {runner}")
+    return sensitivity
 
 
 def _validate_depends_on_list(raw: dict[str, Any], task_id: str) -> tuple[str, ...]:

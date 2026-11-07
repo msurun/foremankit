@@ -87,3 +87,12 @@ def test_the_scope_default_is_empty_and_a_review_glob_is_optional() -> None:
     """A plain task with no scope never trips the review gate."""
     picked, _ = decide_runner(facts())
     assert picked == "opencode"
+
+
+@pytest.mark.parametrize("codex_enabled", [False, True])
+def test_codex_never_changes_auto_choice(codex_enabled):
+    """Codex is available only when a task pins it; existing normal/internal routing stays intact."""
+    assert decide_runner(facts(codex_enabled=codex_enabled))[0] == "opencode"
+    assert decide_runner(facts(codex_enabled=codex_enabled, opencode_enabled=False))[0] == "agy"
+    assert decide_runner(facts(codex_enabled=codex_enabled, opencode_enabled=False, agy_enabled=False))[0] == "lead"
+    assert decide_runner(facts(codex_enabled=codex_enabled, sensitivity="internal"))[0] == "agy"
