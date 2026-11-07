@@ -49,13 +49,17 @@ def _runner_entry(inputs: StatusInputs, runner: str, master: bool) -> dict:
     """One runner's switches, parallel slots, counters, pause and latest model."""
     own = _own_switch(inputs.toggles_state, runner)
     quota = inputs.quota_state.get(runner) or {}
+    pause = agent_quota.pause_info({runner: dict(quota)}, runner, inputs.now)
+    limit, hard = _daily_limit(inputs.settings, runner)
     return {"label": LABELS[runner],
             "own": own,
             "active": master and own,
             "slots": agent_quota.slots(inputs.settings, runner),
             "runs_today": _runs_today(quota, inputs.now),
-            "daily_limit": _daily_limit(inputs.settings, runner),
-            "paused_for_s": _paused_for(quota, inputs.now),
+            "daily_limit": limit, "daily_limit_hard": hard,
+            "paused_for_s": pause["remaining_s"],
+            "strikes": int(pause["strikes"]), "probing": bool(pause["probing"]),
+            "retry_at": pause["until"] if pause["paused"] else 0,
             "internal_data": _internal_data(inputs.settings, runner),
             "model": _latest_model(inputs.rows, runner, inputs.settings)}
 
@@ -77,15 +81,11 @@ def _runs_today(quota: dict, now: float) -> int:
     return int(quota.get("runs") or 0) if quota.get("day") == utc_day(now) else 0
 
 
-def _daily_limit(settings: dict, runner: str) -> int:
-    """The configured runs per day for a runner, 0 meaning no limit."""
+def _daily_limit(settings: dict, runner: str) -> tuple[int, bool]:
+    """The positive hard limit, else the positive soft limit, else no limit."""
     quota = (settings.get("quota") or {}).get(runner) or {}
-    return int(quota.get("max_runs_per_day") or 0)
-
-
-def _paused_for(quota: dict, now: float) -> int:
-    """Whole seconds left in a quota pause, never negative."""
-    return round(max(0.0, float(quota.get("paused_until") or 0.0) - now))
+    hard = int(quota.get("max_runs_per_day") or 0)
+    return (hard, True) if hard > 0 else (max(0, int(quota.get("soft_runs_per_day") or 0)), False)
 
 
 def _latest_model(rows: list[dict], runner: str, settings: dict) -> str:
@@ -142,6 +142,17 @@ def set_agent_run(target: str, enabled: bool) -> str:
     except ValueError as exc:
         return f"not done: {exc}"
     return f"agent runs {'on' if enabled else 'off'}: {target}"
+
+
+def resume_runner(runner: str, now: float | None = None) -> str:
+    """Clear a known runner's quota pause early, retaining strikes for the recovery probe."""
+    if runner not in agent_switch.RUNNERS:
+        return f"not done: unknown runner: {runner}"
+    path = agent_quota.state_path()
+    state = agent_quota.load_state(path)
+    agent_quota.clear_pause(state, runner)
+    agent_quota.save_state(path, state)
+    return f"pause cleared: {runner} (the next run is a probe)"
 
 
 def refresh_usage(now: float | None = None) -> str:
