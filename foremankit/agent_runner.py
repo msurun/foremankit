@@ -27,6 +27,7 @@ class RunnerResult:
     reply: str
     timed_out: bool = False
     exit_code: int | None = 0
+    raw: str = ""            # the runner's untouched stdout (JSON): `agent-ask` reads tokens and tool calls from it
 
 
 class Runner(Protocol):
@@ -64,7 +65,7 @@ class AgyRunner:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
         except FileNotFoundError as error:
             raise RunnerError(f"agy binary not found: {command[0]}") from error
-        return RunnerResult(_reply_of(done.stdout, done.returncode), exit_code=done.returncode)
+        return RunnerResult(_reply_of(done.stdout, done.returncode), exit_code=done.returncode, raw=done.stdout or "")
 
 
 class OpenCodeRunner:
@@ -91,7 +92,7 @@ class OpenCodeRunner:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
         except FileNotFoundError as error:
             raise RunnerError(f"opencode binary not found: {self.binary}") from error
-        return RunnerResult(_opencode_reply(done.stdout, done.returncode), exit_code=done.returncode)
+        return RunnerResult(_opencode_reply(done.stdout, done.returncode), exit_code=done.returncode, raw=done.stdout or "")
 
 
 def _opencode_reply(stdout: str, exit_code: int) -> str:
