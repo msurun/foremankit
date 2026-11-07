@@ -205,11 +205,25 @@ foremankit delegate "Napisz testy dla verify.py" --kind bulk_code --files forema
 - The file is changed **only** when the command passes. Otherwise the original comes back (a new file is deleted). The result shows `verify: PASSED ...` or `verify: FAILED ... was restored`.
 - Safety: the command must start with a prefix from `routing.yaml → verify.allowed_commands` (`python -m pytest`, `.venv/Scripts/python -m pytest`, `.venv/bin/python -m pytest`, `pytest`, `python -m ruff check`, `ruff check`). `verify_target` is a plain relative file inside the project (never `.env`, `.git`, `.ssh`). A bad inference is rejected before you pay for the model, and a command that fails to start ends the loop immediately.
 - Paths are resolved from the process working directory: the MCP server works in the Claude session folder, and the CLI in the folder you launch it from.
+## Agent runs
+
+Install with `python install.py --agent-run` (opt-in; `--dry` previews; `--restore-original` restores). It creates `~/.local/bin/fk` and `fk.cmd`; add that directory to PATH if warned. From another project use `fk ... --project <repo>`; wrappers invoke this installation's venv. Claude permissions cover Bash and PowerShell for the seven worker commands, never agent-merge; the lead must read the added rules.
+
+Default automatic order: codex -> opencode -> agy for normal data, Codex then agy for internal. Configure `agent_run.auto_order` in `config/routing.yaml`. Explicit agent-run defaults to agy, so choose `--runner codex` for Codex first; batch `runner: auto` follows configuration. Fallback skips disabled, temporarily paused or twice-failed runners. Private data stays with the lead only; internal goes only to eligible codex/agy (`agent_run.codex.max_sensitivity: internal`); opencode is normal only.
+
+The VS Code panel has an Agent runs master switch and per-runner switches, temporary quota pauses with Try now, and a Claude usage gauge (baseline and delta). Codex shares the owner's ChatGPT limit. Limit pauses expire on their own, never permanently; pinned/unavailable tasks become `waiting` with `retry_after`. Resume with `fk agent-run-batch --plan tasks/plan.yaml --project ../repo --resume batch.json --report-out batch.json`; passed tasks are skipped.
+
+Project `AGENTS.md` and coding conventions are injected into runs. `agent_run.conventions_check` selects warn/fail/off for changed Python. Review requires a different known author/reviewer vendor (`review.require_other_vendor`, `foremankit/vendors.py`): Codex is OpenAI, agy Google, opencode follows its model (usually DeepSeek). Unknown vendors cannot establish independence. A different runner name alone is insufficient.
+
+Agents never merge or push. Only `agent-merge` merges, always after lead review of the diff and checks; REVIEW REQUIRED needs `--reviewed`. Autopilot writes `autopilot-report.md` with suggested merge commands for the lead and retains waiting retry times. It never accepts branches automatically.
+
 ### agent-run (multi-file agent tasks)
 
 ```
-foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope GLOB] --check "<allowed check command>" [--runner codex|opencode|agy] [--model alias] [--sensitivity normal|internal] [--timeout 1800] [--check-cwd DIR] [--keep-worktree] [--json]
+foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope GLOB] --check "<allowed check command>" [--runner codex|opencode|agy] [--model alias] [--sensitivity normal|internal] [--timeout 1800] [--check-cwd DIR] [--keep-worktree] [--base BASE] [--json]
 ```
+
+Example: `fk agent-run --task-file task.md --project ../repo --scope "src/*.py" --check "python -m pytest" --runner codex`.
 
 - The agent works in its own git worktree on branch `agent-run/<id>`.
 - `agent_run.conventions: true` adds the coding standard and teaching-comment guidance to the prompt; project overrides win.
@@ -221,9 +235,11 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 - Private data is refused. opencode accepts `normal` only; Codex accepts `internal` when `agent_run.codex.max_sensitivity: internal` (missing defaults to `normal`); agy accepts `internal`.
 - All three runners start with stdin closed and `PWD` set to the run folder; see [runner traps](docs/codex-runner.md).
 - Exit codes: 0 PASS, 1 FAIL, 2 refused.
-- Merge after review: use `agent-merge` below (or `git merge --no-ff agent-run/<id>`).
+- Merge after review: use `agent-merge` below.
 
 ### agent-run-batch and agent-merge (several tasks, then review and merge)
+
+Example: `fk agent-run-batch --plan tasks/plan.yaml --project ../repo --report-out batch.json`.
 
 A YAML plan lists tasks: `id`, `task_file` (relative to the plan), `scope`, `check`, and optionally `runner` (`auto|agy|opencode|codex`), `model`, `sensitivity` (`normal|internal`) and `depends_on`:
 
@@ -243,7 +259,7 @@ tasks:
 ```
 
 ```
-foremankit agent-run-batch --plan plan.yaml --project <repo root> [--report-out batch.json]
+foremankit agent-run-batch --plan plan.yaml --project <repo root> [--report-out batch.json] [--resume REPORT]
 foremankit agent-merge --project <repo root> --report batch.json --id TASK [--reviewed] [--verdict merged|merged_after_fix] [--blockers N] [--check "<allowed check>"] [--reject]
 ```
 
@@ -274,13 +290,87 @@ The order is a hypothesis from small samples: revisit it after a week of data.
 Judge runners by the clean-merge rate (`agent_run_review` events), not by the check
 alone; review every branch before merging.
 
-- Report statuses: `passed` (check green), `failed` (check red), `refused` (privacy or runner refusal), `quota_exhausted` (agy limit hit; agy pauses for the cooldown), `skipped` (a dependency did not pass, or the quota check refused the start), `not_for_runner` (auto chose haiku/lead, so no agent branch exists).
+- Report statuses: `passed` (check green), `failed` (check red), `refused` (privacy or runner refusal), `waiting` (temporary limit pause with `retry_after`), `quota_exhausted` (limit hit; runner pauses for the cooldown), `skipped` (a dependency did not pass, or the quota check refused the start), `not_for_runner` (auto chose haiku/lead, so no agent branch exists).
 - `agent-run-batch` exits 0 only when every task passed; `--report-out` writes the JSON that `agent-merge` reads.
 
 `agent-merge` merges one branch from the report and refuses unless: the run passed, `--reviewed` was given when the report says REVIEW REQUIRED, the files of the branch have no uncommitted local changes, and no merge is already in progress. A conflict is aborted (`git merge --abort`) and reported; nothing is ever pushed. `--check` re-runs a check on the merged tree; when it fails the merge is **kept** (undo with `git reset --hard ORIG_HEAD`) and the branch stays for you to fix.
 
 - `--verdict merged|merged_after_fix`, `--blockers N` and `--reject` log the lead's decision as an `agent_run_review` event; the clean-merge rate is `merged` divided by all reviews.
 - The review of the diff stays mandatory: read the branch diff before merging, then record what you found in the verdict.
+
+### agent-merge
+
+Record the lead decision and merge or reject a reviewed branch.
+
+```text
+foremankit agent-merge --project PROJECT --report REPORT --id ID [--reviewed] [--reject] [--verdict {merged,merged_after_fix}] [--blockers BLOCKERS] [--check CHECK]
+```
+
+```sh
+fk agent-merge --project ../repo --report batch.json --id api --reviewed
+```
+
+### agent-ask
+
+Ask one read-only question; changes fail and are reverted.
+
+```text
+foremankit agent-ask --task-file TASK_FILE --project PROJECT --runner {agy,opencode,codex} [--model MODEL] [--timeout TIMEOUT] [--sensitivity {normal,internal}] [--raw-dir RAW_DIR] [--json]
+```
+
+```sh
+fk agent-ask --task-file question.md --project ../repo --runner codex --json
+```
+
+### agent-ask-batch
+
+Ask every .md/.txt question and save one JSON result per question.
+
+```text
+foremankit agent-ask-batch --tasks-dir TASKS_DIR --out-dir OUT_DIR --runner {agy,opencode,codex} --project PROJECT [--model MODEL] [--timeout TIMEOUT] [--sensitivity {normal,internal}]
+```
+
+```sh
+fk agent-ask-batch --tasks-dir questions --out-dir answers --project ../repo --runner codex
+```
+
+### agent-review
+
+Review a branch or report entry without accepting it. Use `agent-run/branch` with `--report` to identify the author, or `report.json#task-id`. Auto prefers Codex, then agy, then opencode with a different known vendor. `--json` returns findings and severity counts.
+
+```text
+foremankit agent-review [--reviewer {auto,codex,agy,opencode}] [--project PROJECT] [--report REPORT] [--json] source
+```
+
+```sh
+fk agent-review batch.json#api --project ../repo --reviewer agy --json
+```
+
+### agent-plan
+
+Draft task Markdown and a validated plan.yaml; inspect lead_items.md. Pass goal text or `@goal.md`. An available read-only planner defaults to Codex first; existing output files are never overwritten. The lead reviews tasks and lead_items.md before running agent-run-batch.
+
+```text
+foremankit agent-plan [--project PROJECT] --out OUT [--planner {auto,codex,agy,opencode}] [--sensitivity {normal,internal}] [--max-tasks MAX_TASKS] [--json] goal
+```
+
+```sh
+fk agent-plan @goal.md --project ../repo --out tasks/export --planner codex
+```
+
+### agent-autopilot
+
+Plan, run, review with another vendor, try one bounded fix round by default, then report to the lead. `--plan-only` stops after planning; `--max-fix-rounds 0` disables repairs.
+
+```text
+foremankit agent-autopilot [--project PROJECT] --work WORK [--plan-only] [--max-fix-rounds MAX_FIX_ROUNDS] [--json] goal
+```
+
+```sh
+fk agent-autopilot @goal.md --project ../repo --work ../autopilot-work --plan-only
+```
+
+## Code quality
 
 ### One coding standard (clean code)
 
@@ -524,9 +614,3 @@ foremankit is an independent project and is not affiliated with or endorsed by A
   - Weaker models’ tool‑calling quality still needs smoke‑testing (e.g., 10 edits, a delegate call, router status).
 
 Reviews always use another vendor: agy, gemini and gemini_free are Google; Codex is OpenAI; opencode follows its model (normally DeepSeek); deepseek is DeepSeek; kaggle and llm are local. Groq, OpenRouter, Mistral and Cerebras use their operator names and never serve as reviewers. Agent-run branches written by Codex (OpenAI) need Claude (Anthropic) or another vendor; agy (Google) work needs Codex; opencode (DeepSeek) work needs Codex or agy. Unknown vendors cannot establish independence; unavailable independent reviews are skipped. `review.require_other_vendor: false` restores name-based exclusion.
-
-`agent-review` reads an agent branch without accepting it: `foremankit agent-review agent-run/example --report report.json --reviewer auto`. Auto prefers Codex, then agy, then opencode, and requires a different known vendor from the author. Use `report.json#task-id` to select a report entry, and `--json` for findings and severity counts.
-
-`foremankit agent-plan "Add CSV export with tests" --project . --out tasks/export` asks an available read-only planner (Codex first) to draft task Markdown and a validated `plan.yaml`. Use `@goal.md` for a goal file, `--planner` to select a runner, or `--json` for structured results. Claude reviews the tasks and any `lead_items.md` before running `foremankit agent-run-batch --plan tasks/export/plan.yaml --project .`; existing output files are never overwritten.
-
-`foremankit agent-autopilot "Implement the goal" --project . --work ../autopilot-work` plans tasks, runs them, requests independent vendor reviews and attempts one bounded fix round. Claude reads `autopilot-report.md` and decides which branches to merge using the suggested commands. Use `--plan-only` to inspect the plan, `--max-fix-rounds 0` to disable repairs, or `--json` for structured results; waiting tasks retain their retry time for `agent-run-batch --resume`.
