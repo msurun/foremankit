@@ -70,13 +70,16 @@ class _BatchState:
         configured_runners = set(agent_switch.RUNNERS) | {task.runner for task in tasks if task.runner != "auto"}
         for runner in configured_runners:
             slot_count = agent_quota.slots(self.context.settings, runner)
-            self.semaphores[runner] = threading.Semaphore(slot_count)
+            if slot_count > 0:
+                self.semaphores[runner] = threading.Semaphore(slot_count)
 
     def get_semaphore(self, runner: str) -> threading.Semaphore:
         """Retrieve or create the concurrency semaphore for a runner."""
         with self.quota_lock:
             if runner not in self.semaphores:
                 slot_count = agent_quota.slots(self.context.settings, runner)
+                if slot_count == 0:
+                    raise ValueError(f"{runner} has max_parallel 0; choose an available runner")
                 self.semaphores[runner] = threading.Semaphore(slot_count)
             return self.semaphores[runner]
 
@@ -179,7 +182,7 @@ def _resolve_runner(task: PlanTask, text: str, state: _BatchState,
     if task.runner != "auto":
         return task.runner, None
     pauses = _runner_pauses(state)
-    unavailable = state.context.disabled_runners | exhausted | pauses.keys()
+    unavailable = _unavailable_runners(state) | exhausted | pauses.keys()
     facts = RunnerFacts(task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
                         agy_enabled="agy" not in unavailable, codex_enabled="codex" not in unavailable,
                         opencode_enabled="opencode" not in unavailable,
@@ -207,7 +210,7 @@ def _paused_fallback(
     # A pause must not revive a disabled, disallowed, or twice-failed runner.
     candidates = [(until, runner) for runner, until in pauses.items()
                   if runner in allowed and runner in order
-                  and runner not in state.context.disabled_runners
+                  and runner not in _unavailable_runners(state)
                   and failures.get(runner, 0) < MAX_RUNNER_FAILURES]
     if not candidates:
         return None
@@ -222,6 +225,13 @@ def _runner_pauses(state: _BatchState) -> dict[str, float]:
         now = state.context.clock()
         info = {runner: agent_quota.pause_info(quota, runner, now) for runner in agent_switch.RUNNERS}
         return {runner: item["until"] for runner, item in info.items() if item["paused"]}
+
+
+def _unavailable_runners(state: _BatchState) -> frozenset[str]:
+    """Exclude zero-capacity runners from both selection and paused fallback."""
+    without_slots = frozenset(runner for runner in agent_switch.RUNNERS
+                              if agent_quota.slots(state.context.settings, runner) == 0)
+    return state.context.disabled_runners | without_slots
 
 
 def _waiting(task: PlanTask, runner: str, until: float) -> dict:
@@ -262,6 +272,8 @@ def _run_with_slots(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
     # We acquire the runner's semaphore slot, check the quota under lock, and call run_one.
     if plan.runner in state.context.disabled_runners:
         return _task_entry(plan.task.id, plan.runner, "skipped", f"{plan.runner} is switched off in the panel")
+    if agent_quota.slots(state.context.settings, plan.runner) == 0:
+        return _task_entry(plan.task.id, plan.runner, "skipped", f"{plan.runner} has max_parallel 0")
     semaphore = state.get_semaphore(plan.runner)
     with semaphore:
         quota_rejection = _check_and_record_quota(plan, state)

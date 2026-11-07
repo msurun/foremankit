@@ -42,10 +42,10 @@ def state_path() -> Path:
 
 
 def slots(settings: dict, runner: str) -> int:
-    """How many runs of `runner` may run in parallel (per-runner defaults when not configured)."""
+    """Return parallel capacity, clamping negative values to zero (runner unavailable)."""
     configured = settings.get("max_parallel") or {}
     value = configured.get(runner, DEFAULT_MAX_PARALLEL.get(runner, DEFAULT_SLOTS))
-    return int(value)
+    return max(0, int(value))
 
 
 def is_quota_error(text: str | None) -> bool:

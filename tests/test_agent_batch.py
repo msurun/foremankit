@@ -5,6 +5,8 @@ and dependency propagation under simulated runner conditions.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -16,6 +18,56 @@ import pytest
 from foremankit.agent_batch import BatchContext, run_batch
 from foremankit.agent_plan import PlanError, PlanTask
 from foremankit.agent_run import AgentRunError, AgentRunJob
+
+BATCH_TIMEOUT_S = 5
+
+
+@pytest.mark.parametrize("slot_count", [0, -2])
+def test_nonpositive_slots_skip_without_waiting(tmp_path: Path, slot_count: int) -> None:
+    """An unavailable runner must return promptly without dispatching or counting quota."""
+    script = """
+import json
+import sys
+from pathlib import Path
+from foremankit.agent_batch import BatchContext, run_batch
+from foremankit.agent_plan import PlanTask
+root = Path(sys.argv[1])
+(root / 'task.md').write_text('task')
+context = BatchContext(root, root, lambda job: sys.exit('runner was dispatched'),
+                       {'max_parallel': {'codex': int(sys.argv[2])}}, root / 'quota.json')
+task = PlanTask(id='task', task_file='task.md', scope=('a.py',), check='pytest', runner='codex')
+print(json.dumps(run_batch([task], context)))
+"""
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path), str(slot_count)],
+                               capture_output=True, text=True, check=True, timeout=BATCH_TIMEOUT_S)
+    entry = json.loads(completed.stdout)["tasks"][0]
+    assert entry["status"] == "skipped"
+    assert entry["reason"] == "codex has max_parallel 0"
+    assert not (tmp_path / "quota.json").exists()
+
+
+@pytest.mark.parametrize("slot_count", [0, -2])
+def test_auto_tasks_avoid_runners_without_slots(tmp_path: Path, slot_count: int) -> None:
+    """Automatic routing excludes runners with no capacity before requesting a slot."""
+    context = _make_context(tmp_path, lambda job: {"passed": True},
+                            settings={"max_parallel": {"codex": slot_count}})
+    task = PlanTask(id="task", task_file=_create_task_file(tmp_path, "task.md"),
+                    scope=("a.py",), check="pytest")
+    # Fail immediately on a zero-capacity semaphore instead of hanging this test process.
+    assert_auto_runner_has_capacity(context)
+    entry = run_batch([task], context)["tasks"][0]
+    assert entry["status"] == "passed"
+    assert entry["runner"] == "opencode"
+
+
+def assert_auto_runner_has_capacity(context: BatchContext) -> None:
+    """Check routing independently so a regression cannot block the test worker."""
+    from foremankit.agent_batch import _BatchState, _resolve_runner
+
+    task = PlanTask(id="task", task_file="task.md", scope=("a.py",), check="pytest")
+    runner, refusal = _resolve_runner(task, "task", _BatchState(context, [task]))
+    assert refusal is None
+    assert runner == "opencode"
 
 
 def _create_task_file(plan_dir: Path, filename: str, content: str = "task content") -> str:

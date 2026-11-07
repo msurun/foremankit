@@ -51,6 +51,12 @@ def test_slots_configured() -> None:
     assert slots(settings, "unlisted") == 1
 
 
+@pytest.mark.parametrize("slot_count", [0, -2])
+def test_nonpositive_slots_mean_no_capacity(slot_count: int) -> None:
+    """Zero disables a runner and negative configuration is clamped to zero."""
+    assert slots({"max_parallel": {"codex": slot_count}}, "codex") == 0
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
