@@ -219,8 +219,10 @@ agent_run:
     binary: ~/AppData/Local/Programs/ai.opencode.desktop/resources/opencode-cli.exe
     default_model: opencode/deepseek-v4.1-flash-free
   # Codex CLI 0.164.0-alpha.11.1, found in the VS Code extension on 2026-11-06.
-  # Owner's subscription; normal data only, explicitly selected with --runner codex or runner: codex.
+  # Owner allowed internal data for Codex on 2026-11-07; private data is never allowed.
+  # ChatGPT data-controls setting ("improve the model") is the owner's responsibility.
   codex:
+    max_sensitivity: internal  # normal or internal; defaults to normal when missing
     # Binary is a pattern; the newest extension version is used.
     binary: ~/.vscode/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe
     default_model: gpt-6.1-sol

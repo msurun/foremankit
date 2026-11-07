@@ -66,12 +66,12 @@ CASES = [
                  id="small-edit-to-existing-code"),
     pytest.param(facts(edits_existing_only=True, files=2, changed_lines=41), (), "opencode", "opencode",
                  id="41-lines-are-no-haiku"),
-    pytest.param(facts(sensitivity="internal", scope=("foremankit/**",)), (), "agy", "internal",
-                 id="internal-needs-agy"),
-    pytest.param(facts(sensitivity="internal", opencode_enabled=False, agy_enabled=False), (), "queue", "wait",
+    pytest.param(facts(sensitivity="internal", scope=("foremankit/**",)), (), "codex", "internal",
+                 id="internal-prefers-codex"),
+    pytest.param(facts(sensitivity="internal", codex_enabled=False, agy_enabled=False), (), "queue", "wait",
                  id="internal-without-agy-queues"),
-    pytest.param(facts(sensitivity="internal", files=7), (), "agy", "internal", id="internal-seven-files-agy"),
-    pytest.param(facts(sensitivity="internal", opencode_enabled=True), (), "agy", "agy",
+    pytest.param(facts(sensitivity="internal", files=7), (), "codex", "internal", id="internal-seven-files-codex"),
+    pytest.param(facts(sensitivity="internal", opencode_enabled=True), (), "codex", "codex",
                  id="internal-never-opencode"),
     pytest.param(facts(opencode_failures=2), (), "codex", "twice", id="two-opencode-failures-escalate"),
     pytest.param(facts(opencode_failures=1), (), "opencode", "opencode", id="one-failure-stays-opencode"),
@@ -112,12 +112,18 @@ def test_the_scope_default_is_empty_and_a_review_glob_is_optional() -> None:
     assert picked == "opencode"
 
 
-@pytest.mark.parametrize("codex_enabled", [False, True])
-def test_internal_routing_ignores_codex(codex_enabled: bool) -> None:
-    """Internal data uses agy or waits, regardless of Codex availability."""
-    assert decide_runner(facts(codex_enabled=codex_enabled, sensitivity="internal"))[0] == "agy"
-    picked, reasons = decide_runner(facts(
-        codex_enabled=codex_enabled, sensitivity="internal", agy_enabled=False,
-    ))
-    assert picked == "queue"
-    assert "wait" in " ".join(reasons)
+@pytest.mark.parametrize("overrides, expected, reason", [
+    ({}, "codex", "internal data may go to codex or agy: codex is faster"),
+    ({"codex_enabled": False}, "agy", "internal data: codex is switched off, agy takes it"),
+    ({"codex_enabled": False, "agy_enabled": False}, "queue",
+     "internal data may only go to codex or agy: the task waits"),
+    ({"codex_failures": 1}, "codex", "internal data may go to codex or agy: codex is faster"),
+    ({"codex_failures": 2}, "agy", "codex failed this task twice: escalate to agy"),
+    ({"codex_failures": 2, "agy_enabled": False}, "lead",
+     "codex failed this task twice: escalation is exhausted"),
+])
+def test_internal_routing_order_and_escalation(overrides, expected, reason):
+    """Internal routing uses codex then agy, never opencode even when enabled."""
+    picked, reasons = decide_runner(facts(sensitivity="internal", **overrides))
+    assert picked == expected and picked != "opencode"
+    assert reasons == [reason]

@@ -338,7 +338,8 @@ def test_real_routing_codex_binary_is_a_pattern():
     """The repository routing YAML loads and retains the version-independent binary setting."""
     routing = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "routing.yaml").read_text(encoding="utf-8"))
     assert "*" in routing["agent_run"]["codex"]["binary"]
-    assert routing["agent_run"]["quota"]["codex"] == {"cooldown_on_error_s": 1800}
+    assert routing["agent_run"]["codex"]["max_sensitivity"] == "internal"
+    assert routing["agent_run"]["quota"]["codex"] == {"backoff_s": [1800, 3600, 7200, 18000]}
 
 
 def test_make_runner_builds_agy_and_refuses_unknown_names():
@@ -520,7 +521,7 @@ def test_make_runner_builds_codex_from_routing():
 
 
 def test_codex_eligibility_and_start_failures(tmp_path):
-    """Internal/private data never reaches Codex; timeouts and missing binaries follow the runner contract."""
+    """Codex defaults to normal data; timeouts and missing binaries follow the runner contract."""
     runner = CodexRunner("codex.exe", "m")
     assert [runner.eligible(level) for level in ("normal", "internal", "private", "unknown")] == [True, False, False, False]
     runner = CodexRunner("codex.exe", "m", agy_popen(raises=subprocess.TimeoutExpired(cmd="codex", timeout=1)))
@@ -568,3 +569,39 @@ def test_nested_repository_left_by_the_agent_is_reverted_not_fatal(tmp_path, rep
     assert any("pytest-of-x" in item for item in report["reverted"])
     assert "pytest-of-x" not in git(repo, "ls-tree", "-r", "--name-only", report["branch"])
     assert git(repo, "worktree", "list").count("\n") == 1
+
+
+@pytest.mark.parametrize("max_sensitivity", ["normal", "internal"])
+@pytest.mark.parametrize("sensitivity", ["normal", "internal", "private", "unknown"])
+def test_codex_eligibility_matrix(max_sensitivity, sensitivity):
+    """Only explicitly configured internal data widens the normal-only default."""
+    runner = CodexRunner("codex.exe", "m", max_sensitivity=max_sensitivity)
+    expected = sensitivity == "normal" or (sensitivity == max_sensitivity == "internal")
+    assert runner.eligible(sensitivity) is expected
+
+
+@pytest.mark.parametrize("ceiling", [None, "normal", "internal"])
+def test_make_runner_codex_sensitivity_setting(ceiling):
+    """Factory settings reach eligibility, defaulting to normal when absent."""
+    settings = {"binary": "codex.exe", "default_model": "m"}
+    if ceiling is not None:
+        settings["max_sensitivity"] = ceiling
+    runner = make_runner("codex", {"routing": {"agent_run": {"codex": settings}}})
+    assert runner.max_sensitivity == (ceiling or "normal")
+    assert runner.eligible("internal") is (ceiling == "internal")
+
+
+@pytest.mark.parametrize("ceiling", ["normal", "internal"])
+def test_agent_run_codex_internal_eligibility(tmp_path, repo, ceiling):
+    """The real run gate consults Codex eligibility before sending any internal prompt."""
+    fake = FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"})
+    fake.name = "codex"
+    fake.eligible = CodexRunner("unused.exe", "m", max_sensitivity=ceiling).eligible
+    if ceiling == "normal":
+        with pytest.raises(AgentRunError, match="codex may not receive internal"):
+            run_job(tmp_path, fake, sensitivity="internal")
+        assert fake.prompts == []
+        assert not (tmp_path / "tmpdir" / "foremankit-agent-run").exists()
+    else:
+        assert run_job(tmp_path, fake, sensitivity="internal")["passed"]
+        assert len(fake.prompts) == 1

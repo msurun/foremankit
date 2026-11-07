@@ -66,7 +66,7 @@ worktree and the main repository's shared `.venv/Scripts/python`:
 
 ## Where Codex sits in the order
 
-For `normal` data, auto uses opencode -> codex -> agy; `internal` uses agy only, never `private`.
+For `normal` data, auto uses opencode -> codex -> agy; `internal` uses codex, then agy, never `private`.
 opencode (free models) defaults to small/medium tasks; Codex takes big tasks (6+ files,
 a lot of context or a long task text), or escalation after two opencode failures.
 After two Codex failures, or with Codex off, agy is the last escalation/fallback.
@@ -74,6 +74,10 @@ Pin `runner: codex|opencode|agy`; `runner: auto` follows that order.
 The VS Code **Agent runs** switches and master switch control all three; batch/auto skip disabled runners.
 Measured 2026-11-06/07, not guaranteed: opencode 15-80 s, clean so far; Codex 6-25 s;
 agy (Google AI Pro) about 10 minutes/slice plus ~3 minutes start-up.
+Codex accepts `normal` data and `internal` only with `agent_run.codex.max_sensitivity: internal`
+(values: `normal` or `internal`; missing defaults to `normal`). The owner allowed internal data
+on 2026-11-07; the ChatGPT data-controls setting ("improve the model") is the owner's
+responsibility. opencode remains `normal` only because free models may train on prompts.
 Codex uses the owner's ChatGPT subscription and model from `config/routing.yaml`;
 quota is unknown, error cooldown configured, no daily limit yet; agy's daily 15 is a guess.
 opencode and Codex run `graphify`; agy's sandbox prevents it. All three close stdin and set `PWD` to the run folder (traps above).

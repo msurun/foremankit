@@ -216,7 +216,7 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 - The check is re-run by foremankit with `PYTHONPATH` pointing at the worktree, because editable installs otherwise resolve the main checkout.
 - The patch is committed on the branch and the worktree is removed (kept with `--keep-worktree`).
 - A changed path matching `agent_run.review_paths` in `config/routing.yaml` prints REVIEW REQUIRED.
-- Private data is refused. opencode and Codex accept `normal` data only; agy alone accepts `internal`.
+- Private data is refused. opencode accepts `normal` only; Codex accepts `internal` when `agent_run.codex.max_sensitivity: internal` (missing defaults to `normal`); agy accepts `internal`.
 - All three runners start with stdin closed and `PWD` set to the run folder; see [runner traps](docs/codex-runner.md).
 - Exit codes: 0 PASS, 1 FAIL, 2 refused.
 - Merge after review: use `agent-merge` below (or `git merge --no-ff agent-run/<id>`).
@@ -250,7 +250,7 @@ foremankit agent-merge --project <repo root> --report batch.json --id TASK [--re
 Automatic order for `normal` data: opencode -> codex -> agy.
 Start with opencode for small and medium tasks; after 2 failures, or for a big task
 (6+ files, a lot of context, or a long task text), use Codex. After Codex fails
-twice, or when Codex is switched off, use agy. `internal` data goes to agy only;
+twice, or when Codex is switched off, use agy. `internal` data uses codex, then agy after two Codex failures or when Codex is off;
 no runner accepts `private` data. Pin a plan with `runner: codex|opencode|agy`;
 `runner: auto` follows this order.
 
@@ -259,8 +259,11 @@ Measurements from 2026-11-06/07 (small samples, not guarantees):
 | Runner | Role and data | Observed time and constraints |
 |---|---|---|
 | opencode (free models) | Default for small/medium tasks; `normal` only | Typically 15-80 s; clean so far; runs `graphify` |
-| Codex (owner's ChatGPT subscription; model from `config/routing.yaml`) | Big tasks and second escalation step; `normal` only | Typically 6-25 s; runs `graphify`; quota unknown, cooldown after an error configured, no daily limit yet |
-| Antigravity / agy (Google AI Pro subscription) | Last escalation step, fallback when Codex is off; only runner allowed `internal`, never `private` | About 10 minutes per slice plus ~3 minutes start-up; `graphify` does not work under its sandbox; daily limit 15 is a guess |
+| Codex (owner's ChatGPT subscription; model from `config/routing.yaml`) | Big tasks and second escalation step; `normal` and configured `internal` | Typically 6-25 s; runs `graphify`; quota unknown, cooldown after an error configured, no daily limit yet |
+| Antigravity / agy (Google AI Pro subscription) | Last escalation step, fallback when Codex is off; accepts `internal`, never `private` | About 10 minutes per slice plus ~3 minutes start-up; `graphify` does not work under its sandbox; daily limit 15 is a guess |
+
+The owner allowed internal data for Codex on 2026-11-07. The ChatGPT data-controls
+setting ("improve the model") is the owner's responsibility; this configuration does not change it.
 
 Each runner can be switched on/off in the VS Code panel's **Agent runs** section,
 and all three with its master switch. The batch and `auto` skip switched-off runners.

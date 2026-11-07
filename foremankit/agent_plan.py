@@ -127,7 +127,7 @@ def _validate_runner_fields(raw: dict[str, Any], task_id: str) -> tuple[str, str
 
 
 def _validate_sensitivity(raw: dict[str, Any], task_id: str, runner: str) -> str:
-    """Refuse private data and keep internal data on agy or automatic routing."""
+    """Refuse private data and allow internal data on codex, agy or automatic routing."""
     sensitivity = raw.get("sensitivity", DEFAULT_SENSITIVITY)
     if sensitivity == "private":
         raise PlanError(f"task '{task_id}': private data never goes to a runner")
@@ -135,7 +135,7 @@ def _validate_sensitivity(raw: dict[str, Any], task_id: str, runner: str) -> str
         raise PlanError(
             f"task '{task_id}' invalid sensitivity '{sensitivity}', must be normal or internal"
         )
-    if sensitivity == "internal" and runner in ("opencode", "codex"):
+    if sensitivity == "internal" and runner == "opencode":
         raise PlanError(f"task '{task_id}': internal data may never go to {runner}")
     return sensitivity
 
