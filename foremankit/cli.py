@@ -387,7 +387,14 @@ def _batch_context(plan: Path, project: Path) -> Any:
     settings = load_config()["routing"].get("agent_run", {})
     return BatchContext(project=project, plan_dir=plan.resolve().parent, run_one=agent_run, settings=settings,
                         state_path=agent_quota.state_path(), review_globs=settings.get("review_paths", []),
-                        tracked=_tracked_files(project))
+                        tracked=_tracked_files(project), disabled_runners=_disabled_runners())
+
+
+def _disabled_runners() -> frozenset[str]:
+    """Runners switched off in the panel (all of them when agent runs are off as a whole)."""
+    from foremankit import agent_switch
+    from foremankit.state import StateStore
+    return agent_switch.disabled_runners(StateStore().load())
 
 
 def _tracked_files(project: Path) -> list[str]:

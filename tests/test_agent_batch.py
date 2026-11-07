@@ -174,9 +174,9 @@ def test_daily_limit_skips_second_task_when_exceeded(tmp_path: Path) -> None:
     t1 = PlanTask(id="agy1", task_file=f1, scope=("a.py",), check="pytest", runner="agy")
     t2 = PlanTask(id="agy2", task_file=f2, scope=("b.py",), check="pytest", runner="agy")
     report = run_batch([t1, t2], context)
-    assert report["tasks"][0]["status"] == "passed"
-    assert report["tasks"][1]["status"] == "skipped"
-    assert "daily limit" in report["tasks"][1]["reason"]
+    by_status = {entry["status"]: entry for entry in report["tasks"]}   # which thread gets the only slot first is not fixed
+    assert sorted(entry["status"] for entry in report["tasks"]) == ["passed", "skipped"]
+    assert "daily limit" in by_status["skipped"]["reason"]
 
 
 def test_auto_runner_resolves_to_not_for_runner_for_review_glob_and_runner_otherwise(
@@ -317,3 +317,22 @@ def test_run_entry_carries_what_agent_merge_needs(tmp_path: Path) -> None:
     entry = run_batch([task], _make_context(tmp_path, run_one))["tasks"][0]
     assert entry["passed"] is True and entry["run_id"] == "x" and entry["model"] == "m"
     assert entry["review_required"] is True and entry["review_paths"] == ["gateway/**"]
+
+
+def test_disabled_runner_is_skipped_without_calling_run_one(tmp_path: Path) -> None:
+    """A runner switched off in the panel gets `skipped`, no quota run is counted, the other runner still runs."""
+    files = [_create_task_file(tmp_path, f"t{n}.md") for n in (1, 2)]
+    calls: list[str] = []
+
+    def run_one(job: AgentRunJob) -> dict[str, Any]:
+        calls.append(job.runner)
+        return {"passed": True, "branch": "b", "files": []}
+
+    context = _make_context(tmp_path, run_one)
+    context = BatchContext(**{**context.__dict__, "disabled_runners": frozenset({"agy"})})
+    tasks = [PlanTask(id="a", task_file=files[0], scope=("a.py",), check="pytest", runner="agy"),
+             PlanTask(id="o", task_file=files[1], scope=("o.py",), check="pytest", runner="opencode")]
+    entries = {entry["id"]: entry for entry in run_batch(tasks, context)["tasks"]}
+    assert entries["a"]["status"] == "skipped" and "switched off" in entries["a"]["reason"]
+    assert entries["o"]["status"] == "passed" and calls == ["opencode"]
+    assert "agy" not in json.loads(context.state_path.read_text())

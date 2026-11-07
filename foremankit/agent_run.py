@@ -15,11 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_git as vcs
+from . import agent_switch
 from .agent_runner import Runner, RunnerError, RunnerResult, make_runner
 from .agent_scope import Change, review_reasons, split_by_scope
 from .agy_provider import MAX_PROMPT_CHARS
 from .config import load_config
-from .state import CallLog
+from .state import CallLog, StateStore
 from .verify import VerifyError, check_folder, run_command, split_command
 
 TASK_FILE = ".agent-task.md"
@@ -69,6 +70,9 @@ def _refuse(job: AgentRunJob, runner: Runner) -> None:
     """Refuse before anything is created: private data, empty scope or task, a runner that may not see this data."""
     if job.sensitivity == "private" or not runner.eligible(job.sensitivity):
         raise AgentRunError(f"{runner.name} may not receive {job.sensitivity} data")
+    switched_off = agent_switch.refusal(StateStore().load(), runner.name) if runner.name in agent_switch.RUNNERS else ""
+    if switched_off:
+        raise AgentRunError(switched_off)
     if not job.scope:
         raise AgentRunError("at least one --scope pattern is required")
     if not job.task.strip():

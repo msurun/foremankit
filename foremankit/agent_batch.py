@@ -30,6 +30,7 @@ class BatchContext:
     clock: Callable[[], float] = time.time
     review_globs: Sequence[str] = ()
     tracked: Sequence[str] = ()
+    disabled_runners: frozenset[str] = frozenset()   # switched off in the panel (agent_switch)
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ def _prepare_task(
     if read_error is not None:
         return read_error, None
     assert text is not None
-    runner, runner_error = _resolve_runner(task, text, state.context.review_globs)
+    runner, runner_error = _resolve_runner(task, text, state.context)
     if runner_error is not None:
         return runner_error, None
     return None, _TaskPlan(task, text, runner, base, multi_reason)
@@ -160,15 +161,17 @@ def _read_task_text(
 
 
 def _resolve_runner(
-    task: PlanTask, text: str, globs: Sequence[str]
+    task: PlanTask, text: str, context: BatchContext
 ) -> tuple[str, dict[str, Any] | None]:
     """Resolve runner via heuristics if 'auto', returning runner or not_for_runner entry."""
     if task.runner != "auto":
         return task.runner, None
     facts = RunnerFacts(
-        task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check
+        task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
+        agy_enabled="agy" not in context.disabled_runners,
+        opencode_enabled="opencode" not in context.disabled_runners,
     )
-    choice, reasons = decide_runner(facts, globs)
+    choice, reasons = decide_runner(facts, context.review_globs)
     if choice in ("haiku", "lead"):
         first_reason = reasons[0] if reasons else ""
         return choice, _task_entry(task.id, choice, "not_for_runner", first_reason)
@@ -180,6 +183,8 @@ def _run_with_slots(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
     # In plain words:
     # A runner (e.g. agy or opencode) can only run a limited number of tasks in parallel.
     # We acquire the runner's semaphore slot, check the quota under lock, and call run_one.
+    if plan.runner in state.context.disabled_runners:
+        return _task_entry(plan.task.id, plan.runner, "skipped", f"{plan.runner} is switched off in the panel")
     semaphore = state.get_semaphore(plan.runner)
     with semaphore:
         quota_rejection = _check_and_record_quota(plan.runner, state)

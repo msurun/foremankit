@@ -367,3 +367,23 @@ def test_runners_never_inherit_stdin(tmp_path, make):
 
     make(run).run("do it", tmp_path, 5)
     assert seen["stdin"] == subprocess.DEVNULL
+
+
+@pytest.mark.parametrize("target", ["all", "agy"])
+def test_agent_run_refuses_a_runner_switched_off_in_the_panel(tmp_path, repo, target):
+    from foremankit import agent_switch
+    from foremankit.state import StateStore
+    agent_switch.set_switch(StateStore(), target, "off")
+    runner = FakeRunner()
+    runner.name = "agy"
+    with pytest.raises(AgentRunError, match="(?i)switched off"):
+        run_job(tmp_path, runner)
+    assert git(repo, "worktree", "list").count("\n") == 1
+
+
+def test_agent_run_ignores_the_switch_of_the_other_runner(tmp_path, repo):
+    from foremankit import agent_switch
+    from foremankit.state import StateStore
+    agent_switch.set_switch(StateStore(), "opencode", "off")
+    report = run_job(tmp_path, FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"}))
+    assert report["passed"] is True
