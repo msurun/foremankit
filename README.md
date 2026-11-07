@@ -218,7 +218,42 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 - A changed path matching `agent_run.review_paths` in `config/routing.yaml` prints REVIEW REQUIRED.
 - Private data is refused.
 - Exit codes: 0 PASS, 1 FAIL, 2 refused.
-- Merge after review: `git merge --no-ff agent-run/<id>`.
+- Merge after review: use `agent-merge` below (or `git merge --no-ff agent-run/<id>`).
+
+### agent-run-batch and agent-merge (several tasks, then review and merge)
+
+A YAML plan lists tasks: `id`, `task_file` (relative to the plan), `scope`, `check`, and optionally `runner` (`auto|agy|opencode`), `model`, `sensitivity` (`normal|internal`) and `depends_on`:
+
+```yaml
+tasks:
+  - id: api
+    task_file: tasks/api.md
+    scope: ["foremankit/api*"]
+    check: ".venv/Scripts/python -m pytest tests/test_api.py -q"
+    runner: auto
+    sensitivity: normal
+  - id: docs
+    task_file: tasks/docs.md
+    scope: ["docs/api*"]
+    check: "python -m ruff check docs"
+    depends_on: [api]
+```
+
+```
+foremankit agent-run-batch --plan plan.yaml --project <repo root> [--report-out batch.json]
+foremankit agent-merge --project <repo root> --report batch.json --id TASK [--reviewed] [--verdict merged|merged_after_fix] [--blockers N] [--check "<allowed check>"] [--reject]
+```
+
+- Tasks in the same level run in parallel. A dependent task starts from the branch of its **first** dependency (the rest of `depends_on` is only a gate, not a base).
+- Slots per runner (`max_parallel`) and the agy daily quota (`quota.agy`) are in `config/routing.yaml → agent_run`.
+- opencode free models get `normal` data only; `internal` always goes to agy (the plan validator rejects `internal` + opencode).
+- Report statuses: `passed` (check green), `failed` (check red), `refused` (privacy or runner refusal), `quota_exhausted` (agy limit hit; agy pauses for the cooldown), `skipped` (a dependency did not pass, or the quota check refused the start), `not_for_runner` (auto chose haiku/lead, so no agent branch exists).
+- `agent-run-batch` exits 0 only when every task passed; `--report-out` writes the JSON that `agent-merge` reads.
+
+`agent-merge` merges one branch from the report and refuses unless: the run passed, `--reviewed` was given when the report says REVIEW REQUIRED, the files of the branch have no uncommitted local changes, and no merge is already in progress. A conflict is aborted (`git merge --abort`) and reported; nothing is ever pushed. `--check` re-runs a check on the merged tree; when it fails the merge is **kept** (undo with `git reset --hard ORIG_HEAD`) and the branch stays for you to fix.
+
+- `--verdict merged|merged_after_fix`, `--blockers N` and `--reject` log the lead's decision as an `agent_run_review` event; the clean-merge rate is `merged` divided by all reviews.
+- The review of the diff stays mandatory: read the branch diff before merging, then record what you found in the verdict.
 
 ### One coding standard (clean code)
 
