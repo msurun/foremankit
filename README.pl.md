@@ -207,6 +207,116 @@ foremankit delegate "Napisz testy dla verify.py" --kind bulk_code --files forema
 - Bezpieczeństwo: komenda musi zaczynać się od prefiksu z `routing.yaml → verify.allowed_commands` (`python -m pytest`, `.venv/Scripts/python -m pytest`, `.venv/bin/python -m pytest`, `pytest`, `python -m ruff check`, `ruff check`). `verify_target` to zwykły plik względny wewnątrz projektu (nigdy `.env`, `.git`, `.ssh`). Zły wniosek jest odrzucany, zanim zapłacisz za model, a komenda, która się nie uruchamia, kończy pętlę od razu.
 - Ścieżki liczą się od katalogu roboczego procesu: serwer MCP pracuje w folderze sesji Claude, a CLI w folderze, z którego go uruchomisz.
 
+## Zadania agentów
+
+Instalacja: `python install.py --agent-run` jest opcjonalna. `--dry` pokazuje działania, a `--restore-original` przywraca stan. Powstają `~/.local/bin/fk` i `fk.cmd`; po ostrzeżeniu dodaj katalog do PATH. Z innego projektu użyj `fk ... --project <repo>`. Skrypty uruchamiają venv tej instalacji. Uprawnienia Bash i PowerShell obejmują siedem komend roboczych, nigdy agent-merge. Prowadzący powinien przeczytać dodane reguły.
+
+Domyślna kolejność automatyczna: codex -> opencode -> agy dla normal, Codex potem agy dla internal. Ustaw `agent_run.auto_order` w `config/routing.yaml`. Sam agent-run domyślnie wybiera agy; podaj `--runner codex`, aby zacząć od Codex. W planie `runner: auto` stosuje konfigurację. Fallback pomija wykonawców wyłączonych, czasowo wstrzymanych lub po dwóch błędach. Private zostaje wyłącznie u prowadzącego; internal trafia tylko do codex/agy (`agent_run.codex.max_sensitivity: internal`); opencode obsługuje wyłącznie normal.
+
+Panel VS Code ma główny przełącznik Agent runs i przełączniki każdego wykonawcy, czasowe pauzy limitów z Try now oraz wskaźnik użycia Claude (wartość początkowa i przyrost). Codex współdzieli limit ChatGPT właściciela. Pauzy wygasają samoczynnie, nigdy nie są trwałe. Niedostępne zadania przypisane do wykonawcy otrzymują `waiting` i `retry_after`. Wznów: `fk agent-run-batch --plan tasks/plan.yaml --project ../repo --resume batch.json --report-out batch.json`; zaliczone zadania są pomijane.
+
+Projektowy `AGENTS.md` i standard kodu są dołączane do zadań. `agent_run.conventions_check` wybiera warn/fail/off dla zmienionego Pythona. Recenzent musi mieć innego znanego dostawcę niż autor (`review.require_other_vendor`, `foremankit/vendors.py`): Codex to OpenAI, agy Google, a opencode zależy od modelu (zwykle DeepSeek). Nieznany dostawca nie potwierdza niezależności; sama inna nazwa wykonawcy nie wystarcza.
+
+Agenci nigdy nie scalają ani nie wykonują push. Jedyna ścieżka scalenia to `agent-merge`, zawsze po przeglądzie różnic i testów przez prowadzącego. REVIEW REQUIRED wymaga `--reviewed`. Autopilot zapisuje `autopilot-report.md` z propozycjami komend scalenia dla prowadzącego i zachowuje terminy wznowienia. Nie akceptuje gałęzi automatycznie.
+
+### agent-run
+
+Zadanie programistyczne z zakresem plików w osobnym worktree na gałęzi `agent-run/<id>`. Strażnik zakresu cofa zmiany poza `--scope`; ForemanKit sam uruchamia test z `PYTHONPATH` wskazującym worktree. Zapisuje poprawkę na gałęzi i usuwa worktree, chyba że podano `--keep-worktree`. Kody wyjścia: 0 PASS, 1 FAIL, 2 odmowa.
+
+```text
+foremankit agent-run --task-file TASK_FILE --project PROJECT --scope SCOPE --check CHECK [--check-cwd CHECK_CWD] [--runner {agy,opencode,codex}] [--model MODEL] [--timeout TIMEOUT] [--keep-worktree] [--base BASE] [--json] [--sensitivity {normal,internal}]
+```
+
+```sh
+fk agent-run --task-file task.md --project ../repo --scope "src/*.py" --check "python -m pytest" --runner codex
+```
+
+### agent-run-batch
+
+Plan YAML zawiera `id`, `task_file`, `scope`, `check`, opcjonalnie `runner`, `model`, `sensitivity` i `depends_on`. Zadania jednego poziomu działają równolegle. Zadanie zależne zaczyna od gałęzi pierwszej zależności; pozostałe są tylko warunkami startu. `--report-out` zapisuje raport dla agent-merge; kod 0 oznacza zaliczenie wszystkich zadań.
+
+```text
+foremankit agent-run-batch --plan PLAN --project PROJECT [--resume RESUME] [--report-out REPORT_OUT]
+```
+
+```sh
+fk agent-run-batch --plan tasks/plan.yaml --project ../repo --report-out batch.json
+```
+
+### agent-merge
+
+Zapis decyzji prowadzącego i scalenie lub odrzucenie gałęzi po przeglądzie. Odmawia dla niezaliczonego zadania, lokalnych zmian w scalanych plikach lub trwającego scalenia. Konflikt jest przerywany; nie ma push. Błąd `--check` pozostawia scalenie do poprawy. `--verdict`, `--blockers` i `--reject` zapisują ocenę prowadzącego.
+
+```text
+foremankit agent-merge --project PROJECT --report REPORT --id ID [--reviewed] [--reject] [--verdict {merged,merged_after_fix}] [--blockers BLOCKERS] [--check CHECK]
+```
+
+```sh
+fk agent-merge --project ../repo --report batch.json --id api --reviewed
+```
+
+### agent-ask
+
+Jedno pytanie tylko do odczytu; zmiany oznaczają błąd i są cofane.
+
+```text
+foremankit agent-ask --task-file TASK_FILE --project PROJECT --runner {agy,opencode,codex} [--model MODEL] [--timeout TIMEOUT] [--sensitivity {normal,internal}] [--raw-dir RAW_DIR] [--json]
+```
+
+```sh
+fk agent-ask --task-file question.md --project ../repo --runner codex --json
+```
+
+### agent-ask-batch
+
+Pytania z plików .md/.txt; osobny wynik JSON dla każdego pytania.
+
+```text
+foremankit agent-ask-batch --tasks-dir TASKS_DIR --out-dir OUT_DIR --runner {agy,opencode,codex} --project PROJECT [--model MODEL] [--timeout TIMEOUT] [--sensitivity {normal,internal}]
+```
+
+```sh
+fk agent-ask-batch --tasks-dir questions --out-dir answers --project ../repo --runner codex
+```
+
+### agent-review
+
+Przegląd gałęzi lub wpisu raportu bez akceptowania zmian. Podaj `agent-run/branch` wraz z `--report` identyfikującym autora albo `report.json#task-id`. Auto wybiera Codex, agy, potem opencode, wymagając innego znanego dostawcy. `--json` zwraca uwagi i liczbę problemów według wagi.
+
+```text
+foremankit agent-review [--reviewer {auto,codex,agy,opencode}] [--project PROJECT] [--report REPORT] [--json] source
+```
+
+```sh
+fk agent-review batch.json#api --project ../repo --reviewer agy --json
+```
+
+### agent-plan
+
+Szkic zadań Markdown i plan.yaml; sprawdź lead_items.md. Cel to tekst lub `@goal.md`. Planista działa tylko do odczytu, domyślnie zaczyna od Codex i nie nadpisuje istniejących plików wynikowych. Prowadzący sprawdza zadania przed uruchomieniem agent-run-batch.
+
+```text
+foremankit agent-plan [--project PROJECT] --out OUT [--planner {auto,codex,agy,opencode}] [--sensitivity {normal,internal}] [--max-tasks MAX_TASKS] [--json] goal
+```
+
+```sh
+fk agent-plan @goal.md --project ../repo --out tasks/export --planner codex
+```
+
+### agent-autopilot
+
+Planowanie, wykonanie, przegląd przez innego dostawcę, domyślnie jedna runda poprawki i raport dla prowadzącego. `--plan-only` kończy po planowaniu; `--max-fix-rounds 0` wyłącza poprawki.
+
+```text
+foremankit agent-autopilot [--project PROJECT] --work WORK [--plan-only] [--max-fix-rounds MAX_FIX_ROUNDS] [--json] goal
+```
+
+```sh
+fk agent-autopilot @goal.md --project ../repo --work ../autopilot-work --plan-only
+```
+
+## Jakość kodu
+
 ### Jeden standard kodu (clean code)
 
 Cały kod pisany przez foremankit i dla niego ma trzymać te same zasady, niezależnie od narzędzia i sesji: czysty kod wg R. Martina, czytelny dla początkującego programisty (nazwy ujawniające intencję, małe funkcje, brak duplikacji i magicznych wartości, konkretne wyjątki, logika oddzielona od I/O, docstring przy każdym module, klasie i funkcji publicznej, komentarze wyjaśniające **dlaczego**). Pełny tekst to `config/conventions.md`.

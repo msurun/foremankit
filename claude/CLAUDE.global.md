@@ -17,3 +17,5 @@ Secondary (rare):
 - Code standard: R. Martin clean code (functions <=20 lines / 4 params / 3 nesting, docstrings, 2-4 line file header, specific exceptions, no duplication); `foremankit check <file>`; do not reformat untouched code.
 - Start a local LLM server ONLY through `llama/start-llama.cmd` (check `-List` first).
 - Long session at a natural breakpoint: update the handoff (memory/WORKLOG/repo notes: rewrite to current state, drop finished points), then suggest a NEW session once.
+
+Agent commands: `agent-run`, `agent-run-batch`, `agent-merge`, `agent-ask`, `agent-ask-batch`, `agent-review`, `agent-plan`, `agent-autopilot`. Private: lead only; internal: codex/agy; opencode: normal only. Agents never merge or push; only agent-merge after lead review.

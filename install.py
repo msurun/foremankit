@@ -3,6 +3,7 @@
 
   python install.py --dry-run     # show every action/command, change nothing
   python install.py               # venv + package + Claude Code agents/rules/MCP registration
+  python install.py --agent-run   # optional fk wrappers + worker permissions, never merge
   python install.py --local-orchestrator   # also: Claude Code plugin -> gateway -> local LLM (VS Code settings + gateway autostart at logon)
   python install.py --uninstall   # remove what foremankit added (agents, rules block, hooks, MCP); files that
                                   # existed before the first install come back, files it created go away
@@ -12,7 +13,7 @@
 Only touches: ./.venv, ~/.claude/agents/{opus-advisor,delegator,delegator-deepseek,bulk-supervisor,bulk-supervisor-deepseek}.md, the foremankit block in
 ~/.claude/CLAUDE.md, the notify hook entries in ~/.claude/settings.json, and the user-scope MCP entry
 "foremankit". With --local-orchestrator also the VS Code user settings.json / tasks.json. Every modified file is
-backed up first.
+backed up first. With --agent-run also ~/.local/bin/{fk,fk.cmd} and worker permissions.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -76,6 +78,11 @@ GATEWAY_LOG_FILES = ("router.log", "router.err", "llama-server.log", "llama-serv
 
 # Extra tracked files outside ~/.claude: keys starting with "vscode/" resolve under the VS Code
 # user folder instead of CLAUDE_HOME, so the same snapshot machinery covers both tools.
+AGENT_RUN_TRACKED = ("bin/fk.cmd", "bin/fk")
+AGENT_RUN_COMMANDS = ("agent-ask", "agent-ask-batch", "agent-review", "agent-plan",
+                      "agent-run", "agent-run-batch", "agent-autopilot")
+WRAPPER_MODE = 0o755  # POSIX owner can update the wrapper; everyone can execute it.
+
 VSCODE_TRACKED = ("vscode/settings.json", "vscode/tasks.json")
 
 
@@ -176,7 +183,10 @@ def picker_env(picker: dict) -> dict:
     return env
 
 
-from foremankit.picker_guard import merged_claude_settings, model_picker_block  # noqa: E402  (shared with the gateway's picker guard)
+from foremankit.picker_guard import (  # Shared with the gateway picker guard.
+    merged_claude_settings,
+    model_picker_block,
+)
 
 
 def picker_settings(cfg: dict) -> tuple[str, dict]:
@@ -317,7 +327,7 @@ class Installer:
             if not self.dry:
                 shutil.copy2(path, dst)
 
-    def write(self, path: Path, text: str) -> None:
+    def write(self, path: Path, text: str, newline: str | None = None) -> None:
         """Write `text` to `path`, backing up the old file first; skipped when the content is unchanged."""
         if path.exists() and path.read_text(encoding="utf-8") == text:
             self.say(f"unchanged {path}")
@@ -326,7 +336,7 @@ class Installer:
         self.say(f"write {path}")
         if not self.dry:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+            path.write_text(text, encoding="utf-8", newline=newline)
 
     SNAPSHOT_FILE = "snapshot.json"
     SNAPSHOT_FILES_DIR = "files"
@@ -489,9 +499,11 @@ class Installer:
     def tracked_path(self, key: str) -> Path:
         """Resolve a snapshot key to its absolute path.
 
-        Keys starting with "vscode/" live under the VS Code user folder, every other key under
-        CLAUDE_HOME. The prefix stays part of the key so STATE_DIR/"files" keeps one flat layout.
+        Keys starting with "vscode/" live under the VS Code user folder; "bin/" keys use
+        ~/.local/bin. Other keys live under CLAUDE_HOME. The prefix stays part of the key so STATE_DIR/"files" keeps one flat layout.
         """
+        if key.startswith("bin/"):
+            return Path.home() / ".local" / "bin" / key.removeprefix("bin/")
         relative = key.removeprefix("vscode/")
         base = self.vscode_user_dir() if key.startswith("vscode/") else CLAUDE_HOME
         return base / relative
@@ -830,6 +842,71 @@ class Installer:
         parts = [part for part in (head, f"{BEGIN}\n{block.strip()}\n{END}" if block else "", tail) if part]
         return "\n\n".join(parts) + "\n"
 
+    def install_agent_run(self, enabled: bool) -> None:
+        """Install opt-in command wrappers and narrowly scoped Claude permissions."""
+        if not enabled:
+            print("Hint: --agent-run installs fk wrappers and agent command permissions.")
+            return
+        self.take_snapshot(AGENT_RUN_TRACKED)
+        executable = self.venv_python().parent / (
+            "foremankit.exe" if os.name == "nt" else "foremankit")
+        self.write(self.tracked_path("bin/fk.cmd"), f'@echo off\n"{executable}" %*\n')
+        wrapper = self.tracked_path("bin/fk")
+        # A POSIX shebang needs LF even when installation runs on Windows.
+        self.write(wrapper, f'#!/bin/sh\nexec {shlex.quote(executable.as_posix())} "$@"\n',
+                   newline="\n")
+        if not self.dry:
+            wrapper.chmod(WRAPPER_MODE)
+        self.write_json(CLAUDE_HOME / "settings.json", self.agent_run_permissions)
+        search_paths = [Path(entry) for entry in os.get_exec_path()]
+        if wrapper.parent not in search_paths:
+            print(f"! Add {wrapper.parent} to PATH before calling fk.")
+        print("Lead: read the added permissions; agent-merge always needs lead review.")
+
+    @staticmethod
+    def agent_run_permissions(data: dict) -> dict:
+        """Keep existing rules and add each allowed agent command once."""
+        # Copy nested objects because write_json compares with the original input.
+        merged = json.loads(json.dumps(data))
+        allowed = merged.setdefault("permissions", {}).setdefault("allow", [])
+        for shell in ("Bash", "PowerShell"):
+            for command in AGENT_RUN_COMMANDS:
+                rule = f"{shell}(fk {command}:*)"
+                if rule not in allowed:
+                    allowed.append(rule)
+                    print(f"  add permission {rule}")
+        return merged
+
+    def remove_agent_run(self) -> None:
+        """Restore wrapper files and remove only permissions introduced by installation."""
+        record = self._snapshot_record()
+        if not record.exists():
+            return
+        snapshot = json.loads(record.read_text(encoding="utf-8"))
+        if not any(key in snapshot["existed"] for key in AGENT_RUN_TRACKED):
+            return
+        original = STATE_DIR / self.SNAPSHOT_FILES_DIR / "settings.json"
+        before = json.loads(original.read_text(encoding="utf-8-sig")) if original.exists() else {}
+        self.write_json(CLAUDE_HOME / "settings.json",
+                        lambda data: self.without_agent_permissions(data, before))
+        for key in AGENT_RUN_TRACKED:
+            copy = STATE_DIR / self.SNAPSHOT_FILES_DIR / key
+            self._restore_one(key, snapshot["existed"].get(key, False),
+                              copy.read_bytes() if copy.exists() else None)
+
+    @staticmethod
+    def without_agent_permissions(data: dict, before: dict) -> dict:
+        """Preserve permissions that existed before the first install."""
+        merged = json.loads(json.dumps(data))
+        original = before.get("permissions", {}).get("allow", [])
+        ours = {f"{shell}(fk {command}:*)" for shell in ("Bash", "PowerShell")
+                for command in AGENT_RUN_COMMANDS}
+        permissions = merged.get("permissions", {})
+        if "allow" in permissions:
+            permissions["allow"] = [rule for rule in permissions["allow"]
+                                    if rule not in ours or rule in original]
+        return merged
+
     def install_rules(self, remove: bool = False) -> None:
         """Insert, refresh or (on uninstall) remove the foremankit block in ~/.claude/CLAUDE.md."""
         target = CLAUDE_HOME / "CLAUDE.md"
@@ -1159,7 +1236,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_mode_flags(ap: argparse.ArgumentParser) -> None:
     """Flags that choose what the run does: dry run, uninstall, check or restore."""
-    ap.add_argument("--dry-run", action="store_true", help="show actions only")
+    ap.add_argument("--dry-run", "--dry", action="store_true", help="show actions only")
     ap.add_argument("--uninstall", action="store_true",
                     help="remove only what foremankit added; keeps later edits of your files")
     ap.add_argument("--stop-services", action="store_true",
@@ -1175,6 +1252,8 @@ def _add_mode_flags(ap: argparse.ArgumentParser) -> None:
 
 def _add_install_flags(ap: argparse.ArgumentParser) -> None:
     """Flags that choose which parts of the install run: router mode, llama-server, VS Code panel, Claude Code."""
+    ap.add_argument("--agent-run", action="store_true",
+                    help="install fk wrappers and agent permissions (never agent-merge)")
     ap.add_argument("--router", action="store_true",
                     help="with --local-orchestrator: also switch Claude Code to router mode (local models); default is direct mode")
     ap.add_argument("--with-llama", action="store_true",
@@ -1217,6 +1296,7 @@ def stop_services_safely(inst: Installer, args: argparse.Namespace) -> None:
 def _remove_installed_parts(inst: Installer, py: Path) -> None:
     """Undo the Claude Code and VS Code parts of the install, the same steps as the install, each one reversed."""
     inst.migrate_legacy()   # an install made under the old name "agentkit" is cleaned up as well
+    inst.remove_agent_run()
     inst.remove_agents()
     inst.install_rules(remove=True)
     inst.register_mcp(py, remove=True)
@@ -1262,6 +1342,7 @@ def run_install(inst: Installer, args: argparse.Namespace) -> None:
         inst.install_local_orchestrator(py, router=args.router)
     if args.local_orchestrator:
         inst.ensure_llama_server(args.with_llama)
+    inst.install_agent_run(args.agent_run)
     report_keys()
     print(f"\nNext: `{py} -m foremankit.cli status`  (or activate .venv and run `foremankit status`)")
 

@@ -111,3 +111,28 @@ Code standard (same in every session and tool): clean code after R. Martin, read
 - No commented-out code.
 - Do not reformat code you were not asked to touch.
 - The full text is foremankit's `config/conventions.md`. Kinds `bulk_code`, `data_script` and `hard_code` receive it automatically. A project may override it in `.foremankit/conventions.md`.
+
+## Agent runs
+
+Install with `python install.py --agent-run` (opt-in; `--dry` previews; `--restore-original` restores). It creates `~/.local/bin/fk` and `fk.cmd`; add that directory to PATH if warned. From another project use `fk ... --project <repo>`; wrappers invoke this installation's venv. Claude permissions cover Bash and PowerShell for the seven worker commands, never agent-merge; the lead must read the added rules.
+
+Default automatic order: codex -> opencode -> agy for normal data, Codex then agy for internal. Configure `agent_run.auto_order` in `config/routing.yaml`. Explicit agent-run defaults to agy, so choose `--runner codex` for Codex first; batch `runner: auto` follows configuration. Fallback skips disabled, temporarily paused or twice-failed runners. Private data stays with the lead only; internal goes only to eligible codex/agy (`agent_run.codex.max_sensitivity: internal`); opencode is normal only.
+
+The VS Code panel has an Agent runs master switch and per-runner switches, temporary quota pauses with Try now, and a Claude usage gauge (baseline and delta). Codex shares the owner's ChatGPT limit. Limit pauses expire on their own, never permanently; pinned/unavailable tasks become `waiting` with `retry_after`. Resume with `fk agent-run-batch --plan tasks/plan.yaml --project ../repo --resume batch.json --report-out batch.json`; passed tasks are skipped.
+
+Project `AGENTS.md` and coding conventions are injected into runs. `agent_run.conventions_check` selects warn/fail/off for changed Python. Review requires a different known author/reviewer vendor (`review.require_other_vendor`, `foremankit/vendors.py`): Codex is OpenAI, agy Google, opencode follows its model (usually DeepSeek). Unknown vendors cannot establish independence. A different runner name alone is insufficient.
+
+Agents never merge or push. Only `agent-merge` merges, always after lead review of the diff and checks; REVIEW REQUIRED needs `--reviewed`. Autopilot writes `autopilot-report.md` with suggested merge commands for the lead and retains waiting retry times. It never accepts branches automatically.
+
+Typical costs use existing subscriptions (Codex/agy) or free opencode models; no per-command USD guarantee. Observed runner times: Codex 6-25 s, opencode 15-80 s, agy about 10 min plus startup; batches and review/fix rounds multiply these, not a service promise.
+
+| Command | Purpose | Example | Typical cost/time |
+|---|---|---|---|
+| `agent-run` | Run a scoped coding task in an isolated worktree. | `fk agent-run --task-file task.md --project ../repo --scope "src/*.py" --check "python -m pytest" --runner codex` | Subscription/free model; runner time multiplied by calls |
+| `agent-run-batch` | Run a dependency plan; depends_on gates tasks. | `fk agent-run-batch --plan tasks/plan.yaml --project ../repo --report-out batch.json` | Subscription/free model; runner time multiplied by calls |
+| `agent-merge` | Record the lead decision and merge or reject a reviewed branch. | `fk agent-merge --project ../repo --report batch.json --id api --reviewed` | Local Git; seconds |
+| `agent-ask` | Ask one read-only question; changes fail and are reverted. | `fk agent-ask --task-file question.md --project ../repo --runner codex --json` | Subscription/free model; runner time multiplied by calls |
+| `agent-ask-batch` | Ask every .md/.txt question and save one JSON result per question. | `fk agent-ask-batch --tasks-dir questions --out-dir answers --project ../repo --runner codex` | Subscription/free model; runner time multiplied by calls |
+| `agent-review` | Review a branch or report entry without accepting it. | `fk agent-review batch.json#api --project ../repo --reviewer agy --json` | Subscription/free model; runner time multiplied by calls |
+| `agent-plan` | Draft task Markdown and a validated plan.yaml; inspect lead_items.md. | `fk agent-plan @goal.md --project ../repo --out tasks/export --planner codex` | Subscription/free model; runner time multiplied by calls |
+| `agent-autopilot` | Plan, run, review with another vendor, try a bounded fix, then report to the lead. | `fk agent-autopilot @goal.md --project ../repo --work ../autopilot-work --plan-only` | Subscription/free model; runner time multiplied by calls |
