@@ -1,4 +1,6 @@
-"""Tests for foremankit.panel_agent_runs: the pure status builder and its thin wrappers."""
+"""Test the pure agent-runs status builder and its thin wrappers.
+Keep panel payloads consistent with logged runs and independent reviews.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -177,6 +179,7 @@ class TestWrappers:
         assert mark_usage(NOW) == "baseline marked"
 
         def fail(path: Path, now: float) -> dict:
+            """Simulate a missing cached usage reading."""
             raise ValueError("no reading yet: refresh first")
 
         monkeypatch.setattr(panel_agent_runs.claude_usage, "mark_baseline", fail)
@@ -239,3 +242,33 @@ def test_resume_runner_preserves_strikes_and_refuses_unknown(tmp_path, monkeypat
     before = path.read_bytes()
     assert panel_agent_runs.resume_runner("all", NOW).startswith("not done:")
     assert path.read_bytes() == before
+
+
+
+def test_empty_status_has_no_model_reviews():
+    """The panel always exposes a model review list."""
+    assert build_status(make_inputs())["model_reviews"] == []
+
+
+def test_status_includes_model_review_summaries():
+    """The panel returns model findings counts without the raw output."""
+    row = {"event": "agent_run_model_review", "branch": "agent-run/example",
+           "reviewer": "codex", "status": "ok", "counts_by_severity": {"high": 1},
+           "raw_text": "details", "findings": []}
+    assert build_status(make_inputs(rows=[row]))["model_reviews"] == [
+        {"branch": "agent-run/example", "reviewer": "codex", "status": "ok",
+         "counts_by_severity": {"high": 1, "medium": 0, "low": 0}}]
+
+
+def test_status_keeps_owner_verdicts_separate_from_model_reviews():
+    """Mixed log rows retain both independent summary meanings."""
+    rows = [{"event": "agent_run_review", "id": "example", "provider": "agy",
+             "model": "flash_high", "verdict": "merged"},
+            {"event": "agent_run_model_review", "branch": "agent-run/example",
+             "reviewer": "codex", "status": "skipped"}]
+    status = build_status(make_inputs(rows=rows))
+    assert status["model_reviews"] == [
+        {"branch": "agent-run/example", "reviewer": "codex", "status": "skipped",
+         "counts_by_severity": {"high": 0, "medium": 0, "low": 0}}]
+    assert status["reviews"]["agy/flash_high"]["reviews"] == 1
+    assert status["review_text"] == "agy/flash_high: 1 reviews, clean 100%, fixed 0, rejected 0, blockers 0"

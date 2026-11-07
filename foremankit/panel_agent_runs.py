@@ -41,6 +41,7 @@ def build_status(inputs: StatusInputs) -> dict:
             "runners": runners,
             "recent": _recent(inputs.rows),
             "reviews": reviews,
+            "model_reviews": agent_review_log.summarize_model_reviews(inputs.rows),
             "review_text": agent_review_log.format_reviews(reviews),
             "usage": inputs.usage}
 
