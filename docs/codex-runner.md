@@ -66,11 +66,13 @@ worktree and the main repository's shared `.venv/Scripts/python`:
 
 ## Where Codex sits in the order
 
-For `normal` data, auto uses opencode -> codex -> agy; `internal` uses codex, then agy, never `private`.
-opencode (free models) defaults to small/medium tasks; Codex takes big tasks (6+ files,
-a lot of context or a long task text), or escalation after two opencode failures.
-After two Codex failures, or with Codex off, agy is the last escalation/fallback.
-Pin `runner: codex|opencode|agy`; `runner: auto` follows that order.
+By default everything goes to Codex first: `normal` uses codex -> opencode -> agy;
+`internal` uses Codex then agy, never opencode. No runner accepts `private`.
+Configure the lists in `agent_run.auto_order` in `config/routing.yaml`.
+Auto skips runners switched off in the panel, paused by a usage limit, or failed twice on this task.
+Codex's ChatGPT limit is shared with the owner's own Codex use: watch the panel pause,
+and switch Codex off in the panel to spare it.
+Pin `runner: codex|opencode|agy`; `runner: auto` follows the configured order.
 The VS Code **Agent runs** switches and master switch control all three; batch/auto skip disabled runners.
 Measured 2026-11-06/07, not guaranteed: opencode 15-80 s, clean so far; Codex 6-25 s;
 agy (Google AI Pro) about 10 minutes/slice plus ~3 minutes start-up.

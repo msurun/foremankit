@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_quota, agent_switch
-from .agent_choice import RunnerFacts, decide_runner
+from .agent_choice import (
+    DEFAULT_ORDER_INTERNAL,
+    DEFAULT_ORDER_NORMAL,
+    MAX_RUNNER_FAILURES,
+    RunnerFacts,
+    decide_runner,
+)
 from .agent_plan import PlanTask, plan_levels
 from .agent_run import AgentRunError, AgentRunJob
 
@@ -51,6 +57,7 @@ class _BatchState:
     def __init__(self, context: BatchContext, tasks: Sequence[PlanTask]) -> None:
         self.context = context
         self.quota_lock = threading.Lock()
+        self.failures: dict[str, dict[str, int]] = {}
         self.results: dict[str, dict[str, Any]] = {}
         self.semaphores: dict[str, threading.Semaphore] = {}
         self._init_semaphores(tasks)
@@ -175,17 +182,37 @@ def _resolve_runner(task: PlanTask, text: str, state: _BatchState,
     unavailable = state.context.disabled_runners | exhausted | pauses.keys()
     facts = RunnerFacts(task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
                         agy_enabled="agy" not in unavailable, codex_enabled="codex" not in unavailable,
-                        opencode_enabled="opencode" not in unavailable)
-    choice, reasons = decide_runner(facts, state.context.review_globs)
+                        opencode_enabled="opencode" not in unavailable,
+                        **{f"{runner}_failures": count for runner, count
+                           in state.failures.get(task.id, {}).items()})
+    choice, reasons = decide_runner(facts, state.context.review_globs, state.context.settings.get("auto_order"))
     if choice in ("lead", "queue") and reasons and ("no runner" in reasons[0] or choice == "queue"):
-        allowed = {"codex", "agy"} if task.sensitivity == "internal" else set(agent_switch.RUNNERS)
-        candidates = [(until, runner) for runner, until in pauses.items() if runner in allowed]
-        if candidates:
-            until, runner = min(candidates)
-            return runner, _waiting(task, runner, until)
+        waiting = _paused_fallback(task, pauses, state)
+        if waiting is not None:
+            return waiting
     if choice in ("haiku", "lead", "queue", "split", "revise"):
         return choice, _task_entry(task.id, choice, "not_for_runner", reasons[0] if reasons else "")
     return choice, None
+
+
+def _paused_fallback(
+    task: PlanTask, pauses: dict[str, float], state: _BatchState,
+) -> tuple[str, dict] | None:
+    """Wait only for configured runners still eligible for this task."""
+    defaults = {"normal": DEFAULT_ORDER_NORMAL, "internal": DEFAULT_ORDER_INTERNAL}
+    allowed = defaults[task.sensitivity]
+    configured = state.context.settings.get("auto_order") or {}
+    order = configured.get(task.sensitivity, allowed)
+    failures = state.failures.get(task.id, {})
+    # A pause must not revive a disabled, disallowed, or twice-failed runner.
+    candidates = [(until, runner) for runner, until in pauses.items()
+                  if runner in allowed and runner in order
+                  and runner not in state.context.disabled_runners
+                  and failures.get(runner, 0) < MAX_RUNNER_FAILURES]
+    if not candidates:
+        return None
+    until, runner = min(candidates)
+    return runner, _waiting(task, runner, until)
 
 
 def _runner_pauses(state: _BatchState) -> dict[str, float]:
@@ -206,21 +233,26 @@ def _waiting(task: PlanTask, runner: str, until: float) -> dict:
 
 
 def _run_with_fallback(plan: _TaskPlan, state: _BatchState) -> dict:
-    """Retry auto tasks on up to two other runners after quota exhaustion."""
+    """Retry failed auto tasks twice per runner, rerouting usage limits immediately."""
     exhausted: frozenset[str] = frozenset()
     reasons = []
-    for _ in range(3):
+    while True:
         entry = _run_with_slots(plan, state)
-        if entry["status"] != "waiting" or plan.task.runner != "auto":
+        if plan.task.runner != "auto" or entry["status"] not in ("waiting", "failed"):
             entry["reason"] = "; ".join([*reasons, entry.get("reason", "")]).strip("; ")
             return entry
-        exhausted = exhausted | {plan.runner}
+        if entry["status"] == "failed":
+            failures = state.failures.setdefault(plan.task.id, {})
+            failures[plan.runner] = failures.get(plan.runner, 0) + 1
+        else:
+            exhausted = exhausted | {plan.runner}
         runner, refusal = _resolve_runner(plan.task, plan.task_text, state, exhausted)
         if refusal is not None or runner in exhausted:
-            return refusal if refusal and refusal["status"] == "waiting" else entry
-        reasons.append(f"rerouted from {plan.runner} (limit)")
+            return refusal if refusal and entry["status"] == "failed" else entry
+        if runner != plan.runner:
+            cause = "limit" if entry["status"] == "waiting" else "failed twice"
+            reasons.append(f"rerouted from {plan.runner} ({cause})")
         plan = replace(plan, runner=runner)
-    return entry
 
 
 def _run_with_slots(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
