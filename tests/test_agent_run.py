@@ -489,3 +489,22 @@ def test_agent_run_refuses_codex_sensitive_data(repo, sensitivity):
     job = AgentRunJob("task", repo, ("a.py",), CHECK, runner="codex", sensitivity=sensitivity)
     with pytest.raises(AgentRunError, match=f"codex may not receive {sensitivity}"):
         agent_run(job, runner=CodexRunner("codex.exe", "m"))
+
+
+def test_nested_repository_left_by_the_agent_is_reverted_not_fatal(tmp_path, repo):
+    """Tests run inside a sandboxed worktree leave `pytest-of-*/.../proj` folders with their own .git: they are staged as
+    gitlinks, and `git rm` used to fail on them (the whole run was refused)."""
+    def leave_nested_repo(worktree: Path) -> None:
+        nested = worktree / "pytest-of-x" / "pytest-0" / "proj"
+        nested.mkdir(parents=True)
+        (nested / "a.txt").write_text("x\n", encoding="utf-8")
+        git(nested, "init", "-q", "-b", "main")
+        git(nested, "add", "-A")
+        git(nested, *IDENTITY, "commit", "-q", "-m", "n")
+
+    runner = FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"}, on_run=leave_nested_repo)
+    report = run_job(tmp_path, runner)
+    assert report["passed"] is True and report["files"] == ["tests/test_new.py"]
+    assert any("pytest-of-x" in item for item in report["reverted"])
+    assert "pytest-of-x" not in git(repo, "ls-tree", "-r", "--name-only", report["branch"])
+    assert git(repo, "worktree", "list").count("\n") == 1

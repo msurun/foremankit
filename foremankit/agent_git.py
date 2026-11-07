@@ -5,6 +5,9 @@ cannot hide a change.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -86,9 +89,27 @@ def revert_path(worktree: Path, base: str, change: Change) -> None:
     """Undo one change: a file the agent added is removed, a modified or deleted file is restored from `base`."""
     status, path = change
     if status == "A":
-        git(["rm", "-f", "-q", "--", path], worktree)
+        _remove_added(worktree, path)
     else:
         git(["checkout", base, "--", path], worktree)
+
+
+def _remove_added(worktree: Path, path: str) -> None:
+    """Drop an added path from the index and from the disk. `git rm` cannot do it for a nested repository (a gitlink:
+    tests run inside the worktree leave `pytest-of-*/.../proj` folders with their own .git), so the index entry is
+    removed directly and the folder or file deleted by hand."""
+    git(["update-index", "--force-remove", "--", path], worktree)
+    target = worktree / path
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target, onerror=_make_writable_and_retry)
+    elif target.exists() or target.is_symlink():
+        target.unlink()
+
+
+def _make_writable_and_retry(function, path, _excinfo) -> None:
+    """rmtree error handler: git objects are read-only on Windows; make the entry writable and try once more."""
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
 
 
 def commit_all(worktree: Path, base: str, message: str) -> bool:
