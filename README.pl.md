@@ -209,7 +209,15 @@ foremankit delegate "Napisz testy dla verify.py" --kind bulk_code --files forema
 
 ## Zadania agentów
 
-Instalacja: `python install.py --agent-run` jest opcjonalna. `--dry` pokazuje działania, a `--restore-original` przywraca stan. Powstają `~/.local/bin/fk` i `fk.cmd`; po ostrzeżeniu dodaj katalog do PATH. Z innego projektu użyj `fk ... --project <repo>`. Skrypty uruchamiają venv tej instalacji. Uprawnienia Bash i PowerShell obejmują siedem komend roboczych, nigdy agent-merge. Prowadzący powinien przeczytać dodane reguły.
+Instalacja: `python install.py --agent-run` (alias `--permissions`) jest opcjonalna.
+`--dry` niczego nie zapisuje. Powstaj? `~/.local/bin/fk` i `fk.cmd`; dodaj katalog do PATH.
+Z innego projektu u?yj `fk ... --project <repo>`. Uprawnienia Bash i PowerShell obejmuj?
+siedem komend roboczych, status/models/stats/check/nodes/sessions, pomoc komend oraz
+bezpo?rednie wywo?ania venv, gdy ?cie?ka nie zawiera spacji (pozosta?e s? pomijane z komunikatem).
+Obejmuj? te? MCP delegate i router_status, nigdy agent-merge, push ani merge. Przeczytaj regu?y.
+`--status` pokazuje wszystkie integracje i dzia?ania przywracania. `--uninstall` (alias
+`--remove`) usuwa zapisane dodatki, zachowuj?c regu?y u?ytkownika. `--restore-original`
+przywraca te? oryginalne bajty plik?w i usuwa rejestracje zewn?trzne.
 
 Domyślna kolejność automatyczna: codex -> opencode -> agy dla normal, Codex potem agy dla internal. Ustaw `agent_run.auto_order` w `config/routing.yaml`. Sam agent-run domyślnie wybiera agy; podaj `--runner codex`, aby zacząć od Codex. W planie `runner: auto` stosuje konfigurację. Fallback pomija wykonawców wyłączonych, czasowo wstrzymanych lub po dwóch błędach. Private zostaje wyłącznie u prowadzącego; internal trafia tylko do codex/agy (`agent_run.codex.max_sensitivity: internal`); opencode obsługuje wyłącznie normal.
 

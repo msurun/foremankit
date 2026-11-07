@@ -81,6 +81,31 @@ GATEWAY_LOG_FILES = ("router.log", "router.err", "llama-server.log", "llama-serv
 AGENT_RUN_TRACKED = ("bin/fk.cmd", "bin/fk")
 AGENT_RUN_COMMANDS = ("agent-ask", "agent-ask-batch", "agent-review", "agent-plan",
                       "agent-run", "agent-run-batch", "agent-autopilot")
+READ_ONLY_COMMANDS = ("status", "models", "stats", "check", "nodes", "sessions")
+HELP_COMMANDS = AGENT_RUN_COMMANDS + READ_ONLY_COMMANDS + (
+    "profile", "orchestrator", "delegation", "supervisor", "supervise", "llm",
+    "review", "regress", "kaggle", "delegate",
+)
+PERMISSIONS_MARKER = "permissions-added.json"
+
+
+def foremankit_permission_rules() -> tuple[str, ...]:
+    """Return the complete allowlist, excluding unsafe executable paths and merge commands."""
+    executable = ROOT / ".venv" / ("Scripts/foremankit.exe" if os.name == "nt"
+                                  else "bin/foremankit")
+    direct = executable.as_posix()
+    # Prefix permissions cannot reliably match shell quoting around paths containing spaces.
+    executables = ("fk", direct) if not any(char.isspace() for char in direct) else ("fk",)
+    commands = AGENT_RUN_COMMANDS + READ_ONLY_COMMANDS
+    rules = ["mcp__foremankit__delegate", "mcp__foremankit__router_status"]
+    for shell in ("Bash", "PowerShell"):
+        for program in executables:
+            rules.extend(f"{shell}({program} {command}:*)" for command in commands)
+            rules.append(f"{shell}({program} --help)")
+            rules.extend(f"{shell}({program} {command} --help)" for command in HELP_COMMANDS)
+    return tuple(rules)
+
+
 WRAPPER_MODE = 0o755  # POSIX owner can update the wrapper; everyone can execute it.
 
 VSCODE_TRACKED = ("vscode/settings.json", "vscode/tasks.json")
@@ -439,12 +464,25 @@ class Installer:
         the oldest `*.bak-foremankit-*` file next to the target is used; a file with neither snapshot nor
         backup is left untouched.
         """
+        self.remove_agent_run()
+        self.restore_external_registrations()
         record = self._snapshot_record()
         if record.exists():
             self._restore_from_snapshot(json.loads(record.read_text(encoding="utf-8")))
         else:
             self.say(f"no snapshot in {STATE_DIR}: falling back to backups")
             self._restore_from_backups()
+
+    def restore_external_registrations(self) -> None:
+        """Undo external integrations only when this installation is represented in state."""
+        snapshot = self._read_json(self._snapshot_record()) or {"existed": {}}
+        config = self._read_json(Path.home() / ".claude.json") or {}
+        server = config.get("mcpServers", {}).get(MCP_NAME, {})
+        if str(ROOT).lower() in json.dumps(server).replace("\\\\", "\\").lower():
+            self.register_mcp(self.venv_python(), remove=True)
+        if any(key in snapshot["existed"] for key in VSCODE_TRACKED):
+            self.unregister_logon_task()
+            self.unlink_extension()
 
     def _restore_from_snapshot(self, snapshot: dict) -> None:
         """Restore every tracked file using the bytes copied under STATE_DIR/"files"."""
@@ -542,6 +580,38 @@ class Installer:
         found += self._leftover_legacy_tasks(vscode / "tasks.json")
         return found
 
+    def report_status(self) -> None:
+        """List every integration and the exact tracked files and permissions restore affects."""
+        for feature, present in self.installed_features().items():
+            print(f"{feature}: {'installed' if present else 'missing'}")
+        record = self._read_json(self._snapshot_record()) or {"existed": {}}
+        for key, existed in record["existed"].items():
+            print(f"restore would {'restore original' if existed else 'remove'}: {key}")
+        marker = self._read_json(STATE_DIR / PERMISSIONS_MARKER) or {"rules": []}
+        for rule in marker["rules"]:
+            print(f"restore would remove permission: {rule}")
+        print("restore also removes: MCP entry, VS Code panel, gateway autostart")
+
+    def installed_features(self) -> dict[str, bool]:
+        """Inspect integration files without creating or changing anything."""
+        vscode = self.vscode_user_dir()
+        settings = self._read_json(CLAUDE_HOME / "settings.json") or {}
+        allowed = settings.get("permissions", {}).get("allow", [])
+        mcp = self._read_json(Path.home() / ".claude.json") or {}
+        return {
+            "hooks": bool(self._leftover_hooks()),
+            "MCP entry": MCP_NAME in mcp.get("mcpServers", {}),
+            "agents": bool(self._leftover_agents()),
+            "CLAUDE.md block": bool(self._leftover_rules()),
+            "reference file": (CLAUDE_HOME / REFERENCE_NAME).exists(),
+            "VS Code settings": bool(self._leftover_gateway_env(vscode / "settings.json")),
+            "tasks": bool(self._leftover_tasks(vscode / "tasks.json")),
+            "gateway autostart": self.logon_task_registered(),
+            "VS Code panel": self.extension_dir().exists(),
+            "wrappers": any(self.tracked_path(key).exists() for key in AGENT_RUN_TRACKED),
+            "permissions": any(rule in allowed for rule in foremankit_permission_rules()),
+        }
+
     def _leftover_agents(self) -> list[str]:
         """Return one message per foremankit agent file still under CLAUDE_HOME/agents."""
         found = []
@@ -566,6 +636,7 @@ class Installer:
             return []
         text = json.dumps(data)
         marks = (HOOK_MARK, SESSION_HOOK_MARK, CHECKPOINT_HOOK_MARK, NUDGE_HOOK_MARK, GUARD_HOOK_MARK, NIGHT_HOOK_MARK)
+        marks += tuple(script for script, matcher in GUARD_SCRIPTS)
         found = [mark for mark in marks if mark in text]
         return [f"hook {', '.join(found)} still registered in {path}"] if found else []
 
@@ -826,6 +897,7 @@ class Installer:
 
     def install_agents(self) -> None:
         """Copy the bundled subagent definitions into ~/.claude/agents."""
+        self.take_snapshot(tuple(f"agents/{name}" for name in AGENTS))
         for name in AGENTS:
             src = ROOT / "claude" / "agents" / name
             self.write(CLAUDE_HOME / "agents" / name, src.read_text(encoding="utf-8"))
@@ -848,6 +920,8 @@ class Installer:
             print("Hint: --agent-run installs fk wrappers and agent command permissions.")
             return
         self.take_snapshot(AGENT_RUN_TRACKED)
+        if any(char.isspace() for char in ROOT.as_posix()):
+            print("! Skipping direct executable permissions: path contains whitespace; use fk.")
         executable = self.venv_python().parent / (
             "foremankit.exe" if os.name == "nt" else "foremankit")
         self.write(self.tracked_path("bin/fk.cmd"), f'@echo off\n"{executable}" %*\n')
@@ -863,48 +937,48 @@ class Installer:
             print(f"! Add {wrapper.parent} to PATH before calling fk.")
         print("Lead: read the added permissions; agent-merge always needs lead review.")
 
-    @staticmethod
-    def agent_run_permissions(data: dict) -> dict:
-        """Keep existing rules and add each allowed agent command once."""
-        # Copy nested objects because write_json compares with the original input.
+    def agent_run_permissions(self, data: dict) -> dict:
+        """Merge rules and record only permissions absent immediately before this step."""
         merged = json.loads(json.dumps(data))
         allowed = merged.setdefault("permissions", {}).setdefault("allow", [])
-        for shell in ("Bash", "PowerShell"):
-            for command in AGENT_RUN_COMMANDS:
-                rule = f"{shell}(fk {command}:*)"
-                if rule not in allowed:
-                    allowed.append(rule)
-                    print(f"  add permission {rule}")
+        added = [rule for rule in foremankit_permission_rules() if rule not in allowed]
+        for rule in added:
+            print(f"  add permission {rule}")
+        marker = STATE_DIR / PERMISSIONS_MARKER
+        owned = self._read_json(marker) or {"rules": []}
+        owned["rules"] = list(dict.fromkeys(owned["rules"] + added))
+        if not self.dry and added:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps(owned, indent=2) + "\n", encoding="utf-8")
+        allowed.extend(added)
         return merged
 
     def remove_agent_run(self) -> None:
-        """Restore wrapper files and remove only permissions introduced by installation."""
-        record = self._snapshot_record()
-        if not record.exists():
-            return
-        snapshot = json.loads(record.read_text(encoding="utf-8"))
-        if not any(key in snapshot["existed"] for key in AGENT_RUN_TRACKED):
-            return
-        original = STATE_DIR / self.SNAPSHOT_FILES_DIR / "settings.json"
-        before = json.loads(original.read_text(encoding="utf-8-sig")) if original.exists() else {}
-        self.write_json(CLAUDE_HOME / "settings.json",
-                        lambda data: self.without_agent_permissions(data, before))
+        """Restore wrappers and remove only permissions explicitly recorded as ours."""
+        record = self._read_json(self._snapshot_record()) or {"existed": {}}
+        marker = self._read_json(STATE_DIR / PERMISSIONS_MARKER) or {"rules": []}
+        settings = CLAUDE_HOME / "settings.json"
+        if settings.exists() and marker["rules"]:
+            self.write_json(settings,
+                            lambda data: self.without_agent_permissions(data, marker))
         for key in AGENT_RUN_TRACKED:
-            copy = STATE_DIR / self.SNAPSHOT_FILES_DIR / key
-            self._restore_one(key, snapshot["existed"].get(key, False),
-                              copy.read_bytes() if copy.exists() else None)
+            if key in record["existed"]:
+                copy = STATE_DIR / self.SNAPSHOT_FILES_DIR / key
+                self._restore_one(key, record["existed"][key],
+                                  copy.read_bytes() if copy.exists() else None)
+        if not self.dry and (STATE_DIR / PERMISSIONS_MARKER).exists():
+            (STATE_DIR / PERMISSIONS_MARKER).unlink()
 
     @staticmethod
-    def without_agent_permissions(data: dict, before: dict) -> dict:
-        """Preserve permissions that existed before the first install."""
+    def without_agent_permissions(data: dict, marker: dict) -> dict:
+        """Remove recorded additions while preserving all other user permissions."""
         merged = json.loads(json.dumps(data))
-        original = before.get("permissions", {}).get("allow", [])
-        ours = {f"{shell}(fk {command}:*)" for shell in ("Bash", "PowerShell")
-                for command in AGENT_RUN_COMMANDS}
         permissions = merged.get("permissions", {})
         if "allow" in permissions:
             permissions["allow"] = [rule for rule in permissions["allow"]
-                                    if rule not in ours or rule in original]
+                                    if rule not in marker["rules"]]
+        if permissions == {"allow": []}:
+            merged.pop("permissions")
         return merged
 
     def install_rules(self, remove: bool = False) -> None:
@@ -1237,12 +1311,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_mode_flags(ap: argparse.ArgumentParser) -> None:
     """Flags that choose what the run does: dry run, uninstall, check or restore."""
     ap.add_argument("--dry-run", "--dry", action="store_true", help="show actions only")
-    ap.add_argument("--uninstall", action="store_true",
+    ap.add_argument("--uninstall", "--remove", action="store_true",
                     help="remove only what foremankit added; keeps later edits of your files")
     ap.add_argument("--stop-services", action="store_true",
                     help="with --uninstall: also stop the running gateway and llama-server of this folder")
     ap.add_argument("--purge", action="store_true",
                     help="with --uninstall: also delete the install snapshot (--restore-original is then impossible)")
+    ap.add_argument("--status", action="store_true", help="report installed features and restore actions")
     ap.add_argument("--check", action="store_true",
                     help="list the traces of foremankit that are still installed (exit code 1 when any)")
     ap.add_argument("--restore-original", action="store_true",
@@ -1252,7 +1327,7 @@ def _add_mode_flags(ap: argparse.ArgumentParser) -> None:
 
 def _add_install_flags(ap: argparse.ArgumentParser) -> None:
     """Flags that choose which parts of the install run: router mode, llama-server, VS Code panel, Claude Code."""
-    ap.add_argument("--agent-run", action="store_true",
+    ap.add_argument("--agent-run", "--permissions", action="store_true",
                     help="install fk wrappers and agent permissions (never agent-merge)")
     ap.add_argument("--router", action="store_true",
                     help="with --local-orchestrator: also switch Claude Code to router mode (local models); default is direct mode")
@@ -1351,12 +1426,15 @@ def main() -> int:
     """Entry point: dispatch to check, restore, uninstall or install."""
     args = build_parser().parse_args()
     inst = Installer(args.dry_run)
+    if args.status:
+        inst.report_status()
+        return 0
     if args.check:
         return 1 if report_leftovers(inst) else 0
     if args.restore_original:
         inst.restore_original()
         print("\nRestored the files from before the first install (backups of the replaced files "
-              "sit next to them). Run --uninstall too to unregister the MCP server.")
+              "sit next to them). External registrations were removed too.")
         return 0
     if args.uninstall:
         return run_uninstall(inst, args)

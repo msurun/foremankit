@@ -114,7 +114,16 @@ Code standard (same in every session and tool): clean code after R. Martin, read
 
 ## Agent runs
 
-Install with `python install.py --agent-run` (opt-in; `--dry` previews; `--restore-original` restores). It creates `~/.local/bin/fk` and `fk.cmd`; add that directory to PATH if warned. From another project use `fk ... --project <repo>`; wrappers invoke this installation's venv. Claude permissions cover Bash and PowerShell for the seven worker commands, never agent-merge; the lead must read the added rules.
+Install with `python install.py --agent-run` (alias `--permissions`; opt-in; `--dry`
+previews without writing). It creates `~/.local/bin/fk` and `fk.cmd`; add that directory to
+PATH if warned. From another project use `fk ... --project <repo>`; wrappers invoke this
+installation's venv. Bash and PowerShell permissions cover the seven worker commands,
+status/models/stats/check/nodes/sessions, command help, and direct venv calls when the path
+has no whitespace; unsafe direct paths are skipped with a message. MCP delegate and
+router_status are included. No agent-merge, push or merge permission is granted. Read the
+added rules. `--status` reports every integration and restore actions; `--uninstall`
+(alias `--remove`) removes recorded additions while keeping user rules. `--restore-original`
+also restores original file bytes and removes external registrations.
 
 Default automatic order: codex -> opencode -> agy for normal data, Codex then agy for internal. Configure `agent_run.auto_order` in `config/routing.yaml`. Explicit agent-run defaults to agy, so choose `--runner codex` for Codex first; batch `runner: auto` follows configuration. Fallback skips disabled, temporarily paused or twice-failed runners. Private data stays with the lead only; internal goes only to eligible codex/agy (`agent_run.codex.max_sensitivity: internal`); opencode is normal only.
 

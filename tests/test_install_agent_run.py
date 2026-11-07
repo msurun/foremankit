@@ -50,8 +50,7 @@ def test_permissions_are_complete_and_idempotent(home: Path) -> None:
     installer = INSTALL.Installer(dry=False)
     installer.install_agent_run(True)
     installer.install_agent_run(True)
-    expected = {f"{shell}(fk {command}:*)" for shell in ("Bash", "PowerShell")
-                for command in INSTALL.AGENT_RUN_COMMANDS} | {"Bash(existing:*)"}
+    expected = set(INSTALL.foremankit_permission_rules()) | {"Bash(existing:*)"}
     allowed = settings(home)["permissions"]["allow"]
     assert set(allowed) == expected
     assert len(allowed) == len(expected)
@@ -127,3 +126,56 @@ def test_posix_wrapper_uses_lf_on_every_platform(home: Path) -> None:
     """A Windows installation must still produce a valid POSIX shebang."""
     INSTALL.Installer(dry=False).install_agent_run(True)
     assert b"\r" not in (home / ".local/bin/fk").read_bytes()
+
+
+@pytest.mark.parametrize("rule", [
+    "mcp__foremankit__delegate", "mcp__foremankit__router_status",
+    "Bash(fk status:*)", "PowerShell(fk models:*)", "Bash(fk stats:*)",
+    "Bash(fk check:*)", "Bash(fk nodes:*)", "Bash(fk sessions:*)",
+    "Bash(fk agent-plan --help)", "PowerShell(fk --help)",
+])
+def test_rule_list_covers_project_tools_and_helpers(rule: str) -> None:
+    """Every supported integration has an explicit permission."""
+    assert rule in INSTALL.foremankit_permission_rules()
+
+
+def test_rule_list_never_grants_merge_or_push() -> None:
+    """The installer cannot authorize accepting or publishing worker changes."""
+    rules = json.dumps(INSTALL.foremankit_permission_rules())
+    assert "merge" not in rules and "push" not in rules
+
+
+def test_uninstall_preserves_a_user_rule_added_after_the_snapshot(home: Path) -> None:
+    """Ownership begins at permission installation, not at the first general snapshot."""
+    installer = INSTALL.Installer(dry=False)
+    installer.take_snapshot()
+    seed_settings(home)
+    installer.install_agent_run(True)
+    installer.remove_agent_run()
+    assert settings(home)["permissions"]["allow"] == [
+        "Bash(existing:*)", "Bash(fk agent-run:*)",
+    ]
+
+
+@pytest.mark.parametrize("feature", [
+    "hooks", "MCP entry", "agents", "CLAUDE.md block", "reference file",
+    "VS Code settings", "tasks", "gateway autostart", "wrappers", "permissions",
+    "VS Code panel",
+])
+def test_status_lists_each_feature(home: Path, capsys: pytest.CaptureFixture, feature: str) -> None:
+    """Missing integrations remain visible in the read-only inventory."""
+    INSTALL.Installer(dry=False).report_status()
+    assert f"{feature}: " in capsys.readouterr().out
+
+
+def test_status_reports_owned_permissions(home: Path, capsys: pytest.CaptureFixture) -> None:
+    """The preview identifies exactly which allow rules restore removes."""
+    installer = INSTALL.Installer(dry=False)
+    installer.install_agent_run(True)
+    installer.report_status()
+    assert "restore would remove permission: mcp__foremankit__delegate" in capsys.readouterr().out
+
+
+def test_parser_accepts_permissions_alias() -> None:
+    """The broader name remains compatible with the original opt-in flag."""
+    assert INSTALL.build_parser().parse_args(["--permissions"]).agent_run
