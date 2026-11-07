@@ -208,9 +208,10 @@ agent_run:
   # Parallel runs per runner and the agy subscription quota (15/day is a guess: measure, then correct).
   max_parallel: {opencode: 3, agy: 1, codex: 1}
   quota:
-    agy: {max_runs_per_day: 15, cooldown_on_error_s: 1800}
+    # 15 runs/day was only a guess; display it as a soft limit instead of blocking runs.
+    agy: {soft_runs_per_day: 15, backoff_s: [1800, 3600, 7200, 18000]}
     # No daily Codex limit until the real subscription limit is measured.
-    codex: {cooldown_on_error_s: 1800}
+    codex: {backoff_s: [1800, 3600, 7200, 18000]}
   review_paths: ["gateway/**", "**/auth*", "**/policy*", "**/security*", "**/tuning*", "**/supervisor*"]
   # opencode 2.2.0 CLI, bundled with the desktop app (found 2026-11-06). Free `opencode/*-free` models train on prompts:
   # only sensitivity=normal. `opencode models` lists the ids; pass rate per model is tracked by the outcome events.
