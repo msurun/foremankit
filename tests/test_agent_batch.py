@@ -415,3 +415,20 @@ def test_auto_skips_pause_and_normal_failure_resets_strikes(tmp_path: Path) -> N
     entry = run_batch([task], context)["tasks"][0]
     assert entry["runner"] == "codex" and entry["status"] == "failed"
     assert json.loads(context.state_path.read_text())["codex"]["strikes"] == 0
+
+
+def test_failed_run_that_changed_nothing_and_mentions_a_quota_is_a_limit_refusal(tmp_path: Path) -> None:
+    """Only a failed run without changes counts as a usage-limit refusal; a failed check on a quota task does not."""
+    files = [_create_task_file(tmp_path, f"t{n}.md") for n in (1, 2)]
+
+    def run_one(job: AgentRunJob) -> dict[str, Any]:
+        if job.scope == ("limit.py",):
+            return {"passed": False, "branch": "", "files": [], "agent_reply": "You've hit your usage limit"}
+        return {"passed": False, "branch": "b", "files": ["quota.py"], "agent_reply": "quota tests still fail"}
+
+    tasks = [PlanTask(id="lim", task_file=files[0], scope=("limit.py",), check="pytest", runner="codex"),
+             PlanTask(id="chk", task_file=files[1], scope=("quota.py",), check="pytest", runner="opencode")]
+    entries = {entry["id"]: entry for entry in run_batch(tasks, _make_context(tmp_path, run_one))["tasks"]}
+    assert entries["lim"]["status"] == "waiting" and entries["chk"]["status"] == "failed"
+    state = json.loads(_make_context(tmp_path, run_one).state_path.read_text())
+    assert state["codex"]["paused_until"] > 0 and state["opencode"]["paused_until"] == 0.0

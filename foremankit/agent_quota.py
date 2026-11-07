@@ -77,6 +77,7 @@ def record_quota_error(state: dict, runner: str, now: float, settings: dict, mes
     until = max(float(entry.get("paused_until", 0.0)), proposed)
     entry["strikes"] += 1
     entry["paused_until"] = until
+    entry["probe_until"] = 0.0      # a failed probe is over: after the pause the next run is a fresh probe
     return until
 
 

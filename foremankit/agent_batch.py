@@ -289,7 +289,7 @@ def _handle_run_report(
 ) -> dict[str, Any]:
     """Process normal completion report from run_one."""
     reply = str(report.get("agent_reply") or "")
-    if not report.get("passed") and agent_quota.is_quota_error(reply):
+    if _refused_by_limit(report, reply):
         until = _record_exhaustion(plan.runner, reply, state)
         return _waiting(plan.task, plan.runner, until)
     _record_healthy(plan.runner, state)
@@ -299,6 +299,12 @@ def _handle_run_report(
     if plan.multi_dep_reason:
         entry["reason"] = plan.multi_dep_reason
     return entry
+
+
+def _refused_by_limit(report: dict[str, Any], reply: str) -> bool:
+    """A usage-limit refusal is a failed run that changed nothing: a failed check whose reply merely mentions a quota
+    (the task may be about quotas) is an ordinary failure and must not pause the runner."""
+    return not report.get("passed") and not report.get("files") and agent_quota.is_quota_error(reply)
 
 
 def _record_exhaustion(runner: str, message: str, state: _BatchState) -> float:

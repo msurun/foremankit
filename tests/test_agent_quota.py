@@ -310,3 +310,13 @@ def test_old_state_and_soft_limit(tmp_path: Path) -> None:
     assert can_start(state, "agy", at(6), {"quota": {"agy": {"soft_runs_per_day": 15}}})[0]
     assert state["agy"]["strikes"] == state["agy"]["probe_until"] == 0
     assert record_quota_error(state, "agy", at(6), {}) == at(6) + 1800
+
+
+def test_failed_probe_does_not_block_the_next_probe_after_a_short_pause():
+    """A probe that hits the limit again ends the probe window: with a short parsed pause the next probe is allowed."""
+    settings: dict = {}
+    state: dict = {}
+    record_quota_error(state, "codex", 1000.0, settings)
+    record_run(state, "codex", 1000.0 + 1800)          # the probe starts after the first pause
+    until = record_quota_error(state, "codex", 2900.0, settings, "try again in 2 minutes")
+    assert can_start(state, "codex", until + 1, settings) == (True, "")
