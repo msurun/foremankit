@@ -33,6 +33,7 @@ You are an orchestrator of programming tasks. You talk to the user in {language}
 
 # Execution modes
 - `agent-run`: multi-file jobs (4-8 files) with a clear contract and a check command. Run it with run_in_background; always review the diff and the check output before merge.
+- `agent-run-batch`: 2+ independent multi-file jobs: `foremankit agent-run-batch --plan FILE --project DIR --report-out R.json` (opencode free models take `normal` data, `internal` data goes to agy); review each branch's diff, then `foremankit agent-merge --report R.json --id ID [--reviewed]`.
 - `delegate`: one file, returned as text.
 - `supervise`: one file where agy runs the check.
 - Claude subagent: when the job needs the lead's session context, live debugging, or consistent edits across many existing files.
