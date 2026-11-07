@@ -207,7 +207,10 @@ agent_run:
   check_timeout_s: 600
   # Parallel runs per runner and the agy subscription quota (15/day is a guess: measure, then correct).
   max_parallel: {opencode: 3, agy: 1, codex: 1}
-  quota: {agy: {max_runs_per_day: 15, cooldown_on_error_s: 1800}}
+  quota:
+    agy: {max_runs_per_day: 15, cooldown_on_error_s: 1800}
+    # No daily Codex limit until the real subscription limit is measured.
+    codex: {cooldown_on_error_s: 1800}
   review_paths: ["gateway/**", "**/auth*", "**/policy*", "**/security*", "**/tuning*", "**/supervisor*"]
   # opencode 2.2.0 CLI, bundled with the desktop app (found 2026-11-06). Free `opencode/*-free` models train on prompts:
   # only sensitivity=normal. `opencode models` lists the ids; pass rate per model is tracked by the outcome events.
@@ -217,7 +220,8 @@ agent_run:
   # Codex CLI 0.164.0-alpha.11.1, found in the VS Code extension on 2026-11-06.
   # Owner's subscription; normal data only, explicitly selected with --runner codex or runner: codex.
   codex:
-    binary: ~/.vscode/extensions/openai.chatgpt-26.1021.22027-win32-x64/bin/windows-x86_64/codex.exe
+    # Binary is a pattern; the newest extension version is used.
+    binary: ~/.vscode/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe
     default_model: gpt-6.1-sol
 
 # One coding standard for every task that writes code, in every session and tool: config/conventions.md is appended to the

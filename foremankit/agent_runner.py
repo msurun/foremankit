@@ -4,8 +4,10 @@ Each runner keeps untouched stdout for usage and full-answer parsing.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -175,6 +177,15 @@ def _reply_of(stdout: str, exit_code: int) -> str:
     return str(data.get("response") or data.get("error") or "").strip().replace("\n", " ")
 
 
+def resolve_binary(pattern: str) -> str:
+    """Expand home and select the newest numeric version matching a binary glob."""
+    pattern = os.path.expanduser(pattern)
+    if not glob.has_magic(pattern):
+        return pattern
+    return max(glob.glob(pattern), key=lambda path: (tuple(map(int, re.findall(r"\d+", path))), path),
+               default=pattern)
+
+
 def make_runner(name: str, config: dict[str, Any], model_alias: str = "") -> Runner:
     """The runner called `name`; RunnerError for a runner that is not available yet."""
     if name == "agy":
@@ -186,5 +197,5 @@ def make_runner(name: str, config: dict[str, Any], model_alias: str = "") -> Run
         if not (model_alias or settings.get("default_model")):
             raise RunnerError(f"routing.yaml agent_run.{name}.default_model is not set")
         runner_type = CodexRunner if name == "codex" else OpenCodeRunner
-        return runner_type(settings["binary"], model_alias or settings["default_model"])
+        return runner_type(resolve_binary(settings["binary"]), model_alias or settings["default_model"])
     raise RunnerError(f"runner {name!r} is not available (supported: agy, opencode, codex)")

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from foremankit import agent_run as ar
 from foremankit.agent_run import (
@@ -27,6 +28,7 @@ from foremankit.agent_runner import (
     RunnerError,
     RunnerResult,
     make_runner,
+    resolve_binary,
 )
 from foremankit.providers import Provider
 from foremankit.state import CallLog
@@ -282,6 +284,63 @@ def test_agy_missing_binary_is_a_runner_error(tmp_path):
 OC_CONFIG = {"routing": {"agent_run": {"opencode": {"binary": "oc.exe", "default_model": "opencode/x-free"}}}}
 
 
+def test_resolve_binary_exact_path(tmp_path):
+    """Plain paths are preserved even when the binary does not exist."""
+    binary = str(tmp_path / "codex.exe")
+    assert resolve_binary(binary) == binary
+
+
+@pytest.mark.parametrize("versions", [("2.9.0", "2.10.0"), ("26.1021.9", "26.1021.22027")])
+def test_resolve_binary_numeric_versions(tmp_path, versions):
+    """Version components compare as numbers rather than text."""
+    for version in versions:
+        write_files(tmp_path, {f"openai.chatgpt-{version}-win32-x64/codex.exe": ""})
+    pattern = str(tmp_path / "openai.chatgpt-*" / "codex.exe")
+    assert resolve_binary(pattern) == str(tmp_path / f"openai.chatgpt-{versions[-1]}-win32-x64" / "codex.exe")
+
+
+def test_resolve_binary_single_and_missing_matches(tmp_path):
+    """One match resolves directly; no match preserves the pattern for error reporting."""
+    pattern = str(tmp_path / "extension-*" / "codex.exe")
+    assert resolve_binary(pattern) == pattern
+    write_files(tmp_path, {"extension-1.0/codex.exe": ""})
+    assert resolve_binary(pattern) == str(tmp_path / "extension-1.0" / "codex.exe")
+
+
+def test_resolve_binary_expands_home(tmp_path, monkeypatch):
+    """Home expansion applies to both plain paths and patterns."""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    write_files(tmp_path, {"extension-1.0/codex.exe": ""})
+    assert resolve_binary("~/codex.exe") == os.path.expanduser("~/codex.exe")
+    assert resolve_binary("~/extension-*/codex.exe") == str(tmp_path / "extension-1.0" / "codex.exe")
+
+
+def test_resolve_binary_version_ties_use_path_text(tmp_path):
+    """Equal numeric versions have a deterministic text tie breaker."""
+    for suffix in ("a", "z"):
+        write_files(tmp_path, {f"extension-2.10.0-{suffix}/codex.exe": ""})
+    assert resolve_binary(str(tmp_path / "extension-*" / "codex.exe")) == str(
+        tmp_path / "extension-2.10.0-z" / "codex.exe")
+
+
+@pytest.mark.parametrize("name", ["codex", "opencode"])
+def test_make_runner_resolves_binary_pattern(tmp_path, name):
+    """Both configured runners select the newest fake executable without running it."""
+    for version in ("2.9.0", "2.10.0"):
+        write_files(tmp_path, {f"extension-{version}/binary.exe": ""})
+    config = {"routing": {"agent_run": {name: {
+        "binary": str(tmp_path / "extension-*" / "binary.exe"), "default_model": "m"}}}}
+    assert make_runner(name, config).binary == str(tmp_path / "extension-2.10.0" / "binary.exe")
+
+
+def test_real_routing_codex_binary_is_a_pattern():
+    """The repository routing YAML loads and retains the version-independent binary setting."""
+    routing = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "routing.yaml").read_text(encoding="utf-8"))
+    assert "*" in routing["agent_run"]["codex"]["binary"]
+    assert routing["agent_run"]["quota"]["codex"] == {"cooldown_on_error_s": 1800}
+
+
 def test_make_runner_builds_agy_and_refuses_unknown_names():
     runner = make_runner("agy", {"providers": {"agy": AGY_CONFIG}})
     assert runner.name == "agy" and runner.model == "gemini-3.8-flash-high"
@@ -290,6 +349,7 @@ def test_make_runner_builds_agy_and_refuses_unknown_names():
 
 
 def test_make_runner_builds_opencode_from_the_routing_settings():
+    assert make_runner("opencode", OC_CONFIG).binary == "oc.exe"
     assert make_runner("opencode", OC_CONFIG).model == "opencode/x-free"
     assert make_runner("opencode", OC_CONFIG, "opencode/other").model == "opencode/other"
     with pytest.raises(RunnerError):
