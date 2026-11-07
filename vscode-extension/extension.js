@@ -119,9 +119,11 @@ class Panel {
     this.workersTimer = setInterval(() => this.pushWorkers(), WORKERS_POLL_MS);
     this.liveTimer = setInterval(() => this.pushLive(), LIVE_POLL_MS);
     this.delegationsTimer = setInterval(() => this.pushDelegations(), DELEGATIONS_POLL_MS);
+    this.agentRunsTimer = setInterval(() => this.pushAgentRuns(), DELEGATIONS_POLL_MS);
     this.gpuTimer = setInterval(() => this.pushGpu(), GPU_POLL_MS);
     this.pushDelegations();
-    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.gpuTimer); clearInterval(this.modelNamesTimer); clearInterval(this.pairTimer); });
+    this.pushAgentRuns();
+    view.onDidDispose(() => { clearInterval(this.timer); clearInterval(this.workersTimer); clearInterval(this.liveTimer); clearInterval(this.delegationsTimer); clearInterval(this.agentRunsTimer); clearInterval(this.gpuTimer); clearInterval(this.modelNamesTimer); clearInterval(this.pairTimer); });
     this.refreshModelNames();
     this.modelNamesTimer = setInterval(() => this.refreshModelNames(), MODEL_NAMES_POLL_MS);
     this.pushStatus();
@@ -135,6 +137,7 @@ class Panel {
   post(message) { if (this.view) this.view.webview.postMessage(message); }
   async pushStatus() { if (this.view && this.view.visible && !this.busy) this.post({ type: 'status', data: await backend(['status']) }); }
   async pushDelegations() { if (this.view && this.view.visible) this.post({ type: 'delegations', data: await backend(['delegations']) }); }
+  async pushAgentRuns() { if (this.view && this.view.visible) this.post({ type: 'agentRuns', data: await backend(['agent-runs']) }); }
   async pushFirewall() { this.post({ type: 'firewall', data: await backend(['pair-firewall-status']) }); }
   async pushLive() { if (this.view && this.view.visible) this.post({ type: 'live', data: { gateway: readLive(), slot: await readSlots() } }); }
   async pushGpu() { if (this.view && this.view.visible) this.post({ type: 'gpu', data: await readGpu() }); }
@@ -142,7 +145,7 @@ class Panel {
   async pushModels() { this.post({ type: 'models', data: await backend(['models']) }); }
 
   async handle(message) {
-    if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); await this.pushDelegations(); return; }
+    if (message.type === 'refresh') { await this.pushStatus(); await this.pushModels(); await this.pushWorkers(); await this.pushDelegations(); await this.pushAgentRuns(); return; }
     if (message.type === 'config') { await this.runConfig(message); return; }
     if (message.type === 'preset') { await this.runPreset(message.name); return; }
     if (message.type === 'pair') { await this.runPair(message); return; }
@@ -224,6 +227,9 @@ class Panel {
       kaggleSet: ['kaggle-set', '--url', url || '', '--key', key || ''],
       kaggleTest: ['kaggle-test'],
       nightSet: ['night-run', enabled ? 'on' : 'off', '--hours', String(hours || 8), '--max', String(max || 20)],
+      agentRunSet: ['agent-run-set', String(!!enabled), '--name', name],
+      usageRefresh: ['usage-refresh'],
+      usageMark: ['usage-mark'],
     };
     return table[action];
   }
@@ -238,6 +244,7 @@ class Panel {
     await this.pushStatus();
     await this.pushWorkers();
     await this.pushModels();
+    await this.pushAgentRuns();
   }
 
   async runPair({ action, ip, port, code, replace }) {
@@ -344,6 +351,22 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="info">Supervisor: <label><input type="radio" name="supervisor" id="supHaiku" value="haiku"> Haiku agent</label> <label><input type="radio" name="supervisor" id="supAgy" value="agy"> Antigravity (agy runs commands itself)</label> <label><input type="radio" name="supervisor" id="supAuto" value="auto"> Auto (agy for multi-file/test-heavy tasks)</label></div>
 <div class="info"><label><input type="checkbox" id="delegAgy"> Antigravity (Google AI Pro; internal data allowed, never private)</label></div>
 </details>
+<h3>Agent runs<span class="q" data-for="tipAR">?</span></h3>
+<div class="tip" id="tipAR">Autonomous coding agents that work on several files in their own git branch; you review and merge the result. Different from the single-call helpers above. They cost no money: Antigravity is a subscription, opencode uses free models.</div>
+<label class="info"><input type="checkbox" id="arAll"> Agent runs enabled</label>
+<div id="arOffLine" class="info" style="display:none">switched off as a whole</div>
+<div id="arAgyRow" class="info"><label><input type="checkbox" id="arAgy"> Antigravity</label><div id="arAgyInfo" class="info"></div></div>
+<div id="arOpencodeRow" class="info"><label><input type="checkbox" id="arOpencode"> opencode</label><div id="arOpencodeInfo" class="info"></div></div>
+<div class="info" style="margin-top:6px"><b>Recent runs</b></div>
+<div id="arRecent"></div>
+<div class="info" style="margin-top:6px"><b>Review verdicts (clean merge rate)</b></div>
+<div id="arReviews" class="info" style="white-space:pre-wrap" title="Review verdicts (clean merge rate)"></div>
+<div class="info" style="margin-top:6px"><b>Claude usage</b></div>
+<div id="arUsageLines"></div>
+<div id="arUsageAge" class="info"></div>
+<div id="arUsageDelta" class="info"></div>
+<div class="row"><button class="secondary" id="arUsageRefresh">Read usage now</button><button class="secondary" id="arUsageMark">Mark start</button></div>
+<div class="info" style="font-size:11px;opacity:.7">Runs the official claude binary (<code>claude -p /usage</code>, about 9 s). This is automation of the official client: use sparingly.</div>
 <h3>Night run<span class="q" data-for="tip9">?</span></h3>
 <div class="tip" id="tip9">Keeps the session working unattended: when the model ends its turn, the Stop hook tells it to continue the plan and the latest handoff, until the DONE file appears, the deadline passes or the max-continues limit is reached. Works only when the local model or Kaggle drives the main loop (not the Anthropic cloud). Off by default; start it only after a live test.</div>
 <label class="info"><input type="checkbox" id="nightOn"> <span id="nightTitle">Night run</span></label> <span class="info" id="nightLine"></span>
@@ -499,6 +522,68 @@ function showGpu(gpu) {
   const any = d.paid || d.free || d.local || d.agy;
   for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local'], ['delegAgy', 'agy']]) if (document.activeElement !== $(id)) $(id).checked = d[key];
   if (document.activeElement !== $('delegAll')) $('delegAll').checked = any;
+ }
+ function showAgentRunner(id, infoId, r) {
+  if (!r) return;
+  if (document.activeElement !== $(id)) $(id).checked = !!r.own;
+  const parts = ['slots ' + r.slots, r.daily_limit > 0 ? 'today ' + r.runs_today + '/' + r.daily_limit : 'today ' + r.runs_today];
+  if (r.paused_for_s > 0) parts.push('paused for ' + Math.ceil(r.paused_for_s / 60) + ' min');
+  if (r.model) parts.push(r.model);
+  parts.push(r.internal_data ? 'internal data OK' : 'normal data only');
+  if (!r.active) parts.push('inactive');
+  $(infoId).textContent = parts.join(' · ');
+ }
+ function showAgentRecent(list) {
+  const box = $('arRecent'); box.innerHTML = '';
+  if (!list || list.length === 0) {
+   const empty = document.createElement('div'); empty.className = 'info'; empty.textContent = 'no agent runs yet';
+   box.appendChild(empty); return;
+  }
+  for (const c of list) {
+   const row = document.createElement('div'); row.className = 'call';
+   const t = document.createElement('span'); t.className = 't'; const when = new Date(c.ts * 1000); t.textContent = when.toTimeString().slice(0, 5); row.appendChild(t);
+   const text = document.createElement('span'); if (!c.passed) text.className = 'bad';
+   const shortModel = (c.model || '').split('/').pop();
+   const sec = c.seconds != null ? (Number.isInteger(c.seconds) ? c.seconds : c.seconds.toFixed(1)) + ' s' : '';
+   text.textContent = c.runner + (shortModel ? ' ' + shortModel : '') + ' | ' + (c.passed ? 'PASS' : 'FAIL') + (sec ? ', ' + sec : '');
+   row.appendChild(text); box.appendChild(row);
+  }
+ }
+ function showAgentUsage(u) {
+  const box = $('arUsageLines'); box.innerHTML = '';
+  if (u && u.last) {
+   if (u.last.session_pct != null) {
+    const s = document.createElement('div'); s.className = 'info';
+    s.textContent = 'Session ' + u.last.session_pct + '% used' + (u.last.session_resets ? ' (resets ' + u.last.session_resets + ')' : '');
+    box.appendChild(s);
+   }
+   if (u.last.week_pct != null) {
+    const w = document.createElement('div'); w.className = 'info';
+    w.textContent = 'Week ' + u.last.week_pct + '% used' + (u.last.week_resets ? ' (resets ' + u.last.week_resets + ')' : '');
+    box.appendChild(w);
+   }
+  }
+  $('arUsageAge').textContent = u && u.age_s != null ? 'read ' + Math.max(0, Math.round(u.age_s / 60)) + ' min ago' : 'not read yet';
+  if (u && u.delta) {
+   const fmt = (v) => v == null ? 'new window' : (v >= 0 ? '+' : '') + v;
+   $('arUsageDelta').style.display = 'block';
+   $('arUsageDelta').textContent = 'since mark: session ' + fmt(u.delta.session_pct) + ', week ' + fmt(u.delta.week_pct) + ' points';
+  } else {
+   $('arUsageDelta').style.display = 'none'; $('arUsageDelta').textContent = '';
+  }
+ }
+ function showAgentRuns(d) {
+  if (!d || d.error) return;
+  if (document.activeElement !== $('arAll')) $('arAll').checked = !!d.enabled;
+  $('arOffLine').style.display = d.enabled ? 'none' : 'block';
+  $('arAgyRow').style.opacity = d.enabled ? '1' : '0.5';
+  $('arOpencodeRow').style.opacity = d.enabled ? '1' : '0.5';
+  const runners = d.runners || {};
+  showAgentRunner('arAgy', 'arAgyInfo', runners.agy);
+  showAgentRunner('arOpencode', 'arOpencodeInfo', runners.opencode);
+  showAgentRecent(d.recent);
+  $('arReviews').textContent = d.review_text || 'no agent-run reviews yet';
+  showAgentUsage(d.usage);
  }
  function showSupervisor(mode) {
   const id = { agy: 'supAgy', auto: 'supAuto' }[mode] || 'supHaiku';
@@ -699,6 +784,11 @@ function showGpu(gpu) {
  for (const id of ['supHaiku', 'supAgy', 'supAuto']) $(id).onchange = () => send({ type: 'config', action: 'supervisorSet', value: $(id).value });
  $('delegAll').onchange = () => send({ type: 'config', action: 'delegationSet', name: 'all', enabled: $('delegAll').checked });
  for (const [id, key] of [['delegPaid', 'paid'], ['delegFree', 'free'], ['delegLocal', 'local'], ['delegAgy', 'agy']]) $(id).onchange = () => send({ type: 'config', action: 'delegationSet', name: key, enabled: $(id).checked });
+ $('arAll').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'all', enabled: $('arAll').checked });
+ $('arAgy').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'agy', enabled: $('arAgy').checked });
+ $('arOpencode').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'opencode', enabled: $('arOpencode').checked });
+ $('arUsageRefresh').onclick = () => send({ type: 'config', action: 'usageRefresh' });
+ $('arUsageMark').onclick = () => send({ type: 'config', action: 'usageMark' });
 $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });
  $('saveProfile').onclick = () => { const fields = {}; for (const n of PARAMS) fields[n] = $('p_' + n).value;
   send({ type: 'config', action: 'profileSet', model: $('models').value, fields: JSON.stringify(fields) }); };
@@ -719,7 +809,7 @@ $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled
  document.querySelectorAll('[data-quick]').forEach((b) => b.onclick = () => send({ type: 'quick', action: b.dataset.quick }));
  document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => send({ type: 'open', file: a.dataset.open }));
  window.addEventListener('message', (e) => { if (e.data.type === 'status') showStatus(e.data.data); if (e.data.type === 'busy') { busy = e.data.value; if (lastStatus) showPresets(lastStatus.preset); } if (e.data.type === 'models') showModels(e.data.data); if (e.data.type === 'workers') showWorkers(e.data.data); if (e.data.type === 'live') showLive(e.data.data); if (e.data.type === 'gpu') showGpu(e.data.data); if (e.data.type === 'delegations') showDelegations(e.data.data);
-  if (e.data.type === 'firewall') showFirewall(e.data.data); if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); });
+  if (e.data.type === 'firewall') showFirewall(e.data.data); if (e.data.type === 'pairState') showPairState(e.data.data); if (e.data.type === 'pairFound') showFound(e.data.data); if (e.data.type === 'agentRuns') showAgentRuns(e.data.data); });
 </script></body></html>`;
 
 function activate(context) {
