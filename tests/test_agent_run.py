@@ -387,3 +387,19 @@ def test_agent_run_ignores_the_switch_of_the_other_runner(tmp_path, repo):
     agent_switch.set_switch(StateStore(), "opencode", "off")
     report = run_job(tmp_path, FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"}))
     assert report["passed"] is True
+
+
+@pytest.mark.parametrize("make", [
+    lambda run: AgyRunner(Provider("agy", AGY_CONFIG), runner=run),
+    lambda run: OpenCodeRunner("oc.exe", "m", run),
+])
+def test_runners_set_pwd_to_the_run_folder(tmp_path, make):
+    """opencode reads its working folder from PWD: an inherited PWD made it work in the wrong repository."""
+    seen: dict = {}
+
+    def run(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="{}", stderr="", returncode=0)
+
+    make(run).run("do it", tmp_path, 5)
+    assert seen["env"]["PWD"] == str(tmp_path) and seen["cwd"] == tmp_path

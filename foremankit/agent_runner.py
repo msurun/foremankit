@@ -42,6 +42,12 @@ class Runner(Protocol):
         """Run the agent with `prompt` inside `cwd` and return its reply."""
 
 
+def _env_for(cwd: Path) -> dict[str, str]:
+    """The environment of a runner: the parent's, but with PWD = the run folder (opencode takes its working folder from
+    PWD, not from the process cwd, and answered about the wrong repository when PWD was inherited)."""
+    return {**os.environ, "PWD": str(cwd)}
+
+
 class AgyRunner:
     """`agy -p <prompt> --model <id> --output-format json --sandbox --dangerously-skip-permissions` in the worktree."""
     name = "agy"
@@ -59,7 +65,7 @@ class AgyRunner:
         """Start agy; a timeout is a result (the work done so far is still checked), a missing binary is an error."""
         command = [self.provider.agy_binary, "-p", prompt, "--model", self.model, *AGY_FLAGS]
         try:
-            done = self._runner(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            done = self._runner(command, stdin=subprocess.DEVNULL, env=_env_for(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)
@@ -86,7 +92,7 @@ class OpenCodeRunner:
         """Start opencode; same contract as AgyRunner.run."""
         command = [self.binary, "run", "--auto", "--model", self.model, "--format", "json", prompt]
         try:
-            done = self._runner(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            done = self._runner(command, stdin=subprocess.DEVNULL, env=_env_for(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             return RunnerResult(TIMEOUT_REPLY, timed_out=True, exit_code=None)

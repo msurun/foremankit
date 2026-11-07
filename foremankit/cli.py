@@ -414,6 +414,61 @@ def _print_batch(report: dict[str, Any]) -> None:
     print(report["summary"])
 
 
+def cmd_agent_ask(router: Router, args: argparse.Namespace) -> int:
+    """Ask a headless agent ONE read-only question about a folder; print the line (or JSON), exit 0 when ok."""
+    from foremankit.agent_ask import AskJob, ask
+    from foremankit.config import load_env
+    load_env()
+    task_file = Path(args.task_file)
+    try:
+        task = task_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as problem:
+        print(f"FAIL agent-ask refused: cannot read the task file: {problem}")
+        return 2
+    job = AskJob(task, Path(args.project).resolve(), args.runner, args.model, args.timeout, args.sensitivity,
+                 task_file.stem)
+    result = ask(job, raw_dir=Path(args.raw_dir) if args.raw_dir else None)
+    print(json.dumps(result, indent=2) if args.json else _ask_line(result))
+    return 0 if result["ok"] else 1
+
+
+def cmd_agent_ask_batch(router: Router, args: argparse.Namespace) -> int:
+    """Ask every question file of a folder, one line per result; exit 0 only when every answer is ok."""
+    from foremankit.agent_ask import AskBatch, ask_batch
+    from foremankit.config import load_env
+    load_env()
+    tasks_dir = Path(args.tasks_dir)
+    if not _has_questions(tasks_dir):
+        print(f"FAIL agent-ask-batch refused: no *.md or *.txt files in {tasks_dir}")
+        return 2
+    batch = AskBatch(tasks_dir=tasks_dir, out_dir=Path(args.out_dir), runner=args.runner,
+                     project=Path(args.project).resolve(), model=args.model, timeout=args.timeout,
+                     sensitivity=args.sensitivity)
+    results = ask_batch(batch)
+    for result in results:
+        print(_ask_line(result))
+    failed = sum(not result["ok"] for result in results)
+    print(f"{len(results) - failed} ok, {failed} failed (results in {args.out_dir})")
+    return 0 if failed == 0 else 1
+
+
+def _ask_line(result: dict[str, Any]) -> str:
+    """`OK|FAIL name runner seconds tokens` for one ask result, then its error and reverted files when there are any."""
+    status = "OK" if result["ok"] else "FAIL"
+    head = f"{status} {result['name']} {result['runner']} {result['seconds']}s tokens_in={result['tokens_in']}"
+    lines = [f"{head} tokens_out={result['tokens_out']} tool_calls={result['tool_calls']}"]
+    if result["error"]:
+        lines.append(f"error: {result['error']}")
+    if result["modified_files"]:
+        lines.append(f"modified (reverted): {', '.join(result['modified_files'])}")
+    return "\n".join(lines)
+
+
+def _has_questions(folder: Path) -> bool:
+    """True when the folder exists and holds at least one *.md or *.txt file."""
+    return folder.is_dir() and (any(folder.glob("*.md")) or any(folder.glob("*.txt")))
+
+
 def cmd_agent_merge(router: Router, args: argparse.Namespace) -> int:
     """Merge or reject one agent-run branch named in a batch report and log the verdict; exit 0 only for merged/rejected."""
     from foremankit.agent_merge import MergeRefused
@@ -551,7 +606,7 @@ def _read_jobs(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "agent-run-batch": cmd_agent_run_batch, "agent-merge": cmd_agent_merge, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "agent-run-batch": cmd_agent_run_batch, "agent-merge": cmd_agent_merge, "agent-ask": cmd_agent_ask, "agent-ask-batch": cmd_agent_ask_batch, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
@@ -678,6 +733,26 @@ def _add_agent_batch_parsers(sub: Any) -> None:
     merge.add_argument("--check", default="", help="post-merge check command (routing.yaml verify.allowed_commands)")
 
 
+def _add_agent_ask_parsers(sub: Any) -> None:
+    ask = sub.add_parser("agent-ask", help="ask a headless agent ONE read-only question about a folder; any change is reverted")
+    ask.add_argument("--task-file", required=True, help="the question as a text file")
+    ask.add_argument("--project", required=True, help="folder the agent reads")
+    ask.add_argument("--runner", required=True, choices=["agy", "opencode"])
+    ask.add_argument("--model", default="", help="model alias of the runner")
+    ask.add_argument("--timeout", type=float, default=900)
+    ask.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
+    ask.add_argument("--raw-dir", default="", help="write the runner's raw output here")
+    ask.add_argument("--json", action="store_true")
+    ask_batch = sub.add_parser("agent-ask-batch", help="ask every *.md/*.txt question of a folder read-only; exit 0 when all answered")
+    ask_batch.add_argument("--tasks-dir", required=True, help="folder of question files")
+    ask_batch.add_argument("--out-dir", required=True, help="folder for one result JSON per question")
+    ask_batch.add_argument("--runner", required=True, choices=["agy", "opencode"])
+    ask_batch.add_argument("--project", required=True, help="folder the agents read")
+    ask_batch.add_argument("--model", default="", help="model alias of the runner")
+    ask_batch.add_argument("--timeout", type=float, default=900)
+    ask_batch.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argument parser of the `foremankit` command with all its subcommands."""
     parser = argparse.ArgumentParser(prog="foremankit", description="Delegate work to cheaper/local models.")
@@ -688,6 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_kaggle_parser(sub)
     _add_delegate_parser(sub)
     _add_agent_batch_parsers(sub)
+    _add_agent_ask_parsers(sub)
     return parser
 
 
