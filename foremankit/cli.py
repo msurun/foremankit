@@ -361,24 +361,25 @@ def cmd_agent_run_batch(router: Router, args: argparse.Namespace) -> int:
     from foremankit.config import load_env
     load_env()
     try:
-        report = _run_plan(Path(args.plan), Path(args.project).resolve())
+        done = _resume_entries(getattr(args, "resume", ""))
+        report = _run_plan(Path(args.plan), Path(args.project).resolve(), done)
     except (PlanError, ValueError) as problem:
         print(f"FAIL agent-run-batch refused: {problem}")
         return 2
-    _print_batch(report)
+    _print_batch(report, args.report_out or getattr(args, "resume", "") or "REPORT.json")
     if args.report_out:
         Path(args.report_out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     return 0 if all(entry["status"] == "passed" for entry in report["tasks"]) else 1
 
 
-def _run_plan(plan: Path, project: Path) -> dict[str, Any]:
+def _run_plan(plan: Path, project: Path, done: dict | None = None) -> dict[str, Any]:
     """Load the plan and run it; PlanError propagates to the caller."""
     from foremankit.agent_batch import run_batch
     from foremankit.agent_plan import load_plan
-    return run_batch(load_plan(plan), _batch_context(plan, project))
+    return run_batch(load_plan(plan), _batch_context(plan, project, done))
 
 
-def _batch_context(plan: Path, project: Path) -> Any:
+def _batch_context(plan: Path, project: Path, done: dict | None = None) -> Any:
     """The batch context: the real agent_run, the routing settings, the quota state file, the tracked files."""
     from foremankit import agent_quota
     from foremankit.agent_batch import BatchContext
@@ -386,7 +387,7 @@ def _batch_context(plan: Path, project: Path) -> Any:
     from foremankit.config import load_config
     settings = load_config()["routing"].get("agent_run", {})
     return BatchContext(project=project, plan_dir=plan.resolve().parent, run_one=agent_run, settings=settings,
-                        state_path=agent_quota.state_path(), review_globs=settings.get("review_paths", []),
+                        state_path=agent_quota.state_path(), done=done or {}, review_globs=settings.get("review_paths", []),
                         tracked=_tracked_files(project), disabled_runners=_disabled_runners())
 
 
@@ -407,11 +408,32 @@ def _tracked_files(project: Path) -> list[str]:
     return result.stdout.splitlines() if result.returncode == 0 else []
 
 
-def _print_batch(report: dict[str, Any]) -> None:
-    """One line per task (status, id, runner, branch), then the batch summary."""
+def _resume_entries(filename: str) -> dict:
+    """Read passed task entries from a previous batch report, refusing malformed input."""
+    if not filename:
+        return {}
+    try:
+        report = json.loads(Path(filename).read_text(encoding="utf-8"))
+        entries = report["tasks"]
+        if not isinstance(entries, list) or any(not isinstance(e, dict) or
+                not isinstance(e.get("id"), str) or not isinstance(e.get("status"), str) for e in entries):
+            raise ValueError("invalid task entries")
+        return {entry["id"]: entry for entry in entries if entry["status"] == "passed"}
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as problem:
+        raise ValueError(f"cannot resume {filename}: {problem}") from problem
+
+
+def _print_batch(report: dict[str, Any], report_path: str = "REPORT.json") -> None:
+    """Print task outcomes and a resume hint when runners are temporarily paused."""
+    import time
     for entry in report["tasks"]:
-        print(f"{entry['status']} {entry['id']} {entry.get('runner', '-')} {entry.get('branch', '-')}")
+        detail = entry.get("branch", "-")
+        if entry["status"] == "waiting":
+            detail = "until " + time.strftime("%H:%M", time.localtime(entry["retry_after"]))
+        print(f"{entry['status']} {entry['id']} {entry.get('runner', '-')} {detail}")
     print(report["summary"])
+    if any(entry["status"] == "waiting" for entry in report["tasks"]):
+        print(f"waiting tasks: rerun with --resume {report_path} after the earliest time")
 
 
 def cmd_agent_ask(router: Router, args: argparse.Namespace) -> int:
@@ -721,6 +743,7 @@ def _add_agent_batch_parsers(sub: Any) -> None:
     batch = sub.add_parser("agent-run-batch", help="run a plan of agent-run tasks in dependency levels; exit 0 when all passed")
     batch.add_argument("--plan", required=True, help="YAML plan: tasks with id, task_file, check, scope, depends_on")
     batch.add_argument("--project", required=True, help="root of the git repository the agents work on")
+    batch.add_argument("--resume", default="", help="resume passed tasks from a previous JSON report")
     batch.add_argument("--report-out", default="", help="write the full batch report as JSON here")
     merge = sub.add_parser("agent-merge", help="merge or reject one agent-run branch from a batch report, log the verdict")
     merge.add_argument("--project", required=True, help="root of the git repository")

@@ -157,8 +157,8 @@ def test_quota_error_exhausts_runner_and_skips_second_run_while_other_runner_pas
     t3 = PlanTask(id="open1", task_file=f3, scope=("c.py",), check="pytest", runner="opencode")
     report = run_batch([t1, t2, t3], context)
     state = json.loads((tmp_path / "quota_state.json").read_text(encoding="utf-8"))
-    assert report["tasks"][0]["status"] == "quota_exhausted"
-    assert report["tasks"][1]["status"] == "skipped"
+    assert report["tasks"][0]["status"] == "waiting"
+    assert report["tasks"][1]["status"] == "waiting"
     assert report["tasks"][2]["status"] == "passed"
     assert state["agy"]["paused_until"] > time.time()
 
@@ -275,8 +275,8 @@ def test_quota_error_in_agent_reply_marks_task_quota_exhausted(tmp_path: Path) -
     context = _make_context(tmp_path, reply_quota_run_one)
     task = PlanTask(id="t1", task_file=f1, scope=("a.py",), check="pytest", runner="agy")
     report = run_batch([task], context)
-    assert report["tasks"][0]["status"] == "quota_exhausted"
-    assert "rate limit" in report["tasks"][0]["reason"]
+    assert report["tasks"][0]["status"] == "waiting"
+    assert "limit: retry after" in report["tasks"][0]["reason"]
 
 
 def test_plan_error_propagates_when_plan_is_invalid(tmp_path: Path) -> None:
@@ -353,3 +353,65 @@ def test_batch_dispatches_pinned_codex(tmp_path: Path) -> None:
     entry = run_batch([task], context)["tasks"][0]
     assert len(jobs) == 1 and jobs[0].runner == "codex" and entry["status"] == "passed"
     assert json.loads(context.state_path.read_text())["codex"]["runs"] == 1
+
+
+@pytest.mark.parametrize("runner", ["auto", "codex"])
+def test_limit_fallback_or_wait(tmp_path: Path, runner: str) -> None:
+    """Auto reroutes limits while a pinned runner waits until the parsed reset."""
+    calls = []
+
+    def run_one(job: AgentRunJob) -> dict:
+        calls.append(job.runner)
+        if len(calls) == 1:
+            raise AgentRunError("usage limit, try again in 2 hours")
+        return {"passed": True}
+
+    context = _make_context(tmp_path, run_one)
+    context = BatchContext(**{**context.__dict__, "clock": lambda: 1000.0})
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"), scope=("a.py",),
+                    check="pytest", runner=runner)
+    entry = run_batch([task], context)["tasks"][0]
+    assert json.loads(context.state_path.read_text())[calls[0]]["paused_until"] == 8200.0
+    assert entry["status"] == ("passed" if runner == "auto" else "waiting")
+    assert "rerouted from opencode (limit)" in entry["reason"] if runner == "auto" else entry["retry_after"] == 8200
+
+
+@pytest.mark.parametrize("runner,sensitivity", [("codex", "normal"), ("auto", "internal")])
+def test_paused_tasks_and_dependents_wait(tmp_path: Path, runner: str, sensitivity: str) -> None:
+    """Paused pins and internal tasks propagate waiting to dependents."""
+    context = _make_context(tmp_path, lambda job: pytest.fail("paused runner started"))
+    context = BatchContext(**{**context.__dict__, "clock": lambda: 1000.0})
+    context.state_path.write_text(json.dumps({r: {"paused_until": 2000} for r in ("codex", "agy")}))
+    file = _create_task_file(tmp_path, "a.md")
+    tasks = [PlanTask(id="a", task_file=file, scope=("a.py",), check="pytest", runner=runner,
+                      sensitivity=sensitivity),
+             PlanTask(id="b", task_file=file, scope=("b.py",), check="pytest", depends_on=("a",))]
+    report = run_batch(tasks, context)
+    assert report["summary"]["waiting"] == 2
+    assert all(e["retry_after"] == 2000 for e in report["tasks"])
+    assert "dependency 'a'" in report["tasks"][1]["reason"]
+
+
+def test_resume_uses_old_branch(tmp_path: Path) -> None:
+    """Completed tasks return unchanged and supply their saved branch to children."""
+    jobs = []
+    context = _make_context(tmp_path, lambda job: jobs.append(job) or {"passed": True})
+    old = {"id": "a", "status": "passed", "branch": "old-branch"}
+    context = BatchContext(**{**context.__dict__, "done": {"a": old}})
+    file = _create_task_file(tmp_path, "a.md")
+    tasks = [PlanTask(id="a", task_file="missing.md", scope=("a.py",), check="pytest"),
+             PlanTask(id="b", task_file=file, scope=("b.py",), check="pytest", depends_on=("a",))]
+    report = run_batch(tasks, context)
+    assert report["tasks"][0] is old
+    assert len(jobs) == 1 and jobs[0].base == "old-branch"
+
+
+def test_auto_skips_pause_and_normal_failure_resets_strikes(tmp_path: Path) -> None:
+    """Auto avoids paused opencode and a failed check still clears codex strikes."""
+    context = _make_context(tmp_path, lambda job: {"passed": False})
+    context = BatchContext(**{**context.__dict__, "clock": lambda: 1000.0})
+    context.state_path.write_text(json.dumps({"opencode": {"paused_until": 2000}, "codex": {"strikes": 2}}))
+    task = PlanTask(id="a", task_file=_create_task_file(tmp_path, "a.md"), scope=("a.py",), check="pytest")
+    entry = run_batch([task], context)["tasks"][0]
+    assert entry["runner"] == "codex" and entry["status"] == "failed"
+    assert json.loads(context.state_path.read_text())["codex"]["strikes"] == 0
