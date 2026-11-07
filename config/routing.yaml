@@ -205,6 +205,8 @@ verify:
 # `foremankit agent-run` (multi-file agentic tasks in a git worktree): paths that make the report say REVIEW REQUIRED
 # (an independent review before merge is mandatory for security code), and the timeout of our own check run.
 agent_run:
+  autopilot:
+    max_fix_rounds: 1  # Maximum repair attempts per passed task.
   planner:
     order: [codex, agy]
     max_tasks: 6
