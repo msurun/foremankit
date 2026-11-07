@@ -18,6 +18,18 @@ from foremankit.agent_switch import (
 from foremankit.state import StateStore
 
 
+def test_codex_switch_persists_and_respects_master(tmp_path):
+    """Codex is a third runner with its own switch under the master switch."""
+    assert RUNNERS == ("agy", "opencode", "codex") and "codex" in TARGETS
+    store = StateStore(tmp_path / "state.json")
+    assert set_switch(store, "codex", "off") == ["codex"]
+    assert disabled_runners(store.load()) == frozenset({"codex"})
+    assert "switched off" in refusal(store.load(), "codex")
+    set_switch(store, "all", "off")
+    set_switch(store, "codex", "on")
+    assert refusal(store.load(), "codex") == MASTER_OFF_MESSAGE
+
+
 class TestIsEnabled:
     """Tests for is_enabled function."""
 
@@ -155,14 +167,14 @@ class TestDescribe:
 
     def test_default_state_describes_everything_on(self):
         lines = describe({"toggles": {}}).split("\n")
-        assert lines == ["agent runs: on", "agy: on", "opencode: on"]
+        assert lines == ["agent runs: on", "agy: on", "opencode: on", "codex: on"]
 
     def test_a_mixed_state_shows_each_own_switch(self):
         state = {"toggles": {"agent_run:all": "on", "agent_run:agy": "off"}}
         lines = describe(state).split("\n")
-        assert lines == ["agent runs: on", "agy: off", "opencode: on"]
+        assert lines == ["agent runs: on", "agy: off", "opencode: on", "codex: on"]
 
     def test_a_runner_line_shows_its_own_switch_not_the_master_combined_value(self):
         state = {"toggles": {"agent_run:all": "off", "agent_run:agy": "on"}}
         lines = describe(state).split("\n")
-        assert lines == ["agent runs: off", "agy: on", "opencode: on"]
+        assert lines == ["agent runs: off", "agy: on", "opencode: on", "codex: on"]

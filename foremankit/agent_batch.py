@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import agent_quota
+from . import agent_quota, agent_switch
 from .agent_choice import RunnerFacts, decide_runner
 from .agent_plan import PlanTask, plan_levels
 from .agent_run import AgentRunError, AgentRunJob
@@ -59,7 +59,7 @@ class _BatchState:
         # In plain words:
         # Each runner type (e.g. agy, opencode) has its own maximum concurrency limit.
         # We pre-allocate a semaphore for every runner mentioned in the plan or settings.
-        configured_runners = {"agy", "opencode"} | {t.runner for t in tasks if t.runner != "auto"}
+        configured_runners = set(agent_switch.RUNNERS) | {t.runner for t in tasks if t.runner != "auto"}
         for runner in configured_runners:
             slot_count = agent_quota.slots(self.context.settings, runner)
             self.semaphores[runner] = threading.Semaphore(slot_count)
@@ -170,6 +170,7 @@ def _resolve_runner(
         task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
         agy_enabled="agy" not in context.disabled_runners,
         opencode_enabled="opencode" not in context.disabled_runners,
+        codex_enabled="codex" not in context.disabled_runners,
     )
     choice, reasons = decide_runner(facts, context.review_globs)
     if choice in ("haiku", "lead"):

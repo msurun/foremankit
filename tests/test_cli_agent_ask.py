@@ -37,6 +37,16 @@ def test_agent_ask_batch_help_exits_zero() -> None:
     assert stop.value.code == 0
 
 
+@pytest.mark.parametrize("command, options", [
+    ("agent-run", ["--task-file", "q.txt", "--project", ".", "--scope", "*.py", "--check", "pytest"]),
+    ("agent-ask", ["--task-file", "q.txt", "--project", "."]),
+    ("agent-ask-batch", ["--tasks-dir", ".", "--out-dir", "out", "--project", "."]),
+])
+def test_cli_accepts_codex(command, options) -> None:
+    """Every runner option accepts Codex without invoking a live agent."""
+    assert build_parser().parse_args([command, *options, "--runner", "codex"]).runner == "codex"
+
+
 def test_agent_ask_refuses_unreadable_task_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code = main(_ask_argv(tmp_path, tmp_path / "missing.md"))
     assert code == 2

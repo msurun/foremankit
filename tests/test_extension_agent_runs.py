@@ -16,6 +16,9 @@ REQUIRED_ELEMENT_IDS = (
     "arAll",
     "arAgy",
     "arOpencode",
+    "arCodex",
+    "arCodexRow",
+    "arCodexInfo",
     "arRecent",
     "arReviews",
     "arUsageRefresh",
@@ -39,6 +42,14 @@ def load_extension_source() -> str:
     # In plain words: read the entire VS Code extension script into memory so tests
     # can inspect its HTML templates, handlers, and configuration dispatch dictionary.
     return EXTENSION_PATH.read_text(encoding="utf-8")
+
+
+def test_codex_row_wires_status_and_checkbox():
+    """The third row renders status, dims with the master switch and sends the Codex toggle."""
+    source = load_extension_source()
+    assert "showAgentRunner('arCodex', 'arCodexInfo', runners.codex)" in source
+    assert "$('arCodexRow').style.opacity = d.enabled" in source
+    assert "$('arCodex').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'codex'," in source
 
 
 def test_required_element_ids_are_present():

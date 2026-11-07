@@ -35,13 +35,26 @@ def outcome(index: int, **fields) -> dict:
     return row
 
 
+def test_codex_panel_entry_and_model():
+    """Codex exposes its own switch, one slot, normal-only data and configured/latest model."""
+    inputs = make_inputs(settings={"codex": {"default_model": "configured"}})
+    entry = build_status(inputs)["runners"]["codex"]
+    assert entry["label"] == "Codex" and entry["model"] == "configured"
+    assert entry["slots"] == 1 and entry["internal_data"] is False and entry["active"]
+    inputs = make_inputs(toggles_state={"toggles": {"agent_run:codex": "off"}},
+                         rows=[outcome(0, provider="codex", model="latest")])
+    entry = build_status(inputs)["runners"]["codex"]
+    assert entry["model"] == "latest" and not entry["own"] and not entry["active"]
+    assert build_status(inputs)["runners"]["agy"]["active"]
+
+
 class TestBuildStatus:
     """The pure builder with synthetic inputs."""
 
-    def test_empty_inputs_give_both_runners_and_zeros(self):
+    def test_empty_inputs_give_all_runners_and_zeros(self):
         status = build_status(make_inputs())
         assert status["enabled"] is True
-        assert set(status["runners"]) == {"agy", "opencode"}
+        assert set(status["runners"]) == {"agy", "opencode", "codex"}
         assert status["recent"] == []
         assert status["reviews"] == {}
         assert status["review_text"] == "no agent-run reviews yet"
@@ -55,11 +68,11 @@ class TestBuildStatus:
         assert status["runners"]["agy"]["internal_data"] is True
         assert status["runners"]["opencode"]["internal_data"] is False
 
-    def test_master_off_keeps_own_switches_but_deactivates_both(self):
+    def test_master_off_keeps_own_switches_but_deactivates_all(self):
         status = build_status(make_inputs(toggles_state={"toggles": {"agent_run:all": "off"}}))
         assert status["enabled"] is False
-        assert [entry["own"] for entry in status["runners"].values()] == [True, True]
-        assert [entry["active"] for entry in status["runners"].values()] == [False, False]
+        assert [entry["own"] for entry in status["runners"].values()] == [True, True, True]
+        assert [entry["active"] for entry in status["runners"].values()] == [False, False, False]
 
     def test_agy_off_deactivates_only_agy(self):
         status = build_status(make_inputs(toggles_state={"toggles": {"agent_run:agy": "off"}}))

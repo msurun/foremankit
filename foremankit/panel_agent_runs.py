@@ -16,7 +16,7 @@ from .config import _read_yaml, config_dir
 from .state import CallLog, StateStore, state_dir, utc_day
 
 RECENT_RUNS = 8
-LABELS = {"agy": "Antigravity", "opencode": "opencode"}
+LABELS = {"agy": "Antigravity", "opencode": "opencode", "codex": "Codex"}
 AGY_DEFAULT_MODEL = "flash_high"
 
 
@@ -88,8 +88,8 @@ def _latest_model(rows: list[dict], runner: str, settings: dict) -> str:
                  if row.get("provider") == runner and row.get("model")), None)
     if seen:
         return str(seen)
-    if runner == "opencode":
-        return str((settings.get("opencode") or {}).get("default_model") or "")
+    if runner in ("opencode", "codex"):
+        return str((settings.get(runner) or {}).get("default_model") or "")
     return AGY_DEFAULT_MODEL
 
 

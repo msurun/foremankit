@@ -1,7 +1,7 @@
 """On/off switches for agent runs: one master switch plus one switch per runner.
 
 Toggles live in the state file under state["toggles"] with the keys
-"agent_run:all" (master), "agent_run:agy" and "agent_run:opencode".
+"agent_run:all" (master), "agent_run:agy", "agent_run:opencode" and "agent_run:codex".
 A missing key means "on": agent runs were always available, so switching
 must not change the current behaviour until the owner turns something off.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .state import StateStore
 
-RUNNERS = ("agy", "opencode")
+RUNNERS = ("agy", "opencode", "codex")
 TARGETS = ("all", *RUNNERS)
 
 _MASTER = "all"

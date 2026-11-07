@@ -319,7 +319,8 @@ def test_run_entry_carries_what_agent_merge_needs(tmp_path: Path) -> None:
     assert entry["review_required"] is True and entry["review_paths"] == ["gateway/**"]
 
 
-def test_disabled_runner_is_skipped_without_calling_run_one(tmp_path: Path) -> None:
+@pytest.mark.parametrize("runner", ["agy", "codex"])
+def test_disabled_runner_is_skipped_without_calling_run_one(tmp_path: Path, runner: str) -> None:
     """A runner switched off in the panel gets `skipped`, no quota run is counted, the other runner still runs."""
     files = [_create_task_file(tmp_path, f"t{n}.md") for n in (1, 2)]
     calls: list[str] = []
@@ -329,10 +330,26 @@ def test_disabled_runner_is_skipped_without_calling_run_one(tmp_path: Path) -> N
         return {"passed": True, "branch": "b", "files": []}
 
     context = _make_context(tmp_path, run_one)
-    context = BatchContext(**{**context.__dict__, "disabled_runners": frozenset({"agy"})})
-    tasks = [PlanTask(id="a", task_file=files[0], scope=("a.py",), check="pytest", runner="agy"),
+    context = BatchContext(**{**context.__dict__, "disabled_runners": frozenset({runner})})
+    tasks = [PlanTask(id="a", task_file=files[0], scope=("a.py",), check="pytest", runner=runner),
              PlanTask(id="o", task_file=files[1], scope=("o.py",), check="pytest", runner="opencode")]
     entries = {entry["id"]: entry for entry in run_batch(tasks, context)["tasks"]}
     assert entries["a"]["status"] == "skipped" and "switched off" in entries["a"]["reason"]
     assert entries["o"]["status"] == "passed" and calls == ["opencode"]
-    assert "agy" not in json.loads(context.state_path.read_text())
+    assert runner not in json.loads(context.state_path.read_text())
+
+
+def test_batch_dispatches_pinned_codex(tmp_path: Path) -> None:
+    """An explicit Codex pin reaches the coding job and its own quota bucket."""
+    filename = _create_task_file(tmp_path, "codex.md")
+    jobs = []
+
+    def run_one(job: AgentRunJob) -> dict:
+        jobs.append(job)
+        return {"passed": True, "branch": "codex-result", "files": []}
+
+    context = _make_context(tmp_path, run_one)
+    task = PlanTask(id="c", task_file=filename, scope=("c.py",), check="pytest", runner="codex")
+    entry = run_batch([task], context)["tasks"][0]
+    assert len(jobs) == 1 and jobs[0].runner == "codex" and entry["status"] == "passed"
+    assert json.loads(context.state_path.read_text())["codex"]["runs"] == 1

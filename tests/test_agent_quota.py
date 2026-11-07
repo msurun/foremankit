@@ -27,8 +27,9 @@ def at(day: int, hour: int = 12) -> float:
 
 
 def test_slots_defaults() -> None:
-    """opencode defaults to 3 slots, agy to 1, and any other runner to 1."""
+    """opencode defaults to 3 slots, agy and Codex to 1, and any other runner to 1."""
     assert slots({}, "opencode") == 3
+    assert slots({}, "codex") == 1
     assert slots({}, "agy") == 1
     assert slots({}, "something-else") == 1
     assert slots({"max_parallel": None}, "agy") == 1

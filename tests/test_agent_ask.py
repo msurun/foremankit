@@ -151,6 +151,70 @@ def test_parse_usage_unknown_runner_is_all_none():
     assert all(value is None for value in parse_usage("nope", agy()).values())
 
 
+def codex_raw() -> str:
+    """Untouched JSONL captured from Codex CLI reading a synthetic answer.txt on 2026-11-06."""
+    return (Path(__file__).parent / "fixtures" / "codex_exec.jsonl").read_text(encoding="utf-8")
+
+
+def test_codex_usage_matches_live_sample():
+    """One command appears twice in the stream; count its item ID once and keep all token counters."""
+    assert parse_usage("codex", codex_raw()) == {
+        "tokens_in": 29444, "tokens_out": 63, "tool_calls": 1, "thinking_tokens": 0,
+        "cache_read_tokens": 27008, "turns": 1}
+
+
+@pytest.mark.parametrize("raw", ["", "garbage", "[]", "{}", '{"type": []}', "{broken", None])
+def test_codex_unreadable_usage_stays_unknown(raw):
+    """Garbage is not evidence of zero usage."""
+    assert all(value is None for value in parse_usage("codex", raw).values())
+    assert aa._raw_answer("codex", raw) == ""
+
+
+@pytest.mark.parametrize("counters", [{}, {"input_tokens": "bad", "output_tokens": []}, []])
+def test_codex_missing_or_invalid_counters_stay_unknown(counters):
+    """Malformed nested JSON must neither raise nor invent token totals."""
+    raw = oc({"type": "turn.completed", "usage": counters}, {"type": "item.completed", "item": []})
+    usage = parse_usage("codex", raw)
+    assert usage["tokens_in"] is None and usage["tokens_out"] is None
+    assert usage["thinking_tokens"] is None and usage["cache_read_tokens"] is None
+    assert usage["turns"] == 1 and usage["tool_calls"] == 0
+    assert aa._raw_answer("codex", raw) == ""
+
+
+def test_codex_usage_sums_turns_and_deduplicates_tools():
+    """Only tool items count, once per ID; final answers and reasoning are not tool calls."""
+    raw = codex_raw() + oc({"type": "item.completed", "item": {"id": "mcp", "type": "mcp_tool_call"}},
+                           {"type": "item.completed", "item": {"id": "reason", "type": "reasoning"}},
+                           {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}})
+    usage = parse_usage("codex", raw)
+    assert (usage["tokens_in"], usage["tokens_out"], usage["tool_calls"], usage["turns"]) == (29454, 65, 2, 2)
+    assert usage["thinking_tokens"] is None and usage["cache_read_tokens"] is None
+
+
+def test_codex_malformed_tool_keeps_known_usage():
+    """An invalid item type or ID cannot erase valid usage elsewhere in the stream."""
+    raw = codex_raw() + oc({"type": "item.completed", "item": {"type": [], "id": {}}})
+    assert parse_usage("codex", raw)["tokens_in"] == 29444
+    assert parse_usage("codex", raw)["tool_calls"] == 1
+
+
+def test_codex_ask_preserves_full_answer_and_raw(tmp_path, repo):
+    """Ask uses the final agent message with newlines and the measured usage, without a live call."""
+    raw = codex_raw()
+    result = ask(make_job(repo, runner="codex"), runner=FakeRunner(name="codex", raw=raw), raw_dir=tmp_path)
+    assert result["ok"] and result["answer"] == "42\nNo files changed."
+    assert result["tokens_in"] == 29444 and result["tokens_out"] == 63 and result["tool_calls"] == 1
+    assert result["modified_files"] == [] and Path(result["raw_path"]).read_text(encoding="utf-8") == raw
+
+
+@pytest.mark.parametrize("sensitivity", ["internal", "private"])
+def test_codex_ask_refuses_sensitive_data(repo, sensitivity):
+    """Codex questions use the same eligibility gate as coding runs."""
+    from foremankit.agent_runner import CodexRunner
+    result = ask(make_job(repo, runner="codex", sensitivity=sensitivity), runner=CodexRunner("missing.exe", "m"))
+    assert not result["ok"] and f"codex may not receive {sensitivity}" in result["error"]
+
+
 def test_ask_happy_path_takes_the_full_answer_and_usage(tmp_path, repo):
     raw = oc(oc_text("line one\nline two"), oc_tool(), oc_step(7855, 75), oc_tool(),
              oc_step(100, 5, reasoning=2, cache_read=7))
@@ -229,10 +293,12 @@ def test_ask_ineligible_runner_is_refused_without_running(repo):
     assert result["ok"] is False and "internal" in result["error"] and fake.calls == []
 
 
-def test_ask_runner_switched_off_is_refused_without_running(repo):
-    agent_switch.set_switch(StateStore(), "agy", "off")
-    fake = FakeRunner(name="agy")
-    result = ask(make_job(repo, runner="agy"), runner=fake)
+@pytest.mark.parametrize("runner", ["agy", "opencode", "codex"])
+def test_ask_runner_switched_off_is_refused_without_running(repo, runner):
+    """Each runner's switch refuses questions before any subprocess starts."""
+    agent_switch.set_switch(StateStore(), runner, "off")
+    fake = FakeRunner(name=runner)
+    result = ask(make_job(repo, runner=runner), runner=fake)
     assert result["ok"] is False and "switched off" in result["error"] and fake.calls == []
 
 

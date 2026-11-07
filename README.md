@@ -222,7 +222,7 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 
 ### agent-run-batch and agent-merge (several tasks, then review and merge)
 
-A YAML plan lists tasks: `id`, `task_file` (relative to the plan), `scope`, `check`, and optionally `runner` (`auto|agy|opencode`), `model`, `sensitivity` (`normal|internal`) and `depends_on`:
+A YAML plan lists tasks: `id`, `task_file` (relative to the plan), `scope`, `check`, and optionally `runner` (`auto|agy|opencode|codex`), `model`, `sensitivity` (`normal|internal`) and `depends_on`:
 
 ```yaml
 tasks:
@@ -247,6 +247,7 @@ foremankit agent-merge --project <repo root> --report batch.json --id TASK [--re
 - Tasks in the same level run in parallel. A dependent task starts from the branch of its **first** dependency (the rest of `depends_on` is only a gate, not a base).
 - Slots per runner (`max_parallel`) and the agy daily quota (`quota.agy`) are in `config/routing.yaml → agent_run`.
 - opencode free models get `normal` data only; `internal` always goes to agy (the plan validator rejects `internal` + opencode).
+- Codex uses the owner's subscription, one parallel slot and `normal` data only: select `--runner codex` for `agent-run`, `agent-ask` or `agent-ask-batch`, or pin `runner: codex` in a batch plan; `auto` keeps its existing order. Configure the binary and model under `agent_run.codex` in `config/routing.yaml`.
 - Report statuses: `passed` (check green), `failed` (check red), `refused` (privacy or runner refusal), `quota_exhausted` (agy limit hit; agy pauses for the cooldown), `skipped` (a dependency did not pass, or the quota check refused the start), `not_for_runner` (auto chose haiku/lead, so no agent branch exists).
 - `agent-run-batch` exits 0 only when every task passed; `--report-out` writes the JSON that `agent-merge` reads.
 
