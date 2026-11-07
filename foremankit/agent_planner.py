@@ -57,8 +57,10 @@ def build_prompt(goal: str, maximum: int) -> str:
             "a shared file requires depends_on. Put tests with the code they test. "
             "task_md must contain a title and Read first / Build / Tests / Check sections, "
             "naming concrete files and functions found by reading the repository. "
-            "Never plan security, credentials or shared-interface changes as agent tasks; "
-            "list those under lead_items for Claude instead. Do not change any files.\n"
+            "Only security code, credentials, private data and decisions between design "
+            "options go to lead_items for Claude. Adding a field, function or panel entry "
+            "is an ordinary agent task: describe the exact contract in task_md and, when two "
+            "tasks share it, order them with depends_on. Do not change any files.\n"
             f"Conventions:\n{standard.read_text(encoding='utf-8')}")
 
 
