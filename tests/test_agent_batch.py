@@ -432,3 +432,19 @@ def test_failed_run_that_changed_nothing_and_mentions_a_quota_is_a_limit_refusal
     assert entries["lim"]["status"] == "waiting" and entries["chk"]["status"] == "failed"
     state = json.loads(_make_context(tmp_path, run_one).state_path.read_text())
     assert state["codex"]["paused_until"] > 0 and state["opencode"]["paused_until"] == 0.0
+
+
+
+@pytest.mark.parametrize("issues", [[], ["file.py:1: function-too-long"]])
+def test_batch_entry_carries_convention_issues(issues):
+    from foremankit.agent_batch import _run_entry
+
+    entry = _run_entry("task", "codex", "passed", {"conventions_issues": issues})
+    assert entry["conventions_issues"] == issues
+    assert entry["conventions_issues"] is not issues
+
+
+def test_batch_entry_defaults_to_no_convention_issues():
+    from foremankit.agent_batch import _run_entry
+
+    assert _run_entry("task", "codex", "passed", {})["conventions_issues"] == []

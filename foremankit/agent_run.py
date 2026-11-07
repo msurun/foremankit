@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_git as vcs
-from . import agent_switch
+from . import agent_switch, codecheck, conventions
 from .agent_runner import Runner, RunnerError, RunnerResult, make_runner
 from .agent_scope import Change, review_reasons, split_by_scope
 from .agy_provider import MAX_PROMPT_CHARS
@@ -92,7 +92,8 @@ class _Run:
 
     def __init__(self, job: AgentRunJob, runner: Runner, config: dict[str, Any], tokens: list[str]):
         self.job, self.runner, self.tokens = job, runner, tokens
-        self.settings = config["routing"].get("agent_run", {})
+        self.routing = config["routing"]
+        self.settings = self.routing.get("agent_run", {})
         self.id = uuid.uuid4().hex[:8]
         self.branch = f"agent-run/{self.id}"
         self.worktree = Path(tempfile.gettempdir()) / "foremankit-agent-run" / f"{job.project.name}-{self.id}"
@@ -102,7 +103,7 @@ class _Run:
         """Worktree, agent, scope guard, check, commit, cleanup. The branch survives; the worktree goes unless kept."""
         base = self._start_worktree()
         try:
-            report = self._finish(base, self.runner.run(build_prompt(self.job, self.worktree, self.tokens),
+            report = self._finish(base, self.runner.run(build_prompt(self.job, self.worktree, self.tokens, self.routing),
                                                         self.worktree, self.job.timeout))
         except RunnerError as error:
             self._discard()
@@ -145,7 +146,22 @@ class _Run:
         check_passed, tail = self._run_check()
         stat = vcs.diff_stat(self.worktree, base)
         committed = vcs.commit_all(self.worktree, base, f"agent-run {self.id}: {self.job.task.strip()[:60]}")
-        return self._report(base, result, (inside, outside), (check_passed, tail, stat, committed))
+        report = self._report(base, result, (inside, outside), (check_passed, tail, stat, committed))
+        return self._check_conventions(report, inside)
+
+    def _check_conventions(self, report: dict[str, Any], changes: list[Change]) -> dict[str, Any]:
+        """Report mechanical issues; only fail mode changes the run verdict."""
+        mode = self.settings.get("conventions_check", "warn")
+        # Deleted paths have no source in the resulting commit to inspect.
+        paths = [str(self.worktree / path) for status, path in changes
+                 if status != "D" and path.endswith(".py")]
+        checked = paths if mode != "off" else []
+        issues = codecheck.check_files(checked, codecheck.limits_from(self.routing)) if checked else []
+        report.update(conventions_issues=[str(issue) for issue in issues], conventions_checked=len(checked))
+        if issues and mode == "fail":
+            report["passed"] = False
+            report["agent_reply"] = "FAIL coding standard check: " + report["agent_reply"]
+        return report
 
     def _run_check(self) -> tuple[bool, str]:
         """Our own run of the check in the worktree, never the agent's word for it."""
@@ -170,14 +186,27 @@ class _Run:
                 "seconds": round(time.perf_counter() - self.started, 1)}
 
 
-def build_prompt(job: AgentRunJob, worktree: Path, tokens: list[str]) -> str:
+def build_prompt(job: AgentRunJob, worktree: Path, tokens: list[str],
+                 routing: dict[str, Any] | None = None) -> str:
     """The task plus the fixed working rules. A task too long for the command line goes into a file in the worktree."""
-    task = job.task.strip()
+    task = job.task.strip() + _standard(job.project, routing or {})
     rules = _rules(job, worktree, tokens)
     if len(task) + len(rules) > MAX_PROMPT_CHARS - PROMPT_RESERVE:
         (worktree / TASK_FILE).write_text(task, encoding="utf-8")
         task = f"The task is in the file {TASK_FILE} in the current folder: read it first and do exactly that."
     return f"{task}\n\n{rules}"
+
+
+def _standard(project: Path, routing: dict[str, Any]) -> str:
+    """Load the project's standard into the task so overflow preserves it."""
+    if not (routing.get("agent_run") or {}).get("conventions", True):
+        return ""
+    standard = conventions.load_text(routing, project)
+    if not standard:
+        return ""
+    return ("\n\nCODING STANDARD (mandatory; the reader may be a beginner):\n" + standard
+            + "\nWrite teaching comments together with the code (why, units, a plain-words comment "
+            "before hard logic); do not restate the code in comments.")
 
 
 def _rules(job: AgentRunJob, worktree: Path, tokens: list[str]) -> str:
@@ -236,6 +265,9 @@ def render_text(report: dict[str, Any]) -> str:
              f"base {report['base']}, {len(report['files'])} file(s): {', '.join(report['files']) or 'none'}",
              report["diff_stat"].splitlines()[-1] if report["diff_stat"] else "no changes",
              f"check {'PASS' if report['check_passed'] else 'FAIL'}: {tail}"]
+    issues = report.get("conventions_issues", [])
+    if issues:
+        lines.append(f"conventions: {len(issues)} issue(s): " + "; ".join(issues[:3]))
     if report["reverted"]:
         lines.append("reverted outside scope: " + ", ".join(report["reverted"]))
     lines.append(f"reply: {report['agent_reply']}")

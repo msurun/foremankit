@@ -170,7 +170,9 @@ def test_long_task_goes_to_a_file_and_is_not_committed(tmp_path, repo):
     assert len(task) >= 30000
 
     def check_task_file(cwd: Path) -> None:
-        assert (cwd / ".agent-task.md").read_text(encoding="utf-8") == task.strip()
+        content = (cwd / ".agent-task.md").read_text(encoding="utf-8")
+        assert content.startswith(task.strip())
+        assert "CODING STANDARD (mandatory;" in content
 
     fake = FakeRunner(writes={"tests/test_new.py": "def test_new(): assert True\n"}, on_run=check_task_file)
     report = run_job(tmp_path, fake, task=task)
@@ -231,7 +233,11 @@ def test_build_prompt_inlines_a_short_task(tmp_path):
 def test_build_prompt_moves_a_long_task_to_a_file(tmp_path):
     job = AgentRunJob(task="x" * 30000, project=tmp_path, scope=("tests/**",), check=CHECK)
     prompt = build_prompt(job, tmp_path, ["python", "-m", "pytest", "-q"])
-    assert ".agent-task.md" in prompt and (tmp_path / ".agent-task.md").read_text(encoding="utf-8") == "x" * 30000
+    assert ".agent-task.md" in prompt
+    content = (tmp_path / ".agent-task.md").read_text(encoding="utf-8")
+    assert content.startswith("x" * 30000)
+    assert ar.conventions.load_text({}, tmp_path) in content
+    assert "CODING STANDARD (mandatory;" not in prompt
 
 
 def test_render_text_has_verdict_branch_and_check_lines():
@@ -605,3 +611,67 @@ def test_agent_run_codex_internal_eligibility(tmp_path, repo, ceiling):
     else:
         assert run_job(tmp_path, fake, sensitivity="internal")["passed"]
         assert len(fake.prompts) == 1
+
+
+
+def test_prompt_includes_standard_and_teaching_guidance(tmp_path):
+    job = AgentRunJob("Fix it", tmp_path, ("*.py",), CHECK)
+    prompt = build_prompt(job, tmp_path, ["python"])
+    assert ar.conventions.load_text({}, tmp_path) in prompt
+    assert "CODING STANDARD (mandatory; the reader may be a beginner):" in prompt
+    assert ("Write teaching comments together with the code (why, units, a plain-words comment "
+            "before hard logic); do not restate the code in comments.") in prompt
+
+
+def test_prompt_uses_project_override(tmp_path):
+    write_files(tmp_path, {".foremankit/conventions.md": "Project rules only"})
+    job = AgentRunJob("Fix it", tmp_path, ("*.py",), CHECK)
+    prompt = build_prompt(job, tmp_path, ["python"])
+    assert "Project rules only" in prompt
+    assert "## Code conventions" not in prompt
+
+
+@pytest.mark.parametrize("standard", ["", "Project rules only"])
+def test_prompt_can_disable_standard(tmp_path, standard):
+    write_files(tmp_path, {".foremankit/conventions.md": standard})
+    job = AgentRunJob("Fix it", tmp_path, ("*.py",), CHECK)
+    prompt = build_prompt(job, tmp_path, ["python"], {"agent_run": {"conventions": False}})
+    assert "CODING STANDARD" not in prompt
+    assert "Write teaching comments" not in prompt
+
+
+def test_empty_standard_is_skipped(tmp_path):
+    write_files(tmp_path, {".foremankit/conventions.md": ""})
+    job = AgentRunJob("Fix it", tmp_path, ("*.py",), CHECK)
+    assert "CODING STANDARD" not in build_prompt(job, tmp_path, ["python"])
+
+
+@pytest.mark.parametrize("expected", [("warn", True, 1), ("fail", False, 1), ("off", True, 0)])
+def test_mechanical_check_modes(tmp_path, repo, monkeypatch, expected):
+    mode, passed, count = expected
+    config = ar.load_config()
+    config["routing"].setdefault("agent_run", {})["conventions_check"] = mode
+    monkeypatch.setattr(ar, "load_config", lambda: config)
+    source = '\n'.join(['"""Runner output."""', 'def test_long():'] + ['    assert True'] * 25)
+    report = run_job(tmp_path, FakeRunner(writes={"tests/test_new.py": source}))
+    assert report["passed"] is passed
+    assert report["conventions_checked"] == count
+    assert bool(report["conventions_issues"]) is bool(count)
+    assert ("FAIL coding standard check" in report["agent_reply"]) is (mode == "fail")
+
+
+def test_mechanical_check_ignores_non_python(tmp_path, repo, monkeypatch):
+    def unexpected_check(*args):
+        raise AssertionError("Non-Python files must not be checked")
+
+    monkeypatch.setattr(ar.codecheck, "check_files", unexpected_check)
+    report = run_job(tmp_path, FakeRunner(writes={"note.txt": "hello"}), scope=("*.txt",))
+    assert report["conventions_checked"] == 0
+    assert report["conventions_issues"] == []
+
+
+def test_render_text_shows_only_first_three_issues(tmp_path, repo):
+    report = run_job(tmp_path, FakeRunner(writes={"tests/test_new.py": "def test_new(): pass"}))
+    report["conventions_issues"] = ["first", "second", "third", "fourth"]
+    assert "conventions: 4 issue(s): first; second; third" in render_text(report)
+    assert "fourth" not in render_text(report)

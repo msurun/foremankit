@@ -60,7 +60,7 @@ class _BatchState:
         # In plain words:
         # Each runner type (e.g. agy, opencode) has its own maximum concurrency limit.
         # We pre-allocate a semaphore for every runner mentioned in the plan or settings.
-        configured_runners = set(agent_switch.RUNNERS) | {t.runner for t in tasks if t.runner != "auto"}
+        configured_runners = set(agent_switch.RUNNERS) | {task.runner for task in tasks if task.runner != "auto"}
         for runner in configured_runners:
             slot_count = agent_quota.slots(self.context.settings, runner)
             self.semaphores[runner] = threading.Semaphore(slot_count)
@@ -312,7 +312,8 @@ def _record_exhaustion(runner: str, message: str, state: _BatchState) -> float:
     with state.quota_lock:
         quota_state = agent_quota.load_state(state.context.state_path)
         now = state.context.clock()
-        until = agent_quota.record_quota_error(quota_state, runner, now, state.context.settings, message)
+        until = agent_quota.record_quota_error(
+            quota_state, agent_quota.LimitHit(runner, now, message), state.context.settings)
         agent_quota.save_state(state.context.state_path, quota_state)
 
         return until
@@ -355,6 +356,7 @@ def _run_entry(
         "model": str(report.get("model") or ""),
         "review_required": bool(report.get("review_required")),
         "review_paths": list(report.get("review_paths") or []),
+        "conventions_issues": list(report.get("conventions_issues") or []),
     }
 
 

@@ -204,6 +204,8 @@ verify:
 # `foremankit agent-run` (multi-file agentic tasks in a git worktree): paths that make the report say REVIEW REQUIRED
 # (an independent review before merge is mandatory for security code), and the timeout of our own check run.
 agent_run:
+  conventions: true          # Include the coding standard in the runner prompt.
+  conventions_check: warn    # Report mechanical issues; fail blocks acceptance, off skips.
   check_timeout_s: 600
   # Parallel runs per runner and the agy subscription quota (15/day is a guess: measure, then correct).
   max_parallel: {opencode: 3, agy: 1, codex: 1}

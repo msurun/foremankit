@@ -419,7 +419,8 @@ def _quota_stop(result: dict, quota: dict) -> str:
     if len(text) > QUOTA_TEXT_MAX_CHARS or not agent_quota.is_quota_error(text):
         return ""     # a long answer about code that mentions "rate limit" or 429 is an answer, not a quota error
     state, state_file = quota["state"], quota["path"]
-    agent_quota.record_quota_error(state, quota["runner"], time.time(), quota["settings"])
+    agent_quota.record_quota_error(
+        state, agent_quota.LimitHit(quota["runner"], time.time(), text), quota["settings"])
     agent_quota.save_state(state_file, state)
     result["ok"], result["error"] = False, result["error"] or "quota error"
     return result["error"]

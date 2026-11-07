@@ -212,6 +212,8 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 ```
 
 - The agent works in its own git worktree on branch `agent-run/<id>`.
+- `agent_run.conventions: true` adds the coding standard and teaching-comment guidance to the prompt; project overrides win.
+- `agent_run.conventions_check: warn` reports issues in changed Python files (including tests); `fail` fails the run, `off` skips.
 - A scope guard reverts and reports any change outside the `--scope` globs.
 - The check is re-run by foremankit with `PYTHONPATH` pointing at the worktree, because editable installs otherwise resolve the main checkout.
 - The patch is committed on the branch and the worktree is removed (kept with `--keep-worktree`).
