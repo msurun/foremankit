@@ -208,7 +208,7 @@ foremankit delegate "Napisz testy dla verify.py" --kind bulk_code --files forema
 ### agent-run (multi-file agent tasks)
 
 ```
-foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope GLOB] --check "<allowed check command>" [--runner agy] [--model alias] [--sensitivity normal|internal] [--timeout 1800] [--check-cwd DIR] [--keep-worktree] [--json]
+foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope GLOB] --check "<allowed check command>" [--runner codex|opencode|agy] [--model alias] [--sensitivity normal|internal] [--timeout 1800] [--check-cwd DIR] [--keep-worktree] [--json]
 ```
 
 - The agent works in its own git worktree on branch `agent-run/<id>`.
@@ -216,7 +216,8 @@ foremankit agent-run --task-file F --project <repo root> --scope GLOB [--scope G
 - The check is re-run by foremankit with `PYTHONPATH` pointing at the worktree, because editable installs otherwise resolve the main checkout.
 - The patch is committed on the branch and the worktree is removed (kept with `--keep-worktree`).
 - A changed path matching `agent_run.review_paths` in `config/routing.yaml` prints REVIEW REQUIRED.
-- Private data is refused.
+- Private data is refused. opencode and Codex accept `normal` data only; agy alone accepts `internal`.
+- All three runners start with stdin closed and `PWD` set to the run folder; see [runner traps](docs/codex-runner.md).
 - Exit codes: 0 PASS, 1 FAIL, 2 refused.
 - Merge after review: use `agent-merge` below (or `git merge --no-ff agent-run/<id>`).
 
@@ -246,8 +247,27 @@ foremankit agent-merge --project <repo root> --report batch.json --id TASK [--re
 
 - Tasks in the same level run in parallel. A dependent task starts from the branch of its **first** dependency (the rest of `depends_on` is only a gate, not a base).
 - Slots per runner (`max_parallel`) and the agy daily quota (`quota.agy`) are in `config/routing.yaml → agent_run`.
-- opencode free models get `normal` data only; `internal` always goes to agy (the plan validator rejects `internal` + opencode).
-- Codex uses the owner's subscription, one parallel slot and `normal` data only: select `--runner codex` for `agent-run`, `agent-ask` or `agent-ask-batch`, or pin `runner: codex` in a batch plan; `auto` keeps its existing order. Configure the binary and model under `agent_run.codex` in `config/routing.yaml`.
+Automatic order for `normal` data: opencode -> codex -> agy.
+Start with opencode for small and medium tasks; after 2 failures, or for a big task
+(6+ files, a lot of context, or a long task text), use Codex. After Codex fails
+twice, or when Codex is switched off, use agy. `internal` data goes to agy only;
+no runner accepts `private` data. Pin a plan with `runner: codex|opencode|agy`;
+`runner: auto` follows this order.
+
+Measurements from 2026-11-06/07 (small samples, not guarantees):
+
+| Runner | Role and data | Observed time and constraints |
+|---|---|---|
+| opencode (free models) | Default for small/medium tasks; `normal` only | Typically 15-80 s; clean so far; runs `graphify` |
+| Codex (owner's ChatGPT subscription; model from `config/routing.yaml`) | Big tasks and second escalation step; `normal` only | Typically 6-25 s; runs `graphify`; quota unknown, cooldown after an error configured, no daily limit yet |
+| Antigravity / agy (Google AI Pro subscription) | Last escalation step, fallback when Codex is off; only runner allowed `internal`, never `private` | About 10 minutes per slice plus ~3 minutes start-up; `graphify` does not work under its sandbox; daily limit 15 is a guess |
+
+Each runner can be switched on/off in the VS Code panel's **Agent runs** section,
+and all three with its master switch. The batch and `auto` skip switched-off runners.
+The order is a hypothesis from small samples: revisit it after a week of data.
+Judge runners by the clean-merge rate (`agent_run_review` events), not by the check
+alone; review every branch before merging.
+
 - Report statuses: `passed` (check green), `failed` (check red), `refused` (privacy or runner refusal), `quota_exhausted` (agy limit hit; agy pauses for the cooldown), `skipped` (a dependency did not pass, or the quota check refused the start), `not_for_runner` (auto chose haiku/lead, so no agent branch exists).
 - `agent-run-batch` exits 0 only when every task passed; `--report-out` writes the JSON that `agent-merge` reads.
 
