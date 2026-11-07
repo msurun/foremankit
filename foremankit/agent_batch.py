@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ class BatchContext:
     run_one: Callable[[AgentRunJob], dict[str, Any]]
     settings: dict[str, Any]
     state_path: Path
+    done: dict[str, dict] = field(default_factory=dict)
     clock: Callable[[], float] = time.time
     review_globs: Sequence[str] = ()
     tracked: Sequence[str] = ()
@@ -106,11 +107,13 @@ def _execute_level(level: list[PlanTask], state: _BatchState) -> None:
 
 def _execute_task(task: PlanTask, state: _BatchState) -> tuple[str, dict[str, Any]]:
     """Prepare and execute a single plan task."""
+    if state.context.done.get(task.id, {}).get("status") == "passed":
+        return task.id, state.context.done[task.id]
     early_exit, plan = _prepare_task(task, state)
     if early_exit is not None:
         return task.id, early_exit
     assert plan is not None
-    return task.id, _run_with_slots(plan, state)
+    return task.id, _run_with_fallback(plan, state)
 
 
 def _prepare_task(
@@ -124,17 +127,20 @@ def _prepare_task(
     if read_error is not None:
         return read_error, None
     assert text is not None
-    runner, runner_error = _resolve_runner(task, text, state.context)
+    runner, runner_error = _resolve_runner(task, text, state)
     if runner_error is not None:
         return runner_error, None
     return None, _TaskPlan(task, text, runner, base, multi_reason)
 
 
-def _check_dependencies(
-    task: PlanTask, state: _BatchState
-) -> tuple[dict[str, Any] | None, str, str]:
+def _check_dependencies(task: PlanTask, state: _BatchState) -> tuple[dict[str, Any] | None, str, str]:
     """Verify that all dependencies passed, returning early skip or base branch details."""
     for dep_id in task.depends_on:
+        dep = state.results.get(dep_id, {})
+        if dep.get("status") == "waiting":
+            entry = _waiting(task, str(dep.get("runner", task.runner)), dep["retry_after"])
+            entry["reason"] = f"dependency '{dep_id}' is waiting"
+            return entry, "", ""
         dep_entry = state.results.get(dep_id)
         if dep_entry is None or dep_entry.get("status") != "passed":
             reason = f"dependency '{dep_id}' did not pass"
@@ -160,23 +166,61 @@ def _read_task_text(
         return None, entry
 
 
-def _resolve_runner(
-    task: PlanTask, text: str, context: BatchContext
-) -> tuple[str, dict[str, Any] | None]:
-    """Resolve runner via heuristics if 'auto', returning runner or not_for_runner entry."""
+def _resolve_runner(task: PlanTask, text: str, state: _BatchState,
+                    exhausted: frozenset[str] = frozenset()) -> tuple[str, dict | None]:
+    """Choose an enabled, unpaused runner without revisiting exhausted runners."""
     if task.runner != "auto":
         return task.runner, None
-    facts = RunnerFacts(
-        task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
-        agy_enabled="agy" not in context.disabled_runners,
-        opencode_enabled="opencode" not in context.disabled_runners,
-        codex_enabled="codex" not in context.disabled_runners,
-    )
-    choice, reasons = decide_runner(facts, context.review_globs)
-    if choice in ("haiku", "lead"):
-        first_reason = reasons[0] if reasons else ""
-        return choice, _task_entry(task.id, choice, "not_for_runner", first_reason)
+    pauses = _runner_pauses(state)
+    unavailable = state.context.disabled_runners | exhausted | pauses.keys()
+    facts = RunnerFacts(task_text=text, sensitivity=task.sensitivity, scope=task.scope, check=task.check,
+                        agy_enabled="agy" not in unavailable, codex_enabled="codex" not in unavailable,
+                        opencode_enabled="opencode" not in unavailable)
+    choice, reasons = decide_runner(facts, state.context.review_globs)
+    if choice in ("lead", "queue") and reasons and ("no runner" in reasons[0] or choice == "queue"):
+        allowed = {"codex", "agy"} if task.sensitivity == "internal" else set(agent_switch.RUNNERS)
+        candidates = [(until, runner) for runner, until in pauses.items() if runner in allowed]
+        if candidates:
+            until, runner = min(candidates)
+            return runner, _waiting(task, runner, until)
+    if choice in ("haiku", "lead", "queue", "split", "revise"):
+        return choice, _task_entry(task.id, choice, "not_for_runner", reasons[0] if reasons else "")
     return choice, None
+
+
+def _runner_pauses(state: _BatchState) -> dict[str, float]:
+    """Read currently paused runners while holding the quota lock."""
+    with state.quota_lock:
+        quota = agent_quota.load_state(state.context.state_path)
+        now = state.context.clock()
+        info = {runner: agent_quota.pause_info(quota, runner, now) for runner in agent_switch.RUNNERS}
+        return {runner: item["until"] for runner, item in info.items() if item["paused"]}
+
+
+def _waiting(task: PlanTask, runner: str, until: float) -> dict:
+    """Create a resumable waiting entry with a local retry time."""
+    clock = time.strftime("%H:%M", time.localtime(until))
+    entry = _task_entry(task.id, runner, "waiting", f"{runner} limit: retry after {clock}")
+    entry["retry_after"] = float(until)
+    return entry
+
+
+def _run_with_fallback(plan: _TaskPlan, state: _BatchState) -> dict:
+    """Retry auto tasks on up to two other runners after quota exhaustion."""
+    exhausted: frozenset[str] = frozenset()
+    reasons = []
+    for _ in range(3):
+        entry = _run_with_slots(plan, state)
+        if entry["status"] != "waiting" or plan.task.runner != "auto":
+            entry["reason"] = "; ".join([*reasons, entry.get("reason", "")]).strip("; ")
+            return entry
+        exhausted = exhausted | {plan.runner}
+        runner, refusal = _resolve_runner(plan.task, plan.task_text, state, exhausted)
+        if refusal is not None or runner in exhausted:
+            return refusal if refusal and refusal["status"] == "waiting" else entry
+        reasons.append(f"rerouted from {plan.runner} (limit)")
+        plan = replace(plan, runner=runner)
+    return entry
 
 
 def _run_with_slots(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
@@ -188,20 +232,25 @@ def _run_with_slots(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
         return _task_entry(plan.task.id, plan.runner, "skipped", f"{plan.runner} is switched off in the panel")
     semaphore = state.get_semaphore(plan.runner)
     with semaphore:
-        quota_rejection = _check_and_record_quota(plan.runner, state)
+        quota_rejection = _check_and_record_quota(plan, state)
         if quota_rejection is not None:
-            return _task_entry(plan.task.id, plan.runner, "skipped", quota_rejection)
+            return quota_rejection
         return _dispatch_run(plan, state)
 
 
-def _check_and_record_quota(runner: str, state: _BatchState) -> str | None:
+def _check_and_record_quota(plan: _TaskPlan, state: _BatchState) -> dict | None:
     """Check whether runner can start under quota, recording start on success."""
+    runner = plan.runner
     with state.quota_lock:
         quota_state = agent_quota.load_state(state.context.state_path)
         now = state.context.clock()
         ok, reason = agent_quota.can_start(quota_state, runner, now, state.context.settings)
         if not ok:
-            return reason
+            info = agent_quota.pause_info(quota_state, runner, now)
+            if info["paused"] or "being probed" in reason:
+                until = max(info["until"], quota_state[runner]["probe_until"])
+                return _waiting(plan.task, runner, until)
+            return _task_entry(plan.task.id, runner, "skipped", reason)
         agent_quota.record_run(quota_state, runner, now)
         agent_quota.save_state(state.context.state_path, quota_state)
         return None
@@ -229,8 +278,9 @@ def _dispatch_run(plan: _TaskPlan, state: _BatchState) -> dict[str, Any]:
 def _handle_run_error(plan: _TaskPlan, message: str, state: _BatchState) -> dict[str, Any]:
     """Process an AgentRunError, checking if it indicates quota exhaustion."""
     if agent_quota.is_quota_error(message):
-        _record_exhaustion(plan.runner, state)
-        return _task_entry(plan.task.id, plan.runner, "quota_exhausted", message)
+        until = _record_exhaustion(plan.runner, message, state)
+        return _waiting(plan.task, plan.runner, until)
+    _record_healthy(plan.runner, state)
     return _task_entry(plan.task.id, plan.runner, "refused", message)
 
 
@@ -240,8 +290,9 @@ def _handle_run_report(
     """Process normal completion report from run_one."""
     reply = str(report.get("agent_reply") or "")
     if not report.get("passed") and agent_quota.is_quota_error(reply):
-        _record_exhaustion(plan.runner, state)
-        return _run_entry(plan.task.id, plan.runner, "quota_exhausted", report)
+        until = _record_exhaustion(plan.runner, reply, state)
+        return _waiting(plan.task, plan.runner, until)
+    _record_healthy(plan.runner, state)
     passed = bool(report.get("passed"))
     status = "passed" if passed else "failed"
     entry = _run_entry(plan.task.id, plan.runner, status, report)
@@ -250,13 +301,23 @@ def _handle_run_report(
     return entry
 
 
-def _record_exhaustion(runner: str, state: _BatchState) -> None:
+def _record_exhaustion(runner: str, message: str, state: _BatchState) -> float:
     """Record runner quota error and save updated state under lock."""
     with state.quota_lock:
         quota_state = agent_quota.load_state(state.context.state_path)
         now = state.context.clock()
-        agent_quota.record_quota_error(quota_state, runner, now, state.context.settings)
+        until = agent_quota.record_quota_error(quota_state, runner, now, state.context.settings, message)
         agent_quota.save_state(state.context.state_path, quota_state)
+
+        return until
+
+
+def _record_healthy(runner: str, state: _BatchState) -> None:
+    """Clear recovery strikes after a normal runner completion."""
+    with state.quota_lock:
+        quota = agent_quota.load_state(state.context.state_path)
+        agent_quota.record_success(quota, runner)
+        agent_quota.save_state(state.context.state_path, quota)
 
 
 def _task_entry(task_id: str, runner: str, status: str, reason: str = "") -> dict[str, Any]:
@@ -295,6 +356,7 @@ def _build_summary(task_reports: Sequence[dict[str, Any]]) -> dict[str, int]:
     """Calculate aggregate task status counts."""
     statuses = [entry["status"] for entry in task_reports]
     return {
+        "waiting": statuses.count("waiting"),
         "passed": statuses.count("passed"),
         "failed": statuses.count("failed"),
         "refused": statuses.count("refused"),
