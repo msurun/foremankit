@@ -97,10 +97,14 @@ def _by_sensitivity(facts: RunnerFacts) -> tuple[str, list[str]]:
 
 
 def _internal(facts: RunnerFacts) -> tuple[str, list[str]]:
-    """Internal data goes to agy only; without agy the task waits in the queue."""
+    """Prefer codex for internal data, escalating only to agy after repeated failures."""
+    if facts.codex_failures >= AGY_AFTER_FAILURES:
+        return _escalate(facts, "codex")
+    if facts.codex_enabled:
+        return "codex", ["internal data may go to codex or agy: codex is faster"]
     if facts.agy_enabled:
-        return "agy", ["internal data may only go to agy"]
-    return "queue", ["internal data may never go to opencode: the task waits for agy"]
+        return "agy", ["internal data: codex is switched off, agy takes it"]
+    return "queue", ["internal data may only go to codex or agy: the task waits"]
 
 
 def _normal(facts: RunnerFacts) -> tuple[str, list[str]]:

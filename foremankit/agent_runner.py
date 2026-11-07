@@ -105,17 +105,18 @@ class OpenCodeRunner:
 
 
 class CodexRunner:
-    """Non-interactive Codex CLI on the owner's subscription; only normal data is eligible."""
+    """Non-interactive Codex CLI with a configured sensitivity ceiling; private data is never eligible."""
     name = "codex"
 
-    def __init__(self, binary: str, model: str, runner=subprocess.run):
+    def __init__(self, binary: str, model: str, runner=subprocess.run, *, max_sensitivity: str = "normal"):
         """Use the configured executable and model, with an injectable subprocess runner."""
         self.binary, self.model = os.path.expanduser(binary), model
         self._runner = runner
+        self.max_sensitivity = max_sensitivity
 
     def eligible(self, sensitivity: str) -> bool:
-        """Only public or synthetic data until the owner permits another sensitivity."""
-        return sensitivity == "normal"
+        """Allow normal data and explicitly configured internal data; refuse all other labels."""
+        return sensitivity == "normal" or (sensitivity == "internal" and self.max_sensitivity == "internal")
 
     def run(self, prompt: str, cwd: Path, timeout: float) -> RunnerResult:
         """Run with closed stdin and bounded workspace writes; preserve the raw JSONL."""
@@ -196,6 +197,8 @@ def make_runner(name: str, config: dict[str, Any], model_alias: str = "") -> Run
             raise RunnerError(f"routing.yaml agent_run.{name}.binary is not set")
         if not (model_alias or settings.get("default_model")):
             raise RunnerError(f"routing.yaml agent_run.{name}.default_model is not set")
-        runner_type = CodexRunner if name == "codex" else OpenCodeRunner
-        return runner_type(resolve_binary(settings["binary"]), model_alias or settings["default_model"])
+        binary, model = resolve_binary(settings["binary"]), model_alias or settings["default_model"]
+        if name == "codex":
+            return CodexRunner(binary, model, max_sensitivity=settings.get("max_sensitivity", "normal"))
+        return OpenCodeRunner(binary, model)
     raise RunnerError(f"runner {name!r} is not available (supported: agy, opencode, codex)")

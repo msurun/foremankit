@@ -56,8 +56,14 @@ def _runner_entry(inputs: StatusInputs, runner: str, master: bool) -> dict:
             "runs_today": _runs_today(quota, inputs.now),
             "daily_limit": _daily_limit(inputs.settings, runner),
             "paused_for_s": _paused_for(quota, inputs.now),
-            "internal_data": runner == "agy",
+            "internal_data": _internal_data(inputs.settings, runner),
             "model": _latest_model(inputs.rows, runner, inputs.settings)}
+
+
+def _internal_data(settings: dict, runner: str) -> bool:
+    """Whether the runner's configured sensitivity ceiling permits internal data."""
+    return runner == "agy" or (runner == "codex" and
+                               (settings.get("codex") or {}).get("max_sensitivity", "normal") == "internal")
 
 
 def _own_switch(toggles_state: dict, runner: str) -> bool:

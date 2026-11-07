@@ -136,9 +136,9 @@ def test_dependent_tasks_with_overlapping_scopes_are_allowed() -> None:
     assert [task.id for task in levels[1]] == ["follow"]
 
 
-@pytest.mark.parametrize("runner", ["opencode", "codex"])
+@pytest.mark.parametrize("runner", ["opencode"])
 def test_internal_sensitivity_with_external_runner_is_rejected(runner) -> None:
-    """Internal data can never go to opencode or Codex."""
+    """Internal data can never go to opencode."""
     raw = {
         "id": "task_secret",
         "task_file": "f.md",
@@ -159,19 +159,20 @@ def test_codex_is_valid_for_normal_data() -> None:
     assert parsed.runner == "codex" and parsed.sensitivity == "normal"
 
 
-def test_internal_sensitivity_with_agy_runner_is_accepted() -> None:
-    """Sensitivity 'internal' paired with runner 'agy' is valid."""
+@pytest.mark.parametrize("runner", ["agy", "codex"])
+def test_internal_sensitivity_with_allowed_runner_is_accepted(runner) -> None:
+    """Internal data is valid for agy and codex independently of runtime settings."""
     raw = {
         "id": "task_agy",
         "task_file": "f.md",
         "scope": ["a.py"],
         "check": "pytest",
         "sensitivity": "internal",
-        "runner": "agy",
+        "runner": runner,
     }
     tasks = parse_plan({"tasks": [raw]})
     assert tasks[0].sensitivity == "internal"
-    assert tasks[0].runner == "agy"
+    assert tasks[0].runner == runner
 
 
 def test_internal_sensitivity_with_auto_runner_is_accepted() -> None:

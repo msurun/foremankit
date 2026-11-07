@@ -393,3 +393,14 @@ def test_long_answer_mentioning_a_rate_limit_does_not_stop_the_batch(tmp_path):
     assert agent_ask._quota_stop(result, quota) == ""
     short = {"answer": "Rate limit exceeded: quota exhausted", "error": ""}
     assert agent_ask._quota_stop(short, quota) != ""
+
+
+@pytest.mark.parametrize("ceiling", ["normal", "internal"])
+def test_codex_ask_internal_eligibility(repo, ceiling):
+    """Question runs apply the configured Codex eligibility before sending internal data."""
+    from foremankit.agent_runner import CodexRunner
+    fake = FakeRunner(name="codex", raw=codex_raw())
+    fake.eligible = CodexRunner("unused.exe", "m", max_sensitivity=ceiling).eligible
+    result = ask(make_job(repo, runner="codex", sensitivity="internal"), runner=fake)
+    assert result["ok"] is (ceiling == "internal")
+    assert bool(fake.calls) is (ceiling == "internal")

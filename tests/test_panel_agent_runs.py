@@ -198,3 +198,13 @@ class TestWrappers:
         assert status["runners"]["opencode"]["own"] is False
         assert status["recent"][0]["id"] == "x"
         assert status["usage"] == {"last": None}
+
+
+def test_internal_data_follows_configured_ceiling():
+    """All three panel entries reflect eligibility for both Codex ceilings and its default."""
+    for ceiling in (None, "normal", "internal"):
+        settings = {} if ceiling is None else {"codex": {"max_sensitivity": ceiling}}
+        runners = build_status(make_inputs(settings=settings))["runners"]
+        assert runners["codex"]["internal_data"] is (ceiling == "internal")
+        assert runners["agy"]["internal_data"] is True
+        assert runners["opencode"]["internal_data"] is False
