@@ -14,6 +14,8 @@ from .agent_git import AgentGitError, delete_branch, git
 from .agent_lock import git_lock
 
 MAX_COMMIT_MESSAGE_CHARS = 100
+AGENT_BRANCH_PREFIX = "agent-run/"
+MERGE_PARENT_COUNT = 2
 
 
 class MergeRefused(RuntimeError):
@@ -26,6 +28,15 @@ class MergeOptions:
 
     reviewed: bool = False
     recheck: Callable[[], tuple[bool, str]] | None = None
+
+
+@dataclass(frozen=True)
+class _MergeSource:
+    """Snapshot the source commit and owner cleanliness before merging."""
+
+    branch: str
+    commit_hash: str
+    was_clean: bool
 
 
 class MergeExecution(NamedTuple):
@@ -54,12 +65,14 @@ def _check_review(report: dict, reviewed: bool) -> None:
         raise MergeRefused("review is required for this run but options.reviewed is false")
 
 
-def _check_branch_exists(project: Path, branch: str) -> None:
-    """Verify that the branch exists in the repository and resolves to a valid commit."""
+def _check_branch_exists(project: Path, branch: str) -> str:
+    """Refuse owner branches and return the agent branch's resolved commit."""
     if not branch:
         raise MergeRefused("branch name is empty or missing from report")
+    if not branch.startswith(AGENT_BRANCH_PREFIX):
+        raise MergeRefused("branch name must start with agent-run/; refusing owner branch")
     try:
-        git(["rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}"], project)
+        return git(["rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}"], project).strip()
     except AgentGitError as error:
         raise MergeRefused(f"branch {branch!r} does not exist in {project}") from error
 
@@ -77,7 +90,7 @@ def _check_target_branch(project: Path) -> str:
     current = _active_branch(project)
     if current is None:
         raise MergeRefused("HEAD is detached; cannot merge into an unnamed commit")
-    if current.startswith("agent-run/"):
+    if current.startswith(AGENT_BRANCH_PREFIX):
         raise MergeRefused(f"cannot merge into temporary agent-run branch {current!r}")
     return current
 
@@ -86,7 +99,8 @@ def _check_target_files_clean(project: Path, files: list[str]) -> None:
     """Ensure files changed by the branch have no uncommitted local working tree changes."""
     if not files:
         return
-    status = git(["status", "--porcelain", "--", *files], project).strip()
+    # Ignoring a local file does not give a merge permission to overwrite it.
+    status = git(["status", "--porcelain", "--ignored", "--", *files], project).strip()
     if status:
         # In plain words:
         # The user has uncommitted changes in one or more files modified by the agent.
@@ -106,17 +120,18 @@ def _check_no_merge_in_progress(project: Path) -> None:
     raise MergeRefused("a merge is already in progress (.git/MERGE_HEAD exists)")
 
 
-def _verify_preconditions(project: Path, report: dict, options: MergeOptions) -> str:
+def _verify_preconditions(project: Path, report: dict, options: MergeOptions) -> _MergeSource:
     """Run all pre-merge precondition checks in strict required sequence."""
     _check_passed(report)
     _check_review(report, options.reviewed)
     branch = str(report.get("branch") or "").strip()
-    _check_branch_exists(project, branch)
+    commit_hash = _check_branch_exists(project, branch)
     _check_target_branch(project)
     files = [str(file_path) for file_path in report.get("files") or [] if str(file_path).strip()]
     _check_target_files_clean(project, files)
     _check_no_merge_in_progress(project)
-    return branch
+    was_clean = not git(["status", "--porcelain"], project).strip()
+    return _MergeSource(branch, commit_hash, was_clean)
 
 
 def _format_merge_message(branch: str, summary: str) -> str:
@@ -125,15 +140,25 @@ def _format_merge_message(branch: str, summary: str) -> str:
     return f"merge {branch}: {first_line}"[:MAX_COMMIT_MESSAGE_CHARS]
 
 
-def _attempt_merge(project: Path, branch: str, message: str) -> MergeExecution:
+def _attempt_merge(project: Path, source_commit_hash: str, message: str) -> MergeExecution:
     """Attempt a non-fast-forward merge; abort and extract conflicts if unmerged."""
     try:
         with git_lock(project):
-            git(["merge", "--no-ff", "-m", message, branch], project)
+            git(["merge", "--no-ff", "--commit", "-m", message, source_commit_hash], project)
+            _verify_merge_finished(project)
         commit_hash = git(["rev-parse", "HEAD"], project).strip()
         return MergeExecution(is_conflict=False, commit_hash=commit_hash, conflicts=[])
     except AgentGitError as error:
         return _abort_merge(project, str(error))
+
+
+def _verify_merge_finished(project: Path) -> None:
+    """Reject successful exits that did not finish a two-parent merge commit."""
+    if _merge_in_progress(project):
+        raise AgentGitError("MERGE_HEAD remains; finish the merge commit before retrying")
+    parents = git(["rev-list", "--parents", "-n", "1", "HEAD"], project).split()[1:]
+    if len(parents) != MERGE_PARENT_COUNT:
+        raise AgentGitError("HEAD must have two parents; no completed merge commit was created")
 
 
 def _merge_in_progress(project: Path) -> bool:
@@ -171,7 +196,7 @@ def _conflict_dict(branch: str, conflicts: list[str]) -> dict:
 
 
 def _run_post_merge_recheck(
-    branch: str, commit_hash: str, recheck: Callable[[], tuple[bool, str]]
+    source: _MergeSource, commit_hash: str, recheck: Callable[[], tuple[bool, str]]
 ) -> dict | None:
     """Execute post-merge check hook; return failure dictionary if check fails."""
     passed, output_tail = recheck()
@@ -181,46 +206,52 @@ def _run_post_merge_recheck(
     # Post-merge verification failed on the merged tree. We do NOT roll back or reset;
     # we preserve both the merge commit and the branch for the human lead to decide.
     # We mention the undo command in the detail text only.
+    undo = ("git reset --hard ORIG_HEAD" if source.was_clean
+            else f"git revert -m 1 {commit_hash} (preserves other uncommitted changes)")
     detail = (
         f"{output_tail.strip()}\n"
-        f"Recheck failed after merge; branch {branch} kept. "
-        f"Undo with: git reset --hard ORIG_HEAD"
+        f"Recheck failed after merge; branch {source.branch} kept. "
+        f"Undo with: {undo}"
     ).strip()
     return {
         "status": "check_failed_after_merge",
-        "branch": branch,
+        "branch": source.branch,
         "merge_commit": commit_hash,
         "detail": detail,
     }
 
 
-def _safe_delete_branch(project: Path, branch: str) -> str:
+def _safe_delete_branch(project: Path, source: _MergeSource) -> str:
     """Delete the merged branch; return error message on failure without raising."""
     try:
-        delete_branch(project, branch)
+        current_tip = git(["rev-parse", f"refs/heads/{source.branch}^{{commit}}"], project).strip()
+        if current_tip != source.commit_hash:
+            return f"Source branch {source.branch} advanced after the merge; branch kept."
+        delete_branch(project, source.branch)
         return ""
     except AgentGitError as error:
         # In plain words:
         # The merge succeeded, but deleting the temporary branch failed.
         # We record the warning in the detail string rather than failing the merge.
-        return f"merged, but failed to delete branch {branch}: {error}"
+        return f"merged, but failed to delete branch {source.branch}: {error}"
 
 
 def merge_branch(project: Path, report: dict, options: MergeOptions) -> dict:
     """Merge an agent-run branch into the current branch safely with strict preconditions."""
-    branch = _verify_preconditions(project, report, options)
-    message = _format_merge_message(branch, str(report.get("summary") or ""))
-    merge_result = _attempt_merge(project, branch, message)
+    source = _verify_preconditions(project, report, options)
+    message = _format_merge_message(source.branch, str(report.get("summary") or ""))
+    # Merge the reviewed snapshot, even if another process advances the branch name.
+    merge_result = _attempt_merge(project, source.commit_hash, message)
     if merge_result.is_conflict:
-        return _conflict_dict(branch, merge_result.conflicts)
+        return _conflict_dict(source.branch, merge_result.conflicts)
     if options.recheck is not None:
-        recheck_dict = _run_post_merge_recheck(branch, merge_result.commit_hash, options.recheck)
+        recheck_dict = _run_post_merge_recheck(source, merge_result.commit_hash, options.recheck)
         if recheck_dict is not None:
             return recheck_dict
-    delete_detail = _safe_delete_branch(project, branch)
+    delete_detail = _safe_delete_branch(project, source)
     return {
         "status": "merged",
-        "branch": branch,
+        "branch": source.branch,
         "merge_commit": merge_result.commit_hash,
         "detail": delete_detail,
     }

@@ -6,10 +6,12 @@ and branch deletion behaviors using isolated local git repositories without mock
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from foremankit import agent_merge
 from foremankit.agent_merge import (
     MergeOptions,
     MergeRefused,
@@ -284,7 +286,8 @@ def test_reject_refused_when_branch_does_not_exist(repo: Path) -> None:
 
 def test_reject_refused_when_branch_is_currently_active(repo: Path) -> None:
     """reject_branch raises MergeRefused when attempting to reject active branch."""
-    report = {"branch": "main"}
+    git(repo, "checkout", "-q", "-b", "agent-run/active")
+    report = {"branch": "agent-run/active"}
     with pytest.raises(MergeRefused, match="cannot reject active branch"):
         reject_branch(repo, report)
 
@@ -334,3 +337,121 @@ def test_git_refusal_without_conflicts_is_refused_not_reported_as_conflict(repo:
         merge_branch(repo, report, MergeOptions())
     assert (repo / "new.py").read_text(encoding="utf-8") == "local untracked\n"
     assert git(repo, "branch", "--list", "agent-run/in-the-way").strip()
+
+
+@pytest.mark.parametrize("operation", [
+    reject_branch, lambda project, report: merge_branch(project, report, MergeOptions()),
+])
+def test_owner_branch_is_refused(repo: Path, operation: Callable[..., dict]) -> None:
+    """An incorrect report must never delete an owner's ordinary branch."""
+    git(repo, "branch", "release")
+    report = {"passed": True, "branch": "release", "files": []}
+    with pytest.raises(MergeRefused, match="start with.*agent-run/"):
+        operation(repo, report)
+    assert git(repo, "branch", "--list", "release").strip()
+
+
+def prepare_feature(repo: Path) -> dict:
+    """Create an unmerged agent commit and return its report."""
+    git(repo, "checkout", "-q", "-b", "agent-run/feature")
+    commit_all(repo, {"feature.py": "feature\n"})
+    git(repo, "checkout", "-q", "main")
+    return {"passed": True, "branch": "agent-run/feature", "files": ["feature.py"]}
+
+
+def test_branch_advanced_during_recheck_is_kept(repo: Path) -> None:
+    """New source commits are retained and are not part of the completed merge."""
+    report = prepare_feature(repo)
+    old_tip = git(repo, "rev-parse", report["branch"]).strip()
+
+    def advance_branch() -> tuple[bool, str]:
+        tree = git(repo, "rev-parse", f"{old_tip}^{{tree}}").strip()
+        new_tip = git(repo, "commit-tree", tree, "-p", old_tip, "-m", "later").strip()
+        git(repo, "update-ref", f"refs/heads/{report['branch']}", new_tip)
+        return True, ""
+
+    result = merge_branch(repo, report, MergeOptions(recheck=advance_branch))
+    assert result["status"] == "merged"
+    assert "branch" in result["detail"] and "kept" in result["detail"]
+    assert git(repo, "rev-parse", "HEAD^2").strip() == old_tip
+    assert git(repo, "rev-parse", report["branch"]).strip() != old_tip
+
+
+def test_unfinished_merge_is_aborted_and_keeps_branch(repo: Path) -> None:
+    """A rejected merge commit must leave no pending merge or lost source branch."""
+    report = prepare_feature(repo)
+    hook = repo / ".git" / "hooks" / "pre-merge-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    old_head = git(repo, "rev-parse", "HEAD")
+    with pytest.raises(MergeRefused, match="without conflicts"):
+        merge_branch(repo, report, MergeOptions())
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+    assert git(repo, "rev-parse", "HEAD") == old_head
+    assert git(repo, "branch", "--list", report["branch"]).strip()
+
+
+def test_configured_no_commit_cannot_leave_an_unfinished_merge(repo: Path) -> None:
+    """Explicit commit options override repository defaults that defer committing."""
+    report = prepare_feature(repo)
+    git(repo, "config", "merge.options", "--no-commit")
+    result = merge_branch(repo, report, MergeOptions())
+    assert result["status"] == "merged"
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+    assert len(git(repo, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3
+
+
+def test_successful_git_exit_without_merge_commit_is_refused(repo: Path) -> None:
+    """Git's already-up-to-date result does not prove a two-parent merge occurred."""
+    git(repo, "branch", "agent-run/empty")
+    report = {"passed": True, "branch": "agent-run/empty", "files": []}
+    with pytest.raises(MergeRefused, match="two parents"):
+        merge_branch(repo, report, MergeOptions())
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+    assert git(repo, "branch", "--list", report["branch"]).strip()
+
+
+def defer_merge_commit(arguments: list[str], project: Path) -> str:
+    """Run real Git while simulating a configuration that defers the merge commit."""
+    from foremankit.agent_git import git as run_git
+
+    if arguments[0] == "merge" and "--no-ff" in arguments:
+        arguments = [argument for argument in arguments if argument != "--commit"]
+        arguments.append("--no-commit")
+    return run_git(arguments, project)
+
+
+def test_zero_exit_with_pending_merge_is_aborted(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zero exit with MERGE_HEAD must abort before branch deletion or rechecks."""
+    report = prepare_feature(repo)
+    old_head = git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(agent_merge, "git", defer_merge_commit)
+    with pytest.raises(MergeRefused, match="MERGE_HEAD remains"):
+        merge_branch(repo, report, MergeOptions())
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
+    assert git(repo, "rev-parse", "HEAD") == old_head
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "branch", "--list", report["branch"]).strip()
+
+
+def test_ignored_local_target_is_preserved(repo: Path) -> None:
+    """Ignored files still belong to the owner and cannot be overwritten."""
+    report = prepare_feature(repo)
+    (repo / ".git" / "info" / "exclude").write_text("feature.py\n", encoding="utf-8")
+    (repo / "feature.py").write_text("owner content\n", encoding="utf-8")
+    with pytest.raises(MergeRefused, match="local changes"):
+        merge_branch(repo, report, MergeOptions())
+    assert (repo / "feature.py").read_text(encoding="utf-8") == "owner content\n"
+
+
+def test_failed_recheck_recommends_revert_when_owner_has_edits(repo: Path) -> None:
+    """Undo advice must preserve unrelated tracked edits already in the working tree."""
+    report = prepare_feature(repo)
+    (repo / "base.py").write_text("owner edits\n", encoding="utf-8")
+    result = merge_branch(repo, report, MergeOptions(recheck=lambda: (False, "failed")))
+    assert result["status"] == "check_failed_after_merge"
+    assert f"git revert -m 1 {result['merge_commit']}" in result["detail"]
+    assert "git reset --hard" not in result["detail"]
+    assert (repo / "base.py").read_text(encoding="utf-8") == "owner edits\n"
