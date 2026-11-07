@@ -395,9 +395,10 @@ def test_orchestrator_mode_lists_upstreams_and_refuses_a_too_sensitive_folder(mo
         "upstreams:\n  deepseek: {url: http://x, key_env: TEST_PANEL_KEY, ceiling: normal, models: {sonnet: m}}\n",
         encoding="utf-8")
     assert panel.orchestrator_mode_status() == {"mode": "claude", "modes": ["claude", "local", "deepseek"]}
+    (tmp_path / ".foremankit").mkdir()
+    (tmp_path / ".foremankit" / "sensitivity").write_text("private", encoding="utf-8")
     with pytest.raises(ValueError, match="private"):
         panel.set_orchestrator_mode("deepseek", str(tmp_path))
-    (tmp_path / ".foremankit").mkdir()
     (tmp_path / ".foremankit" / "sensitivity").write_text("normal", encoding="utf-8")
     assert "deepseek" in panel.set_orchestrator_mode("deepseek", str(tmp_path))
     assert panel.orchestrator_mode_status()["mode"] == "deepseek"
@@ -618,3 +619,19 @@ def test_agent_runs_actions_switch_and_report(capsys):
     capsys.readouterr()
     panel.main(["agent-runs"])
     assert json.loads(capsys.readouterr().out)["runners"]["opencode"]["active"] is False
+
+
+def test_agent_run_resume_cli(tmp_path, monkeypatch, capsys):
+    """The CLI clears a persisted quota pause and exposes the recovery probe."""
+    quota = panel.panel_agent_runs.agent_quota
+    path = tmp_path / "quota.json"
+    monkeypatch.setattr(quota, "state_path", lambda: path)
+    quota.save_state(path, {"codex": {"paused_until": 9_999_999_999, "strikes": 3}})
+    panel.main(["agent-run-resume", "--name", "codex"])
+    assert json.loads(capsys.readouterr().out)["message"] == "pause cleared: codex (the next run is a probe)"
+    assert quota.load_state(path)["codex"]["paused_until"] == 0
+    panel.main(["agent-runs"])
+    entry = json.loads(capsys.readouterr().out)["runners"]["codex"]
+    assert entry["probing"] and entry["strikes"] == 3 and entry["retry_at"] == 0
+    panel.main(["agent-run-resume", "--name", "unknown"])
+    assert json.loads(capsys.readouterr().out)["message"].startswith("not done:")

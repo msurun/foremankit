@@ -208,3 +208,34 @@ def test_internal_data_follows_configured_ceiling():
         assert runners["codex"]["internal_data"] is (ceiling == "internal")
         assert runners["agy"]["internal_data"] is True
         assert runners["opencode"]["internal_data"] is False
+
+
+def test_pause_probe_and_healthy_status():
+    """Status exposes recovery state and distinguishes hard and soft daily limits."""
+    quota = {"agy": {"paused_until": NOW + 120, "strikes": 2},
+             "opencode": {"paused_until": NOW - 10, "strikes": 1}}
+    settings = {"quota": {"agy": {"max_runs_per_day": 5, "soft_runs_per_day": 9},
+                          "opencode": {"max_runs_per_day": -1, "soft_runs_per_day": 8}}}
+    inputs = make_inputs(quota_state=quota, settings=settings)
+    runners = build_status(inputs)["runners"]
+    keys = ("strikes", "probing", "retry_at", "daily_limit", "daily_limit_hard")
+    assert tuple(runners["agy"][key] for key in keys) == (2, False, NOW + 120, 5, True)
+    assert tuple(runners["opencode"][key] for key in keys) == (1, True, 0, 8, False)
+    assert tuple(runners["codex"][key] for key in keys) == (0, False, 0, 0, False)
+    assert runners["agy"]["active"] and runners["agy"]["paused_for_s"] == 120
+    assert inputs.quota_state == quota
+
+
+def test_resume_runner_preserves_strikes_and_refuses_unknown(tmp_path, monkeypatch):
+    """Resuming persists an immediate probe and rejects unknown names without writes."""
+    quota = panel_agent_runs.agent_quota
+    path = tmp_path / "quota.json"
+    monkeypatch.setattr(quota, "state_path", lambda: path)
+    quota.save_state(path, {"agy": {"paused_until": NOW + 120, "strikes": 2}})
+    assert panel_agent_runs.resume_runner("agy", NOW) == "pause cleared: agy (the next run is a probe)"
+    state = quota.load_state(path)
+    assert state["agy"] == {"paused_until": 0, "strikes": 2}
+    assert quota.pause_info(state, "agy", NOW)["probing"]
+    before = path.read_bytes()
+    assert panel_agent_runs.resume_runner("all", NOW).startswith("not done:")
+    assert path.read_bytes() == before

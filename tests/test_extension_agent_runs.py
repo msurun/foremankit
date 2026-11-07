@@ -13,6 +13,9 @@ import pytest
 
 EXTENSION_PATH = Path(__file__).resolve().parent.parent / "vscode-extension" / "extension.js"
 REQUIRED_ELEMENT_IDS = (
+    "arAgyResume",
+    "arOpencodeResume",
+    "arCodexResume",
     "arAll",
     "arAgy",
     "arOpencode",
@@ -27,11 +30,13 @@ REQUIRED_ELEMENT_IDS = (
 REQUIRED_BACKEND_ACTIONS = (
     "'agent-runs'",
     "'agent-run-set'",
+    "'agent-run-resume'",
     "'usage-refresh'",
     "'usage-mark'",
 )
 CONFIG_TABLE_KEYS = (
     "agentRunSet",
+    "agentRunResume",
     "usageRefresh",
     "usageMark",
 )
@@ -133,3 +138,16 @@ def test_extension_javascript_syntax_with_node():
         check=False,
     )
     assert result.returncode == 0, f"Node syntax check failed: {result.stderr}"
+
+
+def test_runner_pause_display_and_resume_handlers():
+    """Each runner can clear a pause and displays local retry time and probe status safely."""
+    source = load_extension_source()
+    for ident, runner in (("arAgy", "agy"), ("arOpencode", "opencode"), ("arCodex", "codex")):
+        assert f"$('{ident}Resume').onclick = () => send({{ type: 'config', action: 'agentRunResume', name: '{runner}' }})" in source
+    block = source[source.index(' function showAgentRunner('):source.index(' function showAgentRecent(')]
+    assert "r.retry_at * 1000 > Date.now()" in block
+    assert "paused until " in block and " (limit)" in block and "testing after pause" in block
+    assert "getHours()" in block and "getMinutes()" in block
+    assert " (soft)" in block and "r.daily_limit_hard" in block
+    assert "textContent" in block and "innerHTML" not in block

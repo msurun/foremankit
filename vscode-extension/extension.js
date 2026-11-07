@@ -228,6 +228,7 @@ class Panel {
       kaggleTest: ['kaggle-test'],
       nightSet: ['night-run', enabled ? 'on' : 'off', '--hours', String(hours || 8), '--max', String(max || 20)],
       agentRunSet: ['agent-run-set', String(!!enabled), '--name', name],
+      agentRunResume: ['agent-run-resume', '--name', name],
       usageRefresh: ['usage-refresh'],
       usageMark: ['usage-mark'],
     };
@@ -355,9 +356,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div class="tip" id="tipAR">Autonomous coding agents that work on several files in their own git branch; you review and merge the result. Different from the single-call helpers above. They cost no money: Antigravity and Codex use subscriptions, opencode uses free models.</div>
 <label class="info"><input type="checkbox" id="arAll"> Agent runs enabled</label>
 <div id="arOffLine" class="info" style="display:none">switched off as a whole</div>
-<div id="arAgyRow" class="info"><label><input type="checkbox" id="arAgy"> Antigravity</label><div id="arAgyInfo" class="info"></div></div>
-<div id="arOpencodeRow" class="info"><label><input type="checkbox" id="arOpencode"> opencode</label><div id="arOpencodeInfo" class="info"></div></div>
-<div id="arCodexRow" class="info"><label><input type="checkbox" id="arCodex"> Codex</label><div id="arCodexInfo" class="info"></div></div>
+<div id="arAgyRow" class="info"><label><input type="checkbox" id="arAgy"> Antigravity</label><div id="arAgyInfo" class="info"></div><button class="secondary" id="arAgyResume" style="display:none;font-size:11px">Try now</button></div>
+<div id="arOpencodeRow" class="info"><label><input type="checkbox" id="arOpencode"> opencode</label><div id="arOpencodeInfo" class="info"></div><button class="secondary" id="arOpencodeResume" style="display:none;font-size:11px">Try now</button></div>
+<div id="arCodexRow" class="info"><label><input type="checkbox" id="arCodex"> Codex</label><div id="arCodexInfo" class="info"></div><button class="secondary" id="arCodexResume" style="display:none;font-size:11px">Try now</button></div>
 <div class="info" style="margin-top:6px"><b>Recent runs</b></div>
 <div id="arRecent"></div>
 <div class="info" style="margin-top:6px"><b>Review verdicts (clean merge rate)</b></div>
@@ -527,8 +528,15 @@ function showGpu(gpu) {
  function showAgentRunner(id, infoId, r) {
   if (!r) return;
   if (document.activeElement !== $(id)) $(id).checked = !!r.own;
-  const parts = ['slots ' + r.slots, r.daily_limit > 0 ? 'today ' + r.runs_today + '/' + r.daily_limit : 'today ' + r.runs_today];
-  if (r.paused_for_s > 0) parts.push('paused for ' + Math.ceil(r.paused_for_s / 60) + ' min');
+  const parts = ['slots ' + r.slots, r.daily_limit > 0 ? 'today ' + r.runs_today + '/' + r.daily_limit + (r.daily_limit_hard ? '' : ' (soft)') : 'today ' + r.runs_today];
+  const paused = r.retry_at * 1000 > Date.now();
+  $(id + 'Resume').style.display = paused ? 'inline-block' : 'none';
+  if (paused) {
+   const retry = new Date(r.retry_at * 1000);
+   const clock = String(retry.getHours()).padStart(2, '0') + ':' + String(retry.getMinutes()).padStart(2, '0');
+   parts.push('paused until ' + clock + ' (limit)');
+  }
+  if (r.probing) parts.push('testing after pause');
   if (r.model) parts.push(r.model);
   parts.push(r.internal_data ? 'internal data OK' : 'normal data only');
   if (!r.active) parts.push('inactive');
@@ -791,6 +799,9 @@ function showGpu(gpu) {
  $('arAgy').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'agy', enabled: $('arAgy').checked });
  $('arOpencode').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'opencode', enabled: $('arOpencode').checked });
  $('arCodex').onchange = () => send({ type: 'config', action: 'agentRunSet', name: 'codex', enabled: $('arCodex').checked });
+ $('arAgyResume').onclick = () => send({ type: 'config', action: 'agentRunResume', name: 'agy' });
+ $('arOpencodeResume').onclick = () => send({ type: 'config', action: 'agentRunResume', name: 'opencode' });
+ $('arCodexResume').onclick = () => send({ type: 'config', action: 'agentRunResume', name: 'codex' });
  $('arUsageRefresh').onclick = () => send({ type: 'config', action: 'usageRefresh' });
  $('arUsageMark').onclick = () => send({ type: 'config', action: 'usageMark' });
 $('nightOn').onchange = () => send({ type: 'config', action: 'nightSet', enabled: $('nightOn').checked, hours: Number($('nightHours').value), max: Number($('nightMax').value) });
