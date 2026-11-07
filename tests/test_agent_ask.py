@@ -316,3 +316,14 @@ def test_ask_batch_daily_limit_stops_before_the_first_task(tmp_path, repo, monke
     assert all(result["ok"] is False for result in results)
     assert "daily limit" in results[0]["error"]
     assert fake.calls == [] and not batch.out_dir.exists()
+
+
+def test_long_answer_mentioning_a_rate_limit_does_not_stop_the_batch(tmp_path):
+    """Questions about code often say 'rate limit' or 429: only a short refusal counts as a quota error."""
+    from foremankit import agent_ask
+    long_answer = "The gateway retries after a 429 rate limit response. " * 20
+    result = {"answer": long_answer, "error": ""}
+    quota = {"state": {}, "path": tmp_path / "q.json", "settings": {}, "runner": "opencode"}
+    assert agent_ask._quota_stop(result, quota) == ""
+    short = {"answer": "Rate limit exceeded: quota exhausted", "error": ""}
+    assert agent_ask._quota_stop(short, quota) != ""

@@ -22,6 +22,7 @@ PROMPT_HEADER = ("You are answering a question about the code in the current fol
 CHANGED = "the agent changed files: "
 USAGE_KEYS = ("tokens_in", "tokens_out", "tool_calls", "thinking_tokens", "cache_read_tokens", "turns")
 QUESTION_SUFFIXES = {".md", ".txt"}
+QUOTA_TEXT_MAX_CHARS = 300      # a real quota refusal is a short message
 
 
 @dataclass(frozen=True)
@@ -394,8 +395,8 @@ def _job(batch: AskBatch, path: Path, task: str) -> AskJob:
 def _quota_stop(result: dict, quota: dict) -> str:
     """Record a quota error and return the stop reason; "" when the reply is not a quota error."""
     text = result["answer"] or result["error"]
-    if not agent_quota.is_quota_error(text):
-        return ""
+    if len(text) > QUOTA_TEXT_MAX_CHARS or not agent_quota.is_quota_error(text):
+        return ""     # a long answer about code that mentions "rate limit" or 429 is an answer, not a quota error
     state, state_file = quota["state"], quota["path"]
     agent_quota.record_quota_error(state, quota["runner"], time.time(), quota["settings"])
     agent_quota.save_state(state_file, state)
