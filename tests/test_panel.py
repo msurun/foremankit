@@ -604,3 +604,17 @@ def test_escalation_modes_offer_auto_plus_the_provider_aliases(monkeypatch: pyte
         "      flash: {id: g-flash}\n      lite31: {id: g-lite}\n      pro: {id: g-pro}\n",
         encoding="utf-8")
     assert [m["name"] for m in panel.escalation_modes("gemini")] == ["auto", "flash", "lite31", "pro"]
+
+
+def test_agent_runs_actions_switch_and_report(capsys):
+    """The panel CLI switches a runner and the status reflects it (state dir is isolated by conftest)."""
+    panel.main(["agent-run-set", "false", "--name", "agy"])
+    assert "agent runs off: agy" in capsys.readouterr().out
+    panel.main(["agent-runs"])
+    status = json.loads(capsys.readouterr().out)
+    assert status["enabled"] is True and status["runners"]["agy"]["active"] is False
+    assert status["runners"]["opencode"]["active"] is True
+    panel.main(["agent-run-set", "false", "--name", "all"])
+    capsys.readouterr()
+    panel.main(["agent-runs"])
+    assert json.loads(capsys.readouterr().out)["runners"]["opencode"]["active"] is False

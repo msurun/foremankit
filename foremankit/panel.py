@@ -51,7 +51,7 @@ from collections.abc import Callable
 from foremankit.config import _read_yaml, config_dir, load_env, read_env_file, state_dir, write_env_values
 from foremankit.nodes import LEVELS, WORKERS_FILE, _addresses, _url, ensure_key, load_nodes, load_workers, self_name
 from foremankit import delegation as delegation_module
-from foremankit import budget, escalation, model_watch, pairing, presets, pricing, upstream
+from foremankit import budget, escalation, model_watch, pairing, panel_agent_runs, presets, pricing, upstream
 from foremankit.providers import normalize_toggle
 from foremankit.state import StateStore
 from foremankit.gateway import DEFAULTS as GATEWAY_DEFAULTS
@@ -1184,6 +1184,9 @@ def config_actions(args: argparse.Namespace) -> dict[str, Callable[[], str]]:
         "worker-add": lambda: add_worker(args.name, args.url, args.accept, args.priority),
         "worker-remove": lambda: remove_worker(args.name),
         "night-run": lambda: night_command(args),
+        "agent-run-set": lambda: panel_agent_runs.set_agent_run(args.name or "all", args.action == "true"),
+        "usage-refresh": lambda: panel_agent_runs.refresh_usage(),
+        "usage-mark": lambda: panel_agent_runs.mark_usage(),
         "kaggle-set": lambda: set_kaggle(args.url, args.key),
         "kaggle-test": test_kaggle,
     }
@@ -1200,7 +1203,7 @@ def run_config_action(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The command line of the panel: one action plus the options the actions read."""
     parser = argparse.ArgumentParser(prog="foremankit.panel")
-    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "night-run", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test"])
+    parser.add_argument("what", choices=["status", "models", "command", "start-router", "stop-router", "stop-server", "start-server", "router-direct", "router-normal", "thinking", "role", "workers", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "preset-plan", "apply-preset", "mark-folder", "fix-model", "refresh-models", "budget-set", "profile-set", "delegations", "night-run", "pair-host", "pair-serve", "pair-state", "pair-find", "pair-join", "pair-firewall", "pair-firewall-status", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test", "agent-runs", "agent-run-set", "usage-refresh", "usage-mark"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("--model", default="")
     parser.add_argument("--fields", default="{}", help="profile-set: JSON object of launch parameters")
@@ -1249,6 +1252,7 @@ def info_answers(args: argparse.Namespace) -> dict[str, Callable[[], Any]]:
         "pair-find": other_hosts,
         "pair-join": lambda: {"message": run_join(args)},
         "delegations": delegations,
+        "agent-runs": lambda: panel_agent_runs.agent_runs_status(),
         "workers": list_workers,
     }
 
@@ -1257,7 +1261,7 @@ def action_output(args: argparse.Namespace, answers: dict[str, Callable[[], Any]
     """The JSON object one action prints: a read-only answer, or the message of a change or a quick action."""
     if args.what in answers:
         return answers[args.what]()
-    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test", "night-run"):
+    if args.what in ("role", "worker-add", "worker-remove", "worker-enable", "worker-test", "orchestrator", "orchestrator-mode", "fix-model", "budget-set", "profile-set", "delegation-set", "supervisor-set", "escalation-set", "kaggle-set", "kaggle-test", "night-run", "agent-run-set", "usage-refresh", "usage-mark"):
         return {"message": run_config_action(args)}
     if args.what == "thinking":
         return {"message": set_thinking(parse_levels(args.levels))}
