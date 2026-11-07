@@ -36,7 +36,8 @@ chains:
   summarize:    ["agy:flash_low", llm, groq, cerebras, openrouter, "gemini:flash"]
   # review: a second model reads code that is already written (delegate review=true, `foremankit review`). Only own hardware
   # (the pool `llm`) or a PAID model: free clouds review superficially and may train on the code. The author's own
-  # source is skipped. A slow node is used last (llm.kinds.review + max_seconds), so the fast Legion or a paid flash answers first.
+  # vendor is skipped, including its other provider names. A slow node is used last (llm.kinds.review + max_seconds),
+  # so the fast Legion or a paid flash answers first.
   review:       [llm, "gemini:flash", "deepseek:flash"]
   private:      [llm]                     # only own hardware is ever accepted here (and only nodes with accept: private)
 
@@ -249,6 +250,21 @@ conventions:
 # Preliminary code review by a second model (delegate review=true, or `foremankit review <files>`). Findings the reviewer
 # cannot back with a quote that really appears in the code are reported as unverified and never acted on.
 review:
+  require_other_vendor: true   # false restores provider-name exclusion only
   max_output_tokens: 2500
   fix_severities: [blocker]    # findings of these severities (and grounded) go back to the author
   fix_rounds: 1                # 0 = report only
+
+# Ordered substrings identify model vendors for agent runners; the first match wins.
+vendors:
+  deepseek: deepseek
+  gemini: google
+  gpt: openai
+  o3: openai
+  codex: openai
+  claude: anthropic
+  qwen: alibaba
+  llama: meta
+  mistral: mistral
+  kimi: moonshot
+  glm: zhipu

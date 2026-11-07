@@ -1,4 +1,7 @@
-"""After the answer: run the check command (feeding failures back to the author) and have another model review it."""
+"""Check generated code and feed failures back to its author.
+
+Require an independent vendor when another model reviews the finished work.
+"""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -8,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from . import codecheck, netguard, review
 from . import verify as verify_module
 from .records import CallContext, ReviewJob, RouterError, TaskRequest, VerifySpec
+from .vendors import VENDOR_PREFIX, vendor_of_provider
 
 if TYPE_CHECKING:
     from .router import Router
@@ -179,13 +183,13 @@ class ReviewStage:
         try:
             reply = self.router.run_chain(request, exclude)
         except (RouterError, netguard.PrivacyError) as error:
-            return {"skipped": str(error)[:REPLY_PREVIEW_CHARS], "findings": []}
+            return {"skipped": self._skip_reason(exclude, error), "findings": []}
         where = f"{reply['provider']}/{reply['model']}" + (f" via {reply['endpoint']}" if reply.get("endpoint") else "")
         return {"reviewer": where, "findings": review.parse_findings(reply["_text"], job.code), "reply": reply}
 
     def run(self, result: dict[str, Any], request: TaskRequest, spec: VerifySpec | None) -> None:
         """Review the result's code; adds result["review"]."""
-        report = self.review_code(self._job(result, request, spec), exclude=(result["_cand"].key,))
+        report = self.review_code(self._job(result, request, spec), exclude=self._exclusions(result))
         reply = report.pop("reply", None)
         if reply:
             fold_costs(result, reply)
@@ -195,6 +199,23 @@ class ReviewStage:
             report["fixed"] = self._fix_after_review(result, actionable, request, spec)
         report["findings"] = [dict(vars(finding)) for finding in report["findings"]]
         result["review"] = report
+
+    def _exclusions(self, result: dict[str, Any]) -> tuple[str, ...]:
+        """Require independent vendors by default while retaining the legacy escape hatch."""
+        candidate = result["_cand"]
+        if not self.settings.get("require_other_vendor", True):
+            return (candidate.key,)
+        vendor = vendor_of_provider(candidate.provider.name, self.router.providers)
+        return candidate.key, f"{VENDOR_PREFIX}{vendor}"
+
+    @staticmethod
+    def _skip_reason(exclude: tuple[str, ...], error: Exception) -> str:
+        """Explain when the required independent review could not be obtained."""
+        vendor = next((entry.removeprefix(VENDOR_PREFIX) for entry in exclude
+                       if entry.startswith(VENDOR_PREFIX)), None)
+        if vendor is not None:
+            return f"no reviewer of a different vendor than {vendor} is available"
+        return str(error)[:REPLY_PREVIEW_CHARS]
 
     @staticmethod
     def _job(result: dict[str, Any], request: TaskRequest, spec: VerifySpec | None) -> ReviewJob:

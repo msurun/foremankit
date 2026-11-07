@@ -522,3 +522,5 @@ foremankit is an independent project and is not affiliated with or endorsed by A
   - Session‑length hint not yet adapted.  
   - Gemini requires a LiteLLM setup.  
   - Weaker models’ tool‑calling quality still needs smoke‑testing (e.g., 10 edits, a delegate call, router status).
+
+Reviews always use another vendor: agy, gemini and gemini_free are Google; Codex is OpenAI; opencode follows its model (normally DeepSeek); deepseek is DeepSeek; kaggle and llm are local. Groq, OpenRouter, Mistral and Cerebras use their operator names and never serve as reviewers. Agent-run branches written by Codex (OpenAI) need Claude (Anthropic) or another vendor; agy (Google) work needs Codex; opencode (DeepSeek) work needs Codex or agy. Unknown vendors cannot establish independence; unavailable independent reviews are skipped. `review.require_other_vendor: false` restores name-based exclusion.
