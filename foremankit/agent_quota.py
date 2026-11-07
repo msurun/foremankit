@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,15 @@ QUOTA_TEXT = re.compile(
     r"out of credits|insufficient credits|try again later|try again in", re.IGNORECASE,
 )
 NO_DAILY_LIMIT = 0
+
+
+@dataclass(frozen=True)
+class LimitHit:
+    """One runner quota refusal, with its Unix timestamp in seconds and optional reset text."""
+
+    runner: str
+    now: float
+    message: str = ""
 
 
 def state_path() -> Path:
@@ -66,8 +76,9 @@ def record_run(state: dict, runner: str, now: float) -> None:
         entry["probe_until"] = now + PROBE_WINDOW_S
 
 
-def record_quota_error(state: dict, runner: str, now: float, settings: dict, message: str = "") -> float:
+def record_quota_error(state: dict, hit: LimitHit, settings: dict) -> float:
     """Pause `runner` after a quota error; returns the timestamp it may start again at."""
+    runner, now, message = hit.runner, hit.now, hit.message
     entry = _bucket(state, runner, now)
     quota = _quota_settings(settings, runner)
     steps = quota.get("backoff_s") or [quota.get("cooldown_on_error_s", DEFAULT_COOLDOWN_S), *DEFAULT_BACKOFF_S[1:]]

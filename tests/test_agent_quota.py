@@ -13,6 +13,7 @@ import pytest
 from foremankit.agent_quota import (
     PROBE_WINDOW_S,
     QUOTA_TEXT,
+    LimitHit,
     can_start,
     clear_pause,
     is_quota_error,
@@ -157,7 +158,7 @@ def test_day_rollover_resets_runs_but_not_the_pause() -> None:
     state: dict = {}
     record_run(state, "agy", at(6, 22))
     record_run(state, "agy", at(6, 22))
-    until = record_quota_error(state, "agy", at(6, 23), settings)   # Nov 7 01:00 UTC
+    until = record_quota_error(state, LimitHit("agy", at(6, 23)), settings)   # Nov 7 01:00 UTC
     assert can_start(state, "agy", at(6, 23), settings)[0] is False
     ok, reason = can_start(state, "agy", at(7, 0), settings)
     assert ok is False and "agy" in reason   # pause survives the rollover
@@ -170,7 +171,7 @@ def test_pause_blocks_until_and_expires_exactly_at_now() -> None:
     """While paused the reason names the runner and seconds left; at paused_until it may start."""
     settings = {"quota": {"agy": {"backoff_s": [1800]}}}
     state: dict = {}
-    until = record_quota_error(state, "agy", at(6), settings)
+    until = record_quota_error(state, LimitHit("agy", at(6)), settings)
     assert until == at(6) + 1800
     ok, reason = can_start(state, "agy", at(6) + 60, settings)
     assert ok is False
@@ -183,7 +184,7 @@ def test_record_quota_error_does_not_count_a_run() -> None:
     """A quota error only pauses the runner; the run count is untouched."""
     state: dict = {}
     record_run(state, "agy", at(6))
-    record_quota_error(state, "agy", at(6), {})
+    record_quota_error(state, LimitHit("agy", at(6)), {})
     assert state["agy"]["runs"] == 1
 
 
@@ -191,10 +192,10 @@ def test_second_quota_error_never_stacks_the_cooldown() -> None:
     """A second error keeps paused_until = max(old, now + cooldown) instead of adding a whole cooldown again."""
     settings = {"quota": {"agy": {"backoff_s": [1800]}}}
     state: dict = {}
-    first = record_quota_error(state, "agy", at(6), settings)
-    same_time = record_quota_error(state, "agy", at(6), {"quota": {"agy": {"backoff_s": [60]}}})
+    first = record_quota_error(state, LimitHit("agy", at(6)), settings)
+    same_time = record_quota_error(state, LimitHit("agy", at(6)), {"quota": {"agy": {"backoff_s": [60]}}})
     assert same_time == first                       # a shorter cooldown cannot shorten the pause
-    later = record_quota_error(state, "agy", at(6) + 600, settings)
+    later = record_quota_error(state, LimitHit("agy", at(6) + 600), settings)
     assert later == at(6) + 600 + 1800
     assert later < first + 1800                     # max(), not old + cooldown
     assert state["agy"]["paused_until"] == later
@@ -205,7 +206,7 @@ def test_two_runners_are_independent() -> None:
     settings = {"quota": {"agy": {"max_runs_per_day": 1, "cooldown_on_error_s": 1800}}}
     state: dict = {}
     record_run(state, "agy", at(6))
-    record_quota_error(state, "agy", at(6), settings)
+    record_quota_error(state, LimitHit("agy", at(6)), settings)
     assert can_start(state, "agy", at(6), settings)[0] is False
     assert can_start(state, "opencode", at(6), settings) == (True, "")
     assert state.get("opencode", {}).get("runs", 0) == 0
@@ -218,7 +219,7 @@ def test_settings_are_never_mutated() -> None:
     state: dict = {}
     slots(settings, "agy")
     record_run(state, "agy", at(6))
-    record_quota_error(state, "agy", at(6), settings)
+    record_quota_error(state, LimitHit("agy", at(6)), settings)
     can_start(state, "agy", at(6), settings)
     can_start(state, "nya", at(6), settings)
     assert settings == before
@@ -228,21 +229,21 @@ def test_backoff_and_success() -> None:
     """Repeated errors escalate, and success restores the first backoff step."""
     state: dict = {}
     for strike, delay in enumerate([1800, 3600, 7200, 18000, 18000], start=1):
-        assert record_quota_error(state, "agy", at(6), {}) == at(6) + delay
+        assert record_quota_error(state, LimitHit("agy", at(6)), {}) == at(6) + delay
         assert state["agy"]["strikes"] == strike
     record_run(state, "agy", at(7))
     record_success(state, "agy")
     assert state["agy"]["strikes"] == state["agy"]["probe_until"] == 0
     assert state["agy"]["paused_until"] == at(6) + 18000
-    assert record_quota_error(state, "agy", at(7), {}) == at(7) + 1800
+    assert record_quota_error(state, LimitHit("agy", at(7)), {}) == at(7) + 1800
 
 
 def test_legacy_cooldown_first_step() -> None:
     """The old cooldown supplies only the first backoff step."""
     state: dict = {}
     settings = {"quota": {"agy": {"cooldown_on_error_s": 90}}}
-    assert record_quota_error(state, "agy", at(6), settings) == at(6) + 90
-    assert record_quota_error(state, "agy", at(6), settings) == at(6) + 3600
+    assert record_quota_error(state, LimitHit("agy", at(6)), settings) == at(6) + 90
+    assert record_quota_error(state, LimitHit("agy", at(6)), settings) == at(6) + 3600
 
 
 @pytest.mark.parametrize(("message", "seconds"), [
@@ -271,13 +272,13 @@ def test_clock_reset(message, hour) -> None:
 ])
 def test_reset_overrides_backoff_and_clamps(message, delay) -> None:
     """Parsed resets win over backoff within the one-minute to one-day bounds."""
-    assert record_quota_error({}, "agy", at(6), {}, message) == at(6) + delay
+    assert record_quota_error({}, LimitHit("agy", at(6), message), {}) == at(6) + delay
 
 
 def test_probe_recovery_and_crash() -> None:
     """Only one probe runs until success or the stale probe window expires."""
     state: dict = {}
-    until = record_quota_error(state, "agy", at(6), {})
+    until = record_quota_error(state, LimitHit("agy", at(6)), {})
     assert can_start(state, "agy", until, {}) == (True, "")
     record_run(state, "agy", until)
     assert can_start(state, "agy", until, {}) == (False, "agy is being probed after a limit pause")
@@ -291,7 +292,7 @@ def test_probe_recovery_and_crash() -> None:
 def test_pause_info_and_clear() -> None:
     """Clearing a pause retains strikes so an immediate run becomes a probe."""
     state: dict = {}
-    until = record_quota_error(state, "agy", at(6), {})
+    until = record_quota_error(state, LimitHit("agy", at(6)), {})
     assert pause_info(state, "agy", at(6)) == {
         "paused": True, "until": until, "remaining_s": 1800, "strikes": 1, "probing": False}
     assert pause_info(state, "agy", until)["probing"]
@@ -309,14 +310,24 @@ def test_old_state_and_soft_limit(tmp_path: Path) -> None:
     state = load_state(path)
     assert can_start(state, "agy", at(6), {"quota": {"agy": {"soft_runs_per_day": 15}}})[0]
     assert state["agy"]["strikes"] == state["agy"]["probe_until"] == 0
-    assert record_quota_error(state, "agy", at(6), {}) == at(6) + 1800
+    assert record_quota_error(state, LimitHit("agy", at(6)), {}) == at(6) + 1800
 
 
 def test_failed_probe_does_not_block_the_next_probe_after_a_short_pause():
     """A probe that hits the limit again ends the probe window: with a short parsed pause the next probe is allowed."""
     settings: dict = {}
     state: dict = {}
-    record_quota_error(state, "codex", 1000.0, settings)
+    record_quota_error(state, LimitHit("codex", 1000.0), settings)
     record_run(state, "codex", 1000.0 + 1800)          # the probe starts after the first pause
-    until = record_quota_error(state, "codex", 2900.0, settings, "try again in 2 minutes")
+    until = record_quota_error(state, LimitHit("codex", 2900.0, "try again in 2 minutes"), settings)
     assert can_start(state, "codex", until + 1, settings) == (True, "")
+
+
+
+def test_limit_hit_is_frozen_and_message_defaults_empty():
+    from dataclasses import FrozenInstanceError
+
+    hit = LimitHit("codex", 1000.0)
+    assert hit.message == ""
+    with pytest.raises(FrozenInstanceError):
+        hit.now = 2000.0
