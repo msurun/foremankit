@@ -213,7 +213,7 @@ class ReviewStage:
         """Explain when the required independent review could not be obtained."""
         vendor = next((entry.removeprefix(VENDOR_PREFIX) for entry in exclude
                        if entry.startswith(VENDOR_PREFIX)), None)
-        if vendor is not None:
+        if vendor is not None and not isinstance(error, netguard.PrivacyError):    # a privacy refusal keeps its own reason
             return f"no reviewer of a different vendor than {vendor} is available"
         return str(error)[:REPLY_PREVIEW_CHARS]
 
