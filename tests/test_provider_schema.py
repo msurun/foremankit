@@ -11,6 +11,13 @@ import copy
 import pytest
 
 from foremankit import provider_schema as ps
+from foremankit.vendors import vendor_of_provider
+
+
+@pytest.mark.parametrize("configuration,expected", [({}, "custom"), ({"vendor": "google"}, "google")])
+def test_provider_vendor_is_an_optional_string(configuration, expected):
+    """Vendor metadata is optional and defaults to the provider name."""
+    assert vendor_of_provider("custom", {"custom": configuration}) == expected
 
 
 # --------------------------------------------------------------------------- #

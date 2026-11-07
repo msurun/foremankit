@@ -1,4 +1,7 @@
-"""Walks the chain of sources of a task until one of them answers (cheap first, deferred ones on a last pass)."""
+"""Walk task sources until one answers, deferring busy sources to a last pass.
+
+Apply source and vendor exclusions before any candidate can receive the task.
+"""
 from __future__ import annotations
 
 import secrets
@@ -20,6 +23,7 @@ from .records import (
 )
 from .resume import Resume, load_resume, prompt_fingerprint, resumed_id
 from .selection import estimate_seconds, unsuited_reason
+from .vendors import VENDOR_PREFIX, different_vendor, vendor_of_provider
 
 if TYPE_CHECKING:
     from .router import Router
@@ -154,13 +158,25 @@ class ChainRun:
     def _entries(self) -> Iterator[str]:
         """The chain entry `llm` is replaced, when it is reached, by the pool's nodes (fastest expected first)."""
         for entry in self.chain:
+            if self._excluded(entry):
+                continue
             source = str(entry).partition(":")[0]   # keeps the node of an explicit `llm@node` entry (that one is not expanded)
             if source == "llm":
                 state = self.router.store.load()
                 yield from (name for name in self.router.selector.llm_entries(self.ctx, state, self.skipped)
-                            if name not in self.exclude)
-            elif source not in self.exclude:
+                            if not self._excluded(name))
+            else:
                 yield entry
+
+    def _excluded(self, entry: str) -> bool:
+        """Exclude named sources and vendors, including every node of an excluded pool."""
+        provider_name, _, _ = parse_entry(entry)
+        source = str(entry).partition(":")[0]
+        if source in self.exclude or provider_name in self.exclude:
+            return True
+        vendor = vendor_of_provider(provider_name, self.router.providers)
+        return any(not different_vendor(excluded.removeprefix(VENDOR_PREFIX), vendor)
+                   for excluded in self.exclude if excluded.startswith(VENDOR_PREFIX))
 
     def _attempt(self, entry: str, wait: bool, force: bool = False) -> Outcome:
         """('ok', result) | ('skip', reason) | ('defer', reason). 'defer' = usable but not now: all its max_concurrent

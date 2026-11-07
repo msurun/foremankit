@@ -1,4 +1,7 @@
-"""Preliminary code review by a second model: who reviews, which findings count, what happens to them."""
+"""Check reviewer independence and the handling of grounded findings.
+
+Reviews report unavailable independent vendors without failing the author's task.
+"""
 from __future__ import annotations
 
 import sys
@@ -191,3 +194,30 @@ def test_a_fix_that_breaks_the_check_leaves_the_reviewed_version_in_place(projec
     result = delegate_with_review(make_router, cfg)
     assert result["review"]["fixed"] and not result["verify"]["passed"]
     assert (project / "check.py").read_text(encoding="utf-8") == "assert 1 + 1 == 2\n"      # the version that had passed
+
+
+def test_same_vendor_review_is_skipped_with_an_explanation(monkeypatch, make_router, mock, cfg):
+    """Another provider name cannot make a Google review independent."""
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("FREE_GEMINI_API_KEY", "f")
+    cfg["providers"]["gemini_free"]["enabled"] = True
+    cfg["routing"]["chains"]["bulk_code"] = ["gemini_free:flash"]
+    cfg["routing"]["chains"]["review"] = ["gemini:flash"]
+    mock.on(GEMINI, "/chat/completions", chat_json(AUTHOR_ANSWER))
+    result = make_router().delegate("write add", kind="bulk_code", review=True)
+    assert result["review"]["skipped"] == (
+        "no reviewer of a different vendor than google is available")
+    assert calls_to(mock, GEMINI) == 1
+
+
+def test_disabling_vendor_requirement_restores_name_exclusion(monkeypatch, make_router, mock, cfg):
+    """The explicit escape hatch permits a same-company provider alias."""
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("FREE_GEMINI_API_KEY", "f")
+    cfg["providers"]["gemini_free"]["enabled"] = True
+    cfg["routing"]["chains"]["bulk_code"] = ["gemini_free:flash"]
+    cfg["routing"]["chains"]["review"] = ["gemini:flash"]
+    cfg["routing"]["review"]["require_other_vendor"] = False
+    mock.on(GEMINI, "/chat/completions", chat_json(AUTHOR_ANSWER), chat_json(review.NO_FINDINGS))
+    result = make_router().delegate("write add", kind="bulk_code", review=True)
+    assert result["review"]["reviewer"].startswith("gemini/")

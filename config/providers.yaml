@@ -15,6 +15,7 @@
 
 providers:
   deepseek:
+    vendor: deepseek
     type: openai
     base_url: https://api.deepseek.com
     key_env: DEEPSEEK_API_KEY
@@ -60,6 +61,7 @@ providers:
         price: {input_miss: 1.32, input_hit: 0.044, output: 3.96}   # peak; off-peak is half
 
   gemini:
+    vendor: google
     type: openai
     # OpenAI-compatible endpoint (confirmed in ai.google.dev/gemini-api/docs/openai, 2026-10-07)
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
@@ -100,6 +102,7 @@ providers:
         price: {input_miss: 2.00, input_hit: 0.20, output: 12.00}
 
   gemini_free:
+    vendor: google
     # Second Google account on the FREE tier (separate key => separate quota). Used with the other freebies,
     # before paid providers. Same endpoint and model IDs as `gemini`.
     type: openai
@@ -118,6 +121,8 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   groq:
+    # Free cloud operator identity; these clouds are never used as reviewers.
+    vendor: groq
     type: openai
     base_url: https://api.groq.com/openai/v1
     key_env: GROQ_API_KEY
@@ -139,6 +144,8 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   openrouter:
+    # Free cloud operator identity; these clouds are never used as reviewers.
+    vendor: openrouter
     type: openai
     base_url: https://openrouter.ai/api/v1
     key_env: OPENROUTER_API_KEY
@@ -169,6 +176,8 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   mistral:
+    # Free cloud operator identity; these clouds are never used as reviewers.
+    vendor: mistral
     type: openai
     base_url: https://api.mistral.ai/v1
     key_env: MISTRAL_API_KEY
@@ -187,6 +196,8 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   cerebras:
+    # Free cloud operator identity; these clouds are never used as reviewers.
+    vendor: cerebras
     type: openai
     base_url: https://api.cerebras.ai/v1
     key_env: CEREBRAS_API_KEY
@@ -208,6 +219,7 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   agy:
+    vendor: google
     # Google Antigravity CLI (agy.exe) run as a subprocess on the owner's Google AI Pro subscription (promo, no per-call
     # price). Added 2026-10-31. type agy = no HTTP, no key: it signs in through the Antigravity app; the prompt goes as an
     # argument (no stdin, Windows limit -> agy_provider.MAX_PROMPT_CHARS) and the run happens in an empty temp dir.
@@ -236,6 +248,7 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   kaggle:
+    vendor: local
     # The free Kaggle notebook (nodes.yaml `kaggle`) also used as the ORCHESTRATOR (orchestrator.yaml upstreams.kaggle).
     # enabled: false - it is never routed as a cloud provider; this block only supplies the model id and a zero price,
     # so an orchestrated answer through it is logged as a free call instead of "no price for model ... not counted".
@@ -255,6 +268,7 @@ providers:
         price: {input_miss: 0, input_hit: 0, output: 0}
 
   llm:
+    vendor: local
     type: llm
     # The POOL of local-LLM servers: llama.cpp `llama-server` or Ollama, on this machine and on the other machines of the
     # lab. Which machines exist, their speed and which data levels each may receive is config/nodes.yaml. This section holds
