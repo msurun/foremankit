@@ -5,6 +5,7 @@ JSON file whose path the caller passes in.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,11 @@ DEFAULT_MAX_PARALLEL = {"opencode": 3, "agy": 1}
 DEFAULT_SLOTS = 1
 DEFAULT_COOLDOWN_S = 1800.0
 NO_DAILY_LIMIT = 0
+
+
+def state_path() -> Path:
+    """The quota state file shared by `agent-run-batch` and the panel (temp folder, next to the run worktrees)."""
+    return Path(tempfile.gettempdir()) / "foremankit-agent-run" / "quota-state.json"
 
 
 def slots(settings: dict, runner: str) -> int:

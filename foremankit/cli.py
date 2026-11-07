@@ -380,16 +380,13 @@ def _run_plan(plan: Path, project: Path) -> dict[str, Any]:
 
 def _batch_context(plan: Path, project: Path) -> Any:
     """The batch context: the real agent_run, the routing settings, the quota state file, the tracked files."""
-    import tempfile
-
+    from foremankit import agent_quota
     from foremankit.agent_batch import BatchContext
     from foremankit.agent_run import agent_run
     from foremankit.config import load_config
     settings = load_config()["routing"].get("agent_run", {})
-    state_dir = Path(tempfile.gettempdir()) / "foremankit-agent-run"
-    state_dir.mkdir(parents=True, exist_ok=True)
     return BatchContext(project=project, plan_dir=plan.resolve().parent, run_one=agent_run, settings=settings,
-                        state_path=state_dir / "quota-state.json", review_globs=settings.get("review_paths", []),
+                        state_path=agent_quota.state_path(), review_globs=settings.get("review_paths", []),
                         tracked=_tracked_files(project))
 
 

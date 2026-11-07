@@ -87,6 +87,7 @@ def fetch_usage(exe: Path, timeout_s: float = 60.0) -> str:
     try:
         result = subprocess.run(
             [str(exe), "-p", "/usage", "--output-format", "text"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
