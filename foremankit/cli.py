@@ -491,6 +491,17 @@ def _has_questions(folder: Path) -> bool:
     return folder.is_dir() and (any(folder.glob("*.md")) or any(folder.glob("*.txt")))
 
 
+def cmd_agent_review(router: Router, args: argparse.Namespace) -> int:
+    """Print an independent model review; refusals and unreadable answers exit two."""
+    from foremankit.agent_review import ReviewJob, render_text, review
+    from foremankit.config import load_env
+    load_env()
+    report = Path(args.report) if args.report else None
+    result = review(ReviewJob(args.source, Path(args.project).resolve(), args.reviewer, report))
+    print(json.dumps(result, indent=2) if args.json else render_text(result))
+    return 0 if result["status"] == "ok" else 2
+
+
 def cmd_agent_merge(router: Router, args: argparse.Namespace) -> int:
     """Merge or reject one agent-run branch named in a batch report and log the verdict; exit 0 only for merged/rejected."""
     from foremankit.agent_merge import MergeRefused
@@ -628,7 +639,7 @@ def _read_jobs(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-COMMANDS = {"orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "agent-run-batch": cmd_agent_run_batch, "agent-merge": cmd_agent_merge, "agent-ask": cmd_agent_ask, "agent-ask-batch": cmd_agent_ask_batch, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
+COMMANDS = {"agent-review": cmd_agent_review, "orchestrator": cmd_orchestrator, "delegation": cmd_delegation, "supervisor": cmd_supervisor, "supervise": cmd_supervise, "agent-run": cmd_agent_run, "agent-run-batch": cmd_agent_run_batch, "agent-merge": cmd_agent_merge, "agent-ask": cmd_agent_ask, "agent-ask-batch": cmd_agent_ask_batch, "status": cmd_status, "models": cmd_models, "stats": cmd_stats, "llm": cmd_llm, "nodes": cmd_nodes,
             "check": cmd_check, "regress": cmd_regress, "review": cmd_review, "profile": cmd_profile, "delegate": cmd_delegate,
             "sessions": cmd_sessions, "kaggle": cmd_kaggle}
 
@@ -776,6 +787,16 @@ def _add_agent_ask_parsers(sub: Any) -> None:
     ask_batch.add_argument("--sensitivity", default="normal", choices=["normal", "internal"])
 
 
+def _add_agent_review_parser(sub: Any) -> None:
+    """Register branch or report-entry selection and reviewer output options."""
+    parser = sub.add_parser("agent-review", help="read-only review by a different model vendor")
+    parser.add_argument("source", help="agent-run/branch or report.json#task-id")
+    parser.add_argument("--reviewer", default="auto", choices=["auto", "codex", "agy", "opencode"])
+    parser.add_argument("--project", default=".")
+    parser.add_argument("--report", default="", help="report identifying the branch author")
+    parser.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argument parser of the `foremankit` command with all its subcommands."""
     parser = argparse.ArgumentParser(prog="foremankit", description="Delegate work to cheaper/local models.")
@@ -787,6 +808,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_delegate_parser(sub)
     _add_agent_batch_parsers(sub)
     _add_agent_ask_parsers(sub)
+    _add_agent_review_parser(sub)
     return parser
 
 
