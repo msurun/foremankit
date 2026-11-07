@@ -1,4 +1,4 @@
-"""Which worker should get one task: the lead, a Haiku subagent, opencode, agy, a split or a queue.
+"""Which worker should get one task: the lead, Haiku, opencode, codex, agy, a split or a queue.
 Pure heuristics, no I/O: the hard gates come first, then readiness, size, the small-edit case and sensitivity.
 """
 from __future__ import annotations
@@ -11,10 +11,11 @@ from foremankit.agent_scope import matches_any
 MAX_FILES = 8                   # above this the task is split (the plan: more than 8 files)
 MAX_CHANGED_LINES = 400         # above this the task is split (~400 changed lines)
 MAX_TASK_CHARS = 22000          # above this the task text is split
-AGY_MIN_FILES = 6               # agy gets 6-8 files (opencode stays on 1-5)
+AGY_MIN_FILES = 6               # big tasks get codex first (opencode stays on 1-5)
 AGY_MIN_CONTEXT_LINES = 1500    # or this much context
 AGY_MIN_TASK_CHARS = 8000       # or a task text above 8k chars
-AGY_AFTER_FAILURES = 2          # opencode, opencode, agy: the third try escalates
+CODEX_AFTER_FAILURES = 2        # two opencode failures escalate to codex
+AGY_AFTER_FAILURES = 2          # two codex failures escalate to agy
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,8 @@ class RunnerFacts:
     opencode_failures: int = 0
     agy_enabled: bool = True
     opencode_enabled: bool = True
-    codex_enabled: bool = True  # explicit plan pins only; never an automatic fallback
+    codex_enabled: bool = True
+    codex_failures: int = 0
 
 
 def decide_runner(facts: RunnerFacts, review_globs: Sequence[str] = ()) -> tuple[str, list[str]]:
@@ -102,29 +104,48 @@ def _internal(facts: RunnerFacts) -> tuple[str, list[str]]:
 
 
 def _normal(facts: RunnerFacts) -> tuple[str, list[str]]:
-    """Normal data: agy for the big or escalated tasks, opencode as the default."""
-    if _prefers_agy(facts):
-        return "agy", [_agy_reason(facts)]
+    """Normal data escalates forward; otherwise prefer codex for big tasks."""
+    if not (facts.opencode_enabled or facts.codex_enabled or facts.agy_enabled):
+        return "lead", ["no runner is enabled"]
+    if facts.codex_failures >= AGY_AFTER_FAILURES:
+        return _escalate(facts, "codex")
+    if facts.opencode_failures >= CODEX_AFTER_FAILURES:
+        return _escalate(facts, "opencode")
+    signal = _big_task_signal(facts)
+    if signal:
+        return _big_task(facts, signal)
     if facts.opencode_enabled:
         return "opencode", ["normal data and a medium task: opencode is the default"]
+    if facts.codex_enabled:
+        return "codex", ["opencode is switched off: codex takes the task"]
+    return "agy", ["opencode and codex are switched off: agy takes the task"]
+
+
+def _escalate(facts: RunnerFacts, failed: str) -> tuple[str, list[str]]:
+    """Skip disabled runners without returning to an earlier failed runner."""
+    signal = f"{failed} failed this task twice"
+    if failed == "opencode" and facts.codex_enabled:
+        return "codex", [f"{signal}: escalate to codex"]
     if facts.agy_enabled:
-        return "agy", ["opencode is switched off: agy takes the task"]
-    return "lead", ["no runner is enabled"]
+        return "agy", [f"{signal}: escalate to agy"]
+    return "lead", [f"{signal}: escalation is exhausted"]
 
 
-def _prefers_agy(facts: RunnerFacts) -> bool:
-    """A big task, a lot of context, a long text or two opencode failures go to agy."""
-    return facts.agy_enabled and (facts.files >= AGY_MIN_FILES or facts.context_lines >= AGY_MIN_CONTEXT_LINES
-                                  or len(facts.task_text) > AGY_MIN_TASK_CHARS
-                                  or facts.opencode_failures >= AGY_AFTER_FAILURES)
+def _big_task(facts: RunnerFacts, signal: str) -> tuple[str, list[str]]:
+    """Pick the first enabled big-task runner, falling back to opencode."""
+    if facts.codex_enabled:
+        return "codex", [f"{signal}: codex handles the context"]
+    if facts.agy_enabled:
+        return "agy", [f"{signal}: codex is switched off, agy handles the context"]
+    return "opencode", [f"{signal}: codex and agy are switched off, opencode takes the task"]
 
 
-def _agy_reason(facts: RunnerFacts) -> str:
-    """Which agy signal fired (only called when agy is enabled)."""
-    if facts.opencode_failures >= AGY_AFTER_FAILURES:
-        return "opencode failed this task twice: escalate to agy"
+def _big_task_signal(facts: RunnerFacts) -> str:
+    """Name the size threshold crossed, or return an empty signal."""
     if facts.files >= AGY_MIN_FILES:
-        return f"a big task ({facts.files} files): agy handles the context"
+        return f"a big task ({facts.files} files)"
     if facts.context_lines >= AGY_MIN_CONTEXT_LINES:
-        return "a lot of context: agy handles it"
-    return "a long task text: agy handles it"
+        return f"a lot of context ({facts.context_lines} lines)"
+    if len(facts.task_text) > AGY_MIN_TASK_CHARS:
+        return f"a long task text ({len(facts.task_text)} chars)"
+    return ""
