@@ -404,3 +404,42 @@ def test_codex_ask_internal_eligibility(repo, ceiling):
     result = ask(make_job(repo, runner="codex", sensitivity="internal"), runner=fake)
     assert result["ok"] is (ceiling == "internal")
     assert bool(fake.calls) is (ceiling == "internal")
+
+
+LIMIT_RAW = json.dumps({"type": "error", "error": {"name": "APIError", "data": {
+    "message": "Free usage limit reached", "statusCode": 429}}})
+
+
+def test_provider_limit_event_is_a_failure_not_an_answer(repo):
+    """Crosscut report: a 429 error event used to come back as ok=true with the error dict as the answer."""
+    runner = FakeRunner(raw=LIMIT_RAW, reply="{'type': 'error'}")
+    result = ask(AskJob("q", repo, "opencode"), runner=runner)
+    assert result["ok"] is False
+    assert result["answer"] == ""
+    assert result["error"].startswith("provider_limit:")
+    assert "Free usage limit reached" in result["error"]
+
+
+def test_other_provider_error_is_tagged_but_a_real_answer_wins(repo):
+    """A non-limit error is still a failure; an answer text next to a stray error event is kept."""
+    boom = json.dumps({"type": "error", "error": {"message": "boom"}})
+    failed = ask(AskJob("q", repo, "opencode"), runner=FakeRunner(raw=boom, reply=""))
+    assert failed["error"].startswith("provider_error:")
+    text = json.dumps({"type": "text", "part": {"text": "real answer"}})
+    kept = ask(AskJob("q", repo, "opencode"), runner=FakeRunner(raw=boom + "\n" + text))
+    assert kept["ok"] is True and kept["answer"] == "real answer"
+
+
+def test_batch_stops_at_the_provider_limit_and_reports_the_rest(repo, tmp_path):
+    """The quota stop covers provider limits: later questions fail with the reason instead of burning calls."""
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    for number in range(4):
+        (tasks / f"q{number}.md").write_text("question", encoding="utf-8")
+    batch = AskBatch(tasks_dir=tasks, out_dir=tmp_path / "out", project=repo, runner="opencode",
+                     state_path=tmp_path / "quota.json")
+    runner = FakeRunner(raw=LIMIT_RAW)
+    results = ask_batch(batch, runner=runner)
+    assert [r["ok"] for r in results] == [False] * 4
+    assert len(runner.calls) == 1   # the other three never started
+    assert all(r["error"].startswith("provider_limit") for r in results)

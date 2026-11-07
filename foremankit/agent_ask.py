@@ -222,8 +222,10 @@ def _run(job: AskJob, runner: Runner, raw_dir: Path | None, started: float) -> d
     except RunnerError as error:
         return _result(job, runner, {"error": str(error), "seconds": _seconds(started)})
     changed = _revert(job.project, before, _status(job.project)) if before is not None else []
-    extra = {"answer": _answer(runner.name, run), "seconds": _seconds(started), "modified_files": changed,
-             "raw_path": _write_raw(raw_dir, job.name, run.raw), "error": _run_error(run, changed)}
+    failure = "" if _raw_answer(runner.name, run.raw) else provider_error(runner.name, run.raw)
+    extra = {"answer": "" if failure else _answer(runner.name, run), "seconds": _seconds(started),
+             "modified_files": changed, "raw_path": _write_raw(raw_dir, job.name, run.raw),
+             "error": failure or _run_error(run, changed)}
     return _result(job, runner, extra, parse_usage(runner.name, run.raw))
 
 
@@ -232,6 +234,35 @@ def _run_error(result: RunnerResult, changed: list[str]) -> str:
     if result.timed_out:
         return "timed out"
     return f"{CHANGED}{', '.join(changed)}" if changed else ""
+
+
+def _error_message(node: Any) -> str:
+    """The first `message` string found anywhere in a provider error event."""
+    if isinstance(node, dict):
+        if isinstance(node.get("message"), str):
+            return node["message"]
+        return next((text for text in map(_error_message, node.values()) if text), "")
+    if isinstance(node, list):
+        return next((text for text in map(_error_message, node) if text), "")
+    return ""
+
+
+def provider_error(runner_name: str, raw: str) -> str:
+    """A short error string when the runner's stream holds an error event ("" otherwise).
+
+    opencode prints provider failures (for example HTTP 429 "Free usage limit reached")
+    as `type: error` events; without this the dumped error text was returned as the
+    answer and the question looked successful. Limit-like errors are tagged
+    `provider_limit` so the batch can stop and the quota pause can parse a reset time.
+    """
+    if runner_name not in ("opencode", ""):
+        return ""
+    errors = [event for event in _events(raw) if event.get("type") == "error"]
+    if not errors:
+        return ""
+    message = _error_message(errors[-1]) or json.dumps(errors[-1])[:200]
+    limited = "429" in json.dumps(errors[-1]) or agent_quota.is_quota_error(message)
+    return f"{'provider_limit' if limited else 'provider_error'}: {message}"[:QUOTA_TEXT_MAX_CHARS]
 
 
 def _answer(runner_name: str, result: RunnerResult) -> str:
