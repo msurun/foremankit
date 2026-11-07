@@ -363,6 +363,8 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <div id="arRecent"></div>
 <div class="info" style="margin-top:6px"><b>Review verdicts (clean merge rate)</b></div>
 <div id="arReviews" class="info" style="white-space:pre-wrap" title="Review verdicts (clean merge rate)"></div>
+<div class="info" style="margin-top:6px"><b>Model reviews</b></div>
+<div id="arModelReviews" class="info"></div>
 <div class="info" style="margin-top:6px"><b>Claude usage</b></div>
 <div id="arUsageLines"></div>
 <div id="arUsageAge" class="info"></div>
@@ -558,6 +560,19 @@ function showGpu(gpu) {
    row.appendChild(text); box.appendChild(row);
   }
  }
+ function showModelReviews(reviews) {
+  const box = $('arModelReviews'); box.textContent = '';
+  if (!reviews || !reviews.length) { box.textContent = 'none yet'; return; }
+  for (const review of reviews) {
+   const counts = review.counts_by_severity || {};
+   const row = document.createElement('div');
+   // Model output stays literal text, including branch names that contain HTML characters.
+   row.textContent = review.branch + ' | ' + review.reviewer
+    + ' | H: ' + (counts.high || 0) + ' / M: ' + (counts.medium || 0)
+    + ' / L: ' + (counts.low || 0) + ' | ' + review.status;
+   box.appendChild(row);
+  }
+ }
  function showAgentUsage(u) {
   const box = $('arUsageLines'); box.innerHTML = '';
   if (u && u.last) {
@@ -594,6 +609,7 @@ function showGpu(gpu) {
   showAgentRunner('arCodex', 'arCodexInfo', runners.codex);
   showAgentRecent(d.recent);
   $('arReviews').textContent = d.review_text || 'no agent-run reviews yet';
+  showModelReviews(d.model_reviews);
   showAgentUsage(d.usage);
  }
  function showSupervisor(mode) {
