@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import agent_planner, agent_review
@@ -47,18 +47,14 @@ def _batch(plan_path: Path, project: Path) -> dict:
 
 
 def _followup(job: AgentRunJob) -> dict:
-    """Keep fixes subject to batch switches, quota pauses and refusal handling."""
+    """Run one fix through the public agent_run entry.
+
+    agent_run itself refuses when the runner is switched off or paused, so no
+    batch internals are needed; a refusal comes back as a non-passed outcome
+    and the report shows it instead of the loop retrying.
+    """
     from .agent_run import agent_run
-    from .cli import _batch_context
-    task = PlanTask("fix", "unused.md", job.scope, job.check, job.runner,
-                    job.model, job.sensitivity)
-    context = _batch_context(job.project / "plan.yaml", job.project)
-    context = replace(context, run_one=lambda ignored: agent_run(job))
-    # The batch reads task text before dispatch; this module already owns the text.
-    from . import agent_batch
-    state = agent_batch._BatchState(context, [task])
-    prepared = agent_batch._TaskPlan(task, job.task, job.runner, job.base, "")
-    return agent_batch._run_with_slots(prepared, state)
+    return agent_run(job)
 
 
 def _counts(entry: dict) -> dict:

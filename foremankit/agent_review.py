@@ -29,6 +29,8 @@ class ReviewJob:
     project: Path
     reviewer: str = "auto"
     report: Path | None = None
+    # agy needs ~10 min for a normal slice and more for a big diff; ask's 900 s default timed out.
+    timeout: float = 2400.0
 
 
 def resolve_entry(job: ReviewJob) -> dict:
@@ -171,6 +173,7 @@ def _ask_branch(job: ReviewJob, snapshot: tuple[str, str], entry: dict, runner: 
             prompt, body = build_prompt(entry, diff, job.project)
             (worktree / INPUT_FILE).write_text(body, encoding="utf-8")
             question = agent_ask.AskJob(prompt, worktree, runner.name,
+                                        timeout=job.timeout,
                                         sensitivity=entry.get("sensitivity", "normal"))
             return agent_ask.ask(question, runner=runner)
         finally:
